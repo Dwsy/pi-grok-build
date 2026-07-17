@@ -40,6 +40,41 @@ These rules define the integration and should hold for every future change:
 
 For field-level coverage and intentional omissions, see the [feature matrix](FEATURE_MATRIX.md).
 
+
+## Install a release binary
+
+Every Git tag matching `v*` publishes platform binaries plus installers. The Unix installer detects macOS ARM64 or Linux x64, downloads the matching latest release, and installs `grok-pi` to `~/.local/bin` by default:
+
+```bash
+curl -fsSL https://github.com/Dwsy/pi-grok-build/releases/latest/download/install.sh | sh
+```
+
+On Windows x64:
+
+```powershell
+irm https://github.com/Dwsy/pi-grok-build/releases/latest/download/install.ps1 | iex
+```
+
+Pin a release or change the install directory with env vars on the same line:
+
+```bash
+curl -fsSL https://github.com/Dwsy/pi-grok-build/releases/download/v0.0.1/install.sh | GROK_PI_VERSION=v0.0.1 sh
+GROK_PI_INSTALL_DIR=/opt/grok-pi curl -fsSL https://github.com/Dwsy/pi-grok-build/releases/latest/download/install.sh | sh
+```
+
+```powershell
+$env:GROK_PI_VERSION='v0.0.1'; irm https://github.com/Dwsy/pi-grok-build/releases/download/v0.0.1/install.ps1 | iex
+```
+
+The installer reports any required `PATH` update.
+
+Install Pi, then run `grok-pi`:
+
+```bash
+npm install --global @earendil-works/pi-coding-agent
+grok-pi --pi-bin pi --pi-cwd /path/to/project -- --no-session
+```
+
 ## Repository layout
 
 ```text
@@ -76,39 +111,6 @@ For field-level coverage and intentional omissions, see the [feature matrix](FEA
 - npm
 - Python 3 for verification scripts
 
-## Install a release binary
-
-Every Git tag matching `v*` publishes platform binaries plus installers. The Unix installer detects macOS ARM64 or Linux x64, downloads the matching latest release, and installs `grok-pi` to `~/.local/bin` by default:
-
-```bash
-curl -fsSL https://github.com/Dwsy/pi-grok-build/releases/latest/download/install.sh | sh
-```
-
-On Windows x64:
-
-```powershell
-irm https://github.com/Dwsy/pi-grok-build/releases/latest/download/install.ps1 | iex
-```
-
-Pin a release or change the install directory with env vars on the same line:
-
-```bash
-curl -fsSL https://github.com/Dwsy/pi-grok-build/releases/download/v0.0.1/install.sh | GROK_PI_VERSION=v0.0.1 sh
-GROK_PI_INSTALL_DIR=/opt/grok-pi curl -fsSL https://github.com/Dwsy/pi-grok-build/releases/latest/download/install.sh | sh
-```
-
-```powershell
-$env:GROK_PI_VERSION='v0.0.1'; irm https://github.com/Dwsy/pi-grok-build/releases/download/v0.0.1/install.ps1 | iex
-```
-
-The installer reports any required `PATH` update.
-
-Install Pi, then run `grok-pi`:
-
-```bash
-npm install --global @earendil-works/pi-coding-agent
-grok-pi --pi-bin pi --pi-cwd /path/to/project -- --no-session
-```
 
 ## Build from source
 
