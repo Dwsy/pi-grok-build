@@ -112,6 +112,8 @@ pub struct AgentViewLayout {
     /// Inline /btw side question panel (above queue / turn status / prompt).
     pub btw: Rect,
     pub turn_status: Rect,
+    /// Persistent Pi RPC widget rows above the editor.
+    pub external_widgets_above_editor: Rect,
     /// Banner rect above the prompt (mode-switch banner, ephemeral tips).
     pub banner: Rect,
     /// Inline plugin-CTA row (below banner, above the prompt gap).
@@ -122,6 +124,8 @@ pub struct AgentViewLayout {
     /// shown only while voice capture is active.
     pub voice_recording: Rect,
     pub prompt: Rect,
+    /// Persistent Pi RPC widget rows below the editor.
+    pub external_widgets_below_editor: Rect,
     pub shortcuts: Rect,
     /// Scrollback area narrowed for scrollbar (content rendering uses this).
     pub scrollback_content: Rect,
@@ -156,12 +160,14 @@ impl AgentViewLayout {
         queue_height: u16,
         btw_height: u16,
         turn_status_height: u16,
+        external_widgets_above_editor_height: u16,
         banner_height: u16,
         cta_height: u16,
         follow_ups_height: u16,
         startup_warning_height: u16,
         prompt_gap: u16,
         voice_recording_height: u16,
+        external_widgets_below_editor_height: u16,
         shortcuts_height: u16,
         compact: bool,
     ) -> Self {
@@ -221,6 +227,10 @@ impl AgentViewLayout {
             constraints.push(Constraint::Length(1));
             constraints.push(Constraint::Length(turn_status_height));
         }
+        if external_widgets_above_editor_height > 0 {
+            constraints.push(Constraint::Length(1));
+            constraints.push(Constraint::Length(external_widgets_above_editor_height));
+        }
         if banner_height > 0 {
             constraints.push(Constraint::Length(1));
             constraints.push(Constraint::Length(banner_height));
@@ -240,6 +250,10 @@ impl AgentViewLayout {
             constraints.push(Constraint::Length(voice_recording_height));
         }
         constraints.push(Constraint::Length(prompt_height));
+        if external_widgets_below_editor_height > 0 {
+            constraints.push(Constraint::Length(1));
+            constraints.push(Constraint::Length(external_widgets_below_editor_height));
+        }
         let shortcuts_gap = if bottom_vpad == 0 { 0u16 } else { 1 };
         if shortcuts_gap > 0 {
             constraints.push(Constraint::Length(shortcuts_gap));
@@ -307,6 +321,14 @@ impl AgentViewLayout {
         } else {
             Rect::default()
         };
+        let external_widgets_above_editor = if external_widgets_above_editor_height > 0 {
+            i += 1;
+            let r = chunks[i];
+            i += 1;
+            r
+        } else {
+            Rect::default()
+        };
         let banner = if banner_height > 0 {
             i += 1;
             let r = chunks[i];
@@ -343,6 +365,14 @@ impl AgentViewLayout {
         };
         let prompt = chunks[i];
         i += 1;
+        let external_widgets_below_editor = if external_widgets_below_editor_height > 0 {
+            i += 1;
+            let r = chunks[i];
+            i += 1;
+            r
+        } else {
+            Rect::default()
+        };
         if shortcuts_gap > 0 {
             i += 1;
         }
@@ -368,11 +398,13 @@ impl AgentViewLayout {
             queue,
             btw,
             turn_status,
+            external_widgets_above_editor,
             banner,
             plugin_cta,
             follow_ups,
             voice_recording,
             prompt,
+            external_widgets_below_editor,
             shortcuts,
             scrollback_content,
             scrollbar_x,
@@ -1742,9 +1774,11 @@ mod tests {
             0,
             0,
             0,
+            0,
             banner_height,
             cta_height,
             follow_ups_height,
+            0,
             0,
             0,
             0,
@@ -1754,6 +1788,37 @@ mod tests {
     }
     fn layout_with_cta(area: Rect, cta_height: u16) -> AgentViewLayout {
         layout_with_rows(area, 0, cta_height, 0)
+    }
+
+    #[test]
+    fn external_widget_rows_stay_on_opposite_sides_of_editor() {
+        let layout = AgentViewLayout::compute(
+            Rect::new(0, 0, 80, 40),
+            &LayoutConfig::default(),
+            &ScrollbarConfig::default(),
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            1,
+            false,
+        );
+
+        assert!(layout.external_widgets_above_editor.bottom() <= layout.prompt.y);
+        assert!(layout.external_widgets_below_editor.y >= layout.prompt.bottom());
+        assert_eq!(layout.external_widgets_above_editor.height, 1);
+        assert_eq!(layout.external_widgets_below_editor.height, 1);
     }
     #[test]
     fn plugin_cta_row_present_above_prompt() {

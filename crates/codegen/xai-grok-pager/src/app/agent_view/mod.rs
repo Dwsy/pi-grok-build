@@ -1179,6 +1179,13 @@ pub struct AgentView {
     /// toasts, keypress dismissal, and subagent open/close when propagated
     /// via [`Self::set_sticky_toast_recursive`].
     pub(crate) sticky_toast: Option<String>,
+    /// Pi RPC widgets placed above the native editor. Pager renders these in
+    /// their own reserved rows instead of overloading the toast slot.
+    pub(crate) external_widgets_above_editor: Vec<String>,
+    /// Pi RPC widgets placed below the native editor.
+    pub(crate) external_widgets_below_editor: Vec<String>,
+    /// Pi RPC keyed statuses, rendered by the native status bar.
+    pub(crate) external_statuses: Vec<String>,
     /// Transient "Switched to mode: X" banner shown above the prompt after
     /// Shift+Tab. (message, remaining_ticks). Full brightness for 2 s, then
     /// fades out over the final 0.3 s.

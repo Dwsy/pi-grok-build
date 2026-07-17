@@ -1066,6 +1066,8 @@ impl AgentView {
             _ => 1,
         };
         let follow_ups_height = u16::from(self.follow_ups.is_some());
+        let external_widgets_above_editor_height = self.external_widgets_above_editor.len() as u16;
+        let external_widgets_below_editor_height = self.external_widgets_below_editor.len() as u16;
         let mut layout = AgentViewLayout::compute(
             area,
             layout_cfg,
@@ -1077,12 +1079,14 @@ impl AgentView {
             queue_height,
             btw_height,
             turn_status_height,
+            external_widgets_above_editor_height,
             banner_height,
             cta_height,
             follow_ups_height,
             0,
             prompt_gap,
             voice_recording_height,
+            external_widgets_below_editor_height,
             1,
             compact,
         );
@@ -1101,6 +1105,15 @@ impl AgentView {
         use crate::views::agent_status::AgentStatusBar;
         use crate::views::context_bar;
         let mut status = AgentStatusBar::new(&theme);
+        if !self.external_statuses.is_empty() {
+            status.push(
+                "external_status",
+                Line::from(Span::styled(
+                    self.external_statuses.join(" · "),
+                    Style::default().fg(theme.text_secondary).bg(theme.bg_base),
+                )),
+            );
+        }
         if let Some(url) = self.highlighted_link_url() {
             let max_len = layout.status_bar.width.saturating_sub(20) as usize;
             let display = if url.len() > max_len {
@@ -1847,6 +1860,25 @@ impl AgentView {
             self.hit_bg_button.clear();
             self.hit_plan_approval_status.clear();
         }
+        for (index, line) in self.external_widgets_above_editor.iter().enumerate() {
+            if index >= layout.external_widgets_above_editor.height as usize {
+                break;
+            }
+            let row = Rect::new(
+                layout.external_widgets_above_editor.x,
+                layout.external_widgets_above_editor.y + index as u16,
+                layout.external_widgets_above_editor.width,
+                1,
+            );
+            crate::tips::render::render_ephemeral_tip(
+                row,
+                buf,
+                &Line::from(Span::styled(
+                    format!("  {line}"),
+                    Style::default().fg(theme.text_secondary).bg(theme.bg_base),
+                )),
+            );
+        }
         if let Some((ref msg, remaining)) = self.mode_switch_banner {
             self.hit_announcement_hide.clear();
             self.hit_announcement_cta.clear();
@@ -1917,6 +1949,25 @@ impl AgentView {
             }
         }
         self.draw_plugin_cta(buf, layout.plugin_cta, &theme);
+        for (index, line) in self.external_widgets_below_editor.iter().enumerate() {
+            if index >= layout.external_widgets_below_editor.height as usize {
+                break;
+            }
+            let row = Rect::new(
+                layout.external_widgets_below_editor.x,
+                layout.external_widgets_below_editor.y + index as u16,
+                layout.external_widgets_below_editor.width,
+                1,
+            );
+            crate::tips::render::render_ephemeral_tip(
+                row,
+                buf,
+                &Line::from(Span::styled(
+                    format!("  {line}"),
+                    Style::default().fg(theme.text_secondary).bg(theme.bg_base),
+                )),
+            );
+        }
         if voice_listening && layout.voice_recording.height > 0 && layout.voice_recording.width > 0
         {
             let rec_area = layout.voice_recording;

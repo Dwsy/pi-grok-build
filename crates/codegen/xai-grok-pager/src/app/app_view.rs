@@ -1746,20 +1746,16 @@ impl AppView {
         }
     }
 
-    /// Show a Pi/external-backend notification through Grok's native toast.
-    /// Notifications that arrive before a session view exists are queued and
-    /// drained by [`Self::tick`] once the native agent view is active.
+    /// Queue a Pi/external-backend notification for Grok's native toast.
+    /// The Pager toast has one visible slot, so all external notifications go
+    /// through FIFO draining rather than replacing the currently visible one.
     pub fn show_external_notification(&mut self, message: &str, kind: Option<&str>) {
         let rendered = match kind {
             Some("warning") => format!("Warning: {message}"),
             Some("error") => format!("Error: {message}"),
             _ => message.to_string(),
         };
-        if matches!(self.active_view, ActiveView::Agent(_)) {
-            self.show_toast(&rendered);
-        } else {
-            self.external_ui.pending_toasts.push_back(rendered);
-        }
+        self.external_ui.pending_toasts.push_back(rendered);
     }
 
     /// Update one external status key and redraw the native sticky banner.
@@ -1783,7 +1779,8 @@ impl AppView {
         else {
             return catalog_changed;
         };
-        let picker_changed = entries.as_ref() != Some(&self.external_ui.session_catalog) || *loading;
+        let picker_changed =
+            entries.as_ref() != Some(&self.external_ui.session_catalog) || *loading;
         *entries = Some(self.external_ui.session_catalog.clone());
         *loading = false;
         catalog_changed || picker_changed
@@ -1872,41 +1869,41 @@ impl AppView {
         changed
     }
 
-    /// Reconcile external status state into Grok's native sticky banner.
-    /// Called on updates and every tick so a newly loaded session inherits the
-    /// current external status without adapter-owned rendering state.
+    /// Reconcile external UI state into the matching native Pager surfaces.
+    /// Widgets retain their Pi placement, statuses use the status bar, and the
+    /// unrelated sticky toast remains available for Pager-owned notices.
     pub fn refresh_external_ui_surface(&mut self) -> bool {
         if !self.external_agent {
             return false;
         }
-        let mut parts = Vec::new();
+        let mut widgets_above_editor = Vec::new();
         append_external_widgets(
-            &mut parts,
+            &mut widgets_above_editor,
             &self.external_ui.widgets,
             ExternalWidgetPlacement::AboveEditor,
         );
-        for (key, value) in &self.external_ui.statuses {
-            let line = if self.external_ui.statuses.len() == 1 {
-                value.clone()
-            } else {
-                format!("{key}: {value}")
-            };
-            parts.push(line);
-        }
+        let statuses = self
+            .external_ui
+            .statuses
+            .iter()
+            .map(|(key, value)| {
+                if self.external_ui.statuses.len() == 1 {
+                    value.clone()
+                } else {
+                    format!("{key}: {value}")
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut widgets_below_editor = Vec::new();
         append_external_widgets(
-            &mut parts,
+            &mut widgets_below_editor,
             &self.external_ui.widgets,
             ExternalWidgetPlacement::BelowEditor,
         );
-        let banner = (!parts.is_empty()).then(|| parts.join("  ·  "));
-        let mut changed = false;
-        for agent in self.agents.values_mut() {
-            if agent.sticky_toast.as_deref() != banner.as_deref() {
-                agent.set_sticky_toast_recursive(banner.as_deref());
-                changed = true;
-            }
-        }
-        changed
+        self.agents.values_mut().fold(false, |changed, agent| {
+            agent.set_external_ui_surface(&widgets_above_editor, &widgets_below_editor, &statuses)
+                || changed
+        })
     }
     /// Insert or replace a leader roster entry, keyed by `session_id`.
     pub fn upsert_roster_entry(&mut self, entry: crate::app::roster::RosterEntry) {
@@ -5513,6 +5510,60 @@ pub(crate) mod tests {
         );
         app
     }
+    #[test]
+    fn external_notifications_are_drained_in_arrival_order() {
+        let mut app = test_app_with_agent();
+        let id = super::super::agent::AgentId(0);
+        app.show_external_notification("first", None);
+        app.show_external_notification("second", Some("warning"));
+
+        assert!(app.tick());
+        assert_eq!(
+            app.agents[&id]
+                .toast
+                .as_ref()
+                .map(|(message, _)| message.as_str()),
+            Some("first")
+        );
+        app.agents.get_mut(&id).unwrap().toast = None;
+
+        assert!(app.tick());
+        assert_eq!(
+            app.agents[&id]
+                .toast
+                .as_ref()
+                .map(|(message, _)| message.as_str()),
+            Some("Warning: second")
+        );
+    }
+
+    #[test]
+    fn external_statuses_and_widgets_use_distinct_native_surfaces() {
+        let mut app = test_app_with_agent();
+        let id = super::super::agent::AgentId(0);
+        app.external_agent = true;
+        app.set_external_status("sync".to_string(), Some("Synchronizing".to_string()));
+        app.set_external_widget(
+            "top".to_string(),
+            Some(vec!["Top widget".to_string()]),
+            ExternalWidgetPlacement::AboveEditor,
+        );
+        app.set_external_widget(
+            "bottom".to_string(),
+            Some(vec!["Bottom widget".to_string()]),
+            ExternalWidgetPlacement::BelowEditor,
+        );
+
+        let agent = &app.agents[&id];
+        assert_eq!(agent.external_statuses, ["Synchronizing"]);
+        assert_eq!(agent.external_widgets_above_editor, ["top: Top widget"]);
+        assert_eq!(
+            agent.external_widgets_below_editor,
+            ["bottom: Bottom widget"]
+        );
+        assert!(agent.sticky_toast.is_none());
+    }
+
     #[test]
     fn dashboard_x11_primary_provenance_bypasses_unrelated_clipboard_image() {
         const PRIMARY: &str = "PRIMARY selection text";

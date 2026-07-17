@@ -246,6 +246,29 @@ impl AgentView {
         Some(sticky)
     }
 
+    /// Update the external ACP UI state on this view and all nested subagents.
+    /// The caller already owns the keyed source state; views only retain the
+    /// lines required by native Pager surfaces.
+    pub fn set_external_ui_surface(
+        &mut self,
+        widgets_above_editor: &[String],
+        widgets_below_editor: &[String],
+        statuses: &[String],
+    ) -> bool {
+        let changed = self.external_widgets_above_editor != widgets_above_editor
+            || self.external_widgets_below_editor != widgets_below_editor
+            || self.external_statuses != statuses;
+        self.external_widgets_above_editor = widgets_above_editor.to_vec();
+        self.external_widgets_below_editor = widgets_below_editor.to_vec();
+        self.external_statuses = statuses.to_vec();
+        self.subagent_views
+            .values_mut()
+            .fold(changed, |changed, child| {
+                child.set_external_ui_surface(widgets_above_editor, widgets_below_editor, statuses)
+                    || changed
+            })
+    }
+
     /// Show a transient "Switched to mode: ..." banner above the prompt.
     ///
     /// Triggered on Shift+Tab mode cycles.
