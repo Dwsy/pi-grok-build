@@ -43,6 +43,7 @@ mod reasons {
     pub const SESSION_DENY: &str = "session_deny";
     pub const PROMPT_DENY: &str = "prompt_deny";
     pub const NEEDS_USER: &str = "needs_user";
+    pub const REQUESTER_GONE: &str = "requester_gone";
 }
 
 /// Canonical permission-mode string for the uploaded artifact. Matches

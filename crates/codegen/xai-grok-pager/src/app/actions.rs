@@ -502,6 +502,8 @@ pub enum Action {
     SetDefaultSelectedPermission(String),
     /// Set the hunk-tracker mode. Payload is the registry canonical string.
     SetHunkTrackerMode(String),
+    /// Set default screen mode (`fullscreen` | `minimal`); restart-required.
+    SetScreenMode(String),
     /// Set the voice capture mode (`toggle` | `hold`). SHELL-owned; persisted to
     /// `[ui].voice_capture_mode`. Takes effect for the next Ctrl+Space press.
     SetVoiceCaptureMode(String),
@@ -516,6 +518,8 @@ pub enum Action {
     SetCompactMode(bool),
     /// Set timestamp display on messages.
     SetTimestamps(bool),
+    /// Set timeline sidebar visibility (per-turn tick rail).
+    SetTimeline(bool),
     /// Set simple mode (ASCII / minimal glyphs). Persists via `Effect::PersistSetting`.
     SetSimpleMode(bool),
     /// Set the per-tip contextual-hint user config (`[ui.contextual_hints]`).
