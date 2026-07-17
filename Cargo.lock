@@ -13473,6 +13473,7 @@ dependencies = [
  "ratatui-core",
  "regex",
  "serde",
+ "serde_json",
  "serial_test",
  "shellexpand",
  "strum 0.27.2",

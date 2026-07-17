@@ -8,6 +8,7 @@
 mod model;
 mod pi_adapter;
 mod pi_rpc;
+mod todo_bridge;
 
 pub use model::{PiSessionInfo, PiSessionSwitch, scan_local_sessions};
 pub use pi_adapter::{PiAgent, PiBootstrap};

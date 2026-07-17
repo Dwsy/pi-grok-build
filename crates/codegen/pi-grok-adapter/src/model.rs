@@ -42,31 +42,57 @@ pub fn parse_session_switch(value: &Value) -> PiSessionSwitch {
 /// Default storage contains one project directory per CWD, while a custom
 /// `--session-dir` stores JSONL files directly in its root.
 pub fn scan_local_sessions(session_dir: &Path) -> Vec<PiSessionInfo> {
+    scan_session_paths(session_paths(session_dir, true))
+}
+
+/// Scan only the sessions belonging to `cwd`, matching `SessionManager.list()`.
+///
+/// The default Pi store encodes each CWD as a child directory, so the common
+/// path reads only that directory. A custom session directory stores all JSONL
+/// files in one root and therefore requires filtering parsed headers by CWD.
+pub fn scan_local_sessions_for_cwd(session_dir: &Path, cwd: &Path) -> Vec<PiSessionInfo> {
+    let project_dir = session_dir.join(default_session_dir_name(cwd));
+    let mut sessions = if project_dir.is_dir() {
+        scan_session_paths(session_paths(&project_dir, false))
+    } else {
+        scan_session_paths(session_paths(session_dir, false))
+            .into_iter()
+            .filter(|session| session.cwd == cwd.to_string_lossy())
+            .collect()
+    };
+    sessions.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
+    sessions
+}
+
+fn default_session_dir_name(cwd: &Path) -> String {
+    let cwd = cwd.to_string_lossy();
+    let path = cwd.trim_start_matches(['/', '\\']);
+    format!("--{}--", path.replace(['/', '\\', ':'], "-"))
+}
+
+fn session_paths(session_dir: &Path, include_project_dirs: bool) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(session_dir) else {
         return Vec::new();
     };
-    let mut sessions = entries
+    entries
         .flatten()
         .flat_map(|entry| {
             let path = entry.path();
             if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
                 vec![path]
-            } else if entry.file_type().ok().is_some_and(|kind| kind.is_dir()) {
-                fs::read_dir(path)
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .map(|child| child.path())
-                    .collect()
+            } else if include_project_dirs && entry.file_type().ok().is_some_and(|kind| kind.is_dir()) {
+                session_paths(&path, false)
             } else {
                 Vec::new()
             }
         })
-        .filter_map(|path| {
-            (path.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
-                .then(|| parse_session_file(&path))
-                .flatten()
-        })
+        .collect()
+}
+
+fn scan_session_paths(paths: Vec<PathBuf>) -> Vec<PiSessionInfo> {
+    let mut sessions = paths
+        .into_iter()
+        .filter_map(|path| parse_session_file(&path))
         .collect::<Vec<_>>();
     sessions.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
     sessions
@@ -808,6 +834,31 @@ mod tests {
         let sessions = scan_local_sessions(root.path());
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "custom-session");
+    }
+
+    #[test]
+    fn scans_only_current_cwd_from_default_session_store() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let current_cwd = Path::new("/workspace/current");
+        let current_dir = sessions.join("--workspace-current--");
+        let other_dir = sessions.join("--workspace-other--");
+        std::fs::create_dir_all(&current_dir).unwrap();
+        std::fs::create_dir_all(&other_dir).unwrap();
+        std::fs::write(
+            current_dir.join("current.jsonl"),
+            "{\"type\":\"session\",\"id\":\"current\",\"timestamp\":\"2026-07-01T00:00:00.000Z\",\"cwd\":\"/workspace/current\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            other_dir.join("other.jsonl"),
+            "{\"type\":\"session\",\"id\":\"other\",\"timestamp\":\"2026-07-01T00:00:00.000Z\",\"cwd\":\"/workspace/other\"}\n",
+        )
+        .unwrap();
+
+        let current = scan_local_sessions_for_cwd(&sessions, current_cwd);
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].id, "current");
     }
 
     #[test]
