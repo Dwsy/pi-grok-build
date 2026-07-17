@@ -56,15 +56,15 @@ use xai_grok_pager::{
 };
 
 /// Block-character π mark for the native Grok welcome / minimal logo surface.
-/// Matches Pi's official setup logo (`SETUP_LOGO_LINES` in coding-agent). Kept
-/// as plain full-block art so it remains legible on terminals that cannot
-/// render Grok's default braille logo. Rows are left-aligned; the welcome logo
-/// renderer pads them to a common width so centered layout does not drift.
+/// Matches Pi's static logo (`print_static_logo`): two-space indent + block art.
+/// Kept as plain full-block art so it remains legible on terminals that cannot
+/// render Grok's default braille logo. The welcome logo renderer pads rows to a
+/// common visual width so per-line centering does not drift the glyph.
 const PI_LOGO: &str = "\
-██████\n\
-██  ██\n\
-████  ██\n\
-██    ██\n\
+  ██████\n\
+  ██  ██\n\
+  ████  ██\n\
+  ██    ██\n\
 ";
 
 #[derive(Debug, Parser)]
@@ -72,7 +72,7 @@ const PI_LOGO: &str = "\
     name = "grok-pi",
     version,
     about = "Run the Pi agent core in Grok Build's production TUI",
-    after_help = "Pi-compatible aliases:\n  -ns  Alias for --no-skills\n  -nc  Alias for --no-context-files\n  -ne  Alias for --no-extensions\n  -nt  Alias for --no-tools\n\nUpdate:\n  grok-pi update            Install latest (GitHub, then npm)\n  grok-pi update --check    Print current vs latest\n  Welcome Ctrl+U            Same install when an update is offered"
+    after_help = "Pi-compatible aliases:\n  -ns  Alias for --no-skills\n  -nc  Alias for --no-context-files\n  -ne  Alias for --no-extensions\n  -nt  Alias for --no-tools\n\nUpdate (GitHub releases only):\n  grok-pi update            Install latest from Dwsy/grok-pi\n  grok-pi update --check    Print current vs latest\n  Welcome Ctrl+U            Same install when an update is offered"
 )]
 struct Args {
     #[command(subcommand)]
@@ -153,7 +153,7 @@ struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 enum Command {
-    /// Check for or install grok-pi updates (GitHub releases, then npm mirrors).
+    /// Check for or install grok-pi updates from GitHub Releases only.
     Update {
         /// Only report current vs latest; do not install.
         #[arg(long)]
@@ -296,8 +296,8 @@ async fn run(mut args: Args) -> Result<()> {
     pager_args.no_alt_screen = args.no_alt_screen;
     pager_args.minimal = args.minimal;
     pager_args.fullscreen = args.fullscreen;
-    // Enable the Pi-specific update check (GitHub releases → npm mirrors).
-    // Set GROK_PI_NO_AUTO_UPDATE=1 or pass through pager no-auto-update if needed.
+    // Enable the Pi-specific update check (GitHub Releases only).
+    // Set GROK_PI_NO_AUTO_UPDATE=1 to disable the background check.
     pager_args.no_auto_update = std::env::var_os("GROK_PI_NO_AUTO_UPDATE").is_some();
 
     run_external(ExternalRunConfig {

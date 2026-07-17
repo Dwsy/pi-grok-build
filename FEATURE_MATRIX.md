@@ -12,7 +12,7 @@
 | Welcome / minimal logo | 原生+适配 | 默认进 Welcome（与 stock `grok` 一致）；`ExternalUiProfile.logo` 注入 π block art（行宽 pad 防居中错位）；仅 `grok-pi -c/--continue` 跳过 Welcome 直接 Resume |
 | Welcome 菜单（Pi） | 原生+适配 | Resume/Ctrl+S ≡ `/resume`（Pi catalog）；隐藏 New worktree；Changelog 打开 `https://github.com/Dwsy/grok-pi/blob/main/CHANGELOG.MD` |
 | Welcome session 预热（Pi） | 适配 | 进入 Welcome 即后台 `new_session`；首字输入 attach 预热 agent，避免冷启动 “Starting session…” |
-| 更新检查/安装 | 适配 | 源：① GitHub `Dwsy/grok-pi` releases JSON ② scoped npm `@dwsy/grok-pi`（**不用**无 scope 的 `grok-pi`，那是别人的 1.0.x 包）。路径：`grok-pi update` / `--check` / Welcome **Ctrl+U**；`GROK_PI_NO_AUTO_UPDATE=1` 关后台检查 |
+| 更新检查/安装 | 适配 | **仅 GitHub** `Dwsy/grok-pi` releases JSON + install.sh/ps1；`grok-pi update` / `--check` / Welcome **Ctrl+U**；`GROK_PI_NO_AUTO_UPDATE=1` 关后台检查 |
 | Agent Dashboard | 原生+适配 | 原生 `/dashboard` · Ctrl+\\ · 列表/peek/dispatch；idle 行经 `pi/session/list` → `pi/ui/session_catalog` 投影到 dormant roster；不接 Grok leader FleetView |
 | Prompt editing | 原生 | PromptWidget |
 | Multiline / Vim mode | 原生 | Grok slash/settings |

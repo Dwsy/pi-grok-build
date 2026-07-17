@@ -1,15 +1,9 @@
-//! `grok-pi` update discovery.
+//! `grok-pi` update discovery and install.
 //!
-//! Source order (first success wins):
-//! 1. GitHub Releases JSON for `Dwsy/grok-pi`
-//! 2. Scoped npm package `@dwsy/grok-pi` via npmmirror, then registry.npmjs.org
-//!
-//! **Do not** use the unscoped npm name `grok-pi` — that package is owned by
-//! an unrelated project (currently published as 1.0.x) and would false-trigger
-//! "update available".
-//!
-//! Intentionally independent of stock Grok installers (`@xai-official/grok`,
-//! x.ai CLI channel pointers).
+//! **GitHub only** for now: read `Dwsy/grok-pi` Releases JSON and install via
+//! the published `install.sh` / `install.ps1`. npm is intentionally not used
+//! (unscoped `grok-pi` is a foreign package; scoped `@dwsy/grok-pi` is not
+//! published yet).
 
 use std::time::Duration;
 
@@ -23,40 +17,11 @@ use crate::version::get_installed_grok_version;
 pub const PI_GH_RELEASES_LATEST_URL: &str =
     "https://api.github.com/repos/Dwsy/grok-pi/releases/latest";
 
-/// Scoped npm package for the secondary version source / install fallback.
-/// Unscoped `grok-pi` is a different package on the public registry.
-pub const PI_NPM_PACKAGE: &str = "@dwsy/grok-pi";
-
-/// Prefer Chinese mirror, then the public npm registry.
-/// Paths use the registry encoding for scoped names (`@scope%2Fname`).
-pub const PI_NPM_LATEST_URLS: &[&str] = &[
-    "https://registry.npmmirror.com/@dwsy/grok-pi/latest",
-    "https://registry.npmjs.org/@dwsy%2fgrok-pi/latest",
-];
-
-/// Fetch the latest `grok-pi` version string (no leading `v`).
+/// Fetch the latest `grok-pi` version string (no leading `v`) from GitHub.
 pub async fn fetch_pi_latest_version() -> Result<String> {
-    match fetch_github_release_latest().await {
-        Ok(v) => {
-            tracing::info!(%v, source = "github-releases", "pi update: latest version");
-            Ok(v)
-        }
-        Err(gh_err) => {
-            tracing::warn!(
-                error = %gh_err,
-                "pi update: GitHub releases unavailable; trying npm registry mirrors"
-            );
-            match fetch_npm_mirror_latest().await {
-                Ok(v) => {
-                    tracing::info!(%v, source = "npm-mirror", "pi update: latest version");
-                    Ok(v)
-                }
-                Err(npm_err) => Err(anyhow!(
-                    "pi update check failed: github={gh_err:#}; npm={npm_err:#}"
-                )),
-            }
-        }
-    }
+    let v = fetch_github_release_latest().await?;
+    tracing::info!(%v, source = "github-releases", "pi update: latest version");
+    Ok(v)
 }
 
 async fn fetch_github_release_latest() -> Result<String> {
@@ -84,54 +49,12 @@ async fn fetch_github_release_latest() -> Result<String> {
     normalize_version(tag)
 }
 
-async fn fetch_npm_mirror_latest() -> Result<String> {
-    let client = http_client()?;
-    let mut last_err = None;
-    for url in PI_NPM_LATEST_URLS {
-        match fetch_npm_latest_from(&client, url).await {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                tracing::warn!(%url, error = %e, "pi update: npm mirror failed");
-                last_err = Some(e);
-            }
-        }
-    }
-    Err(last_err.unwrap_or_else(|| anyhow!("no npm mirror URLs configured")))
-}
-
-async fn fetch_npm_latest_from(client: &reqwest::Client, url: &str) -> Result<String> {
-    let resp = client
-        .get(url)
-        .header("Accept", "application/json")
-        .header("User-Agent", "grok-pi-update-check")
-        .send()
-        .await
-        .with_context(|| format!("GET {url}"))?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "npm latest HTTP {status} for {url}: {}",
-            body.chars().take(200).collect::<String>().trim()
-        );
-    }
-    let value: Value = resp.json().await.context("decode npm latest JSON")?;
-    // registry.npmjs.org / npmmirror `.../latest` returns the version document
-    // with a top-level `version` field.
-    let version = value
-        .get("version")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("npm latest JSON missing version"))?;
-    normalize_version(version)
-}
-
 fn normalize_version(raw: &str) -> Result<String> {
     let version = raw.trim().trim_start_matches('v').to_string();
     if version.is_empty() {
         anyhow::bail!("empty version string");
     }
-    semver::Version::parse(&version)
-        .with_context(|| format!("invalid semver '{version}'"))?;
+    semver::Version::parse(&version).with_context(|| format!("invalid semver '{version}'"))?;
     Ok(version)
 }
 
@@ -188,11 +111,7 @@ pub struct PiUpdateOptions {
     pub json: bool,
 }
 
-/// Check and/or install the latest `grok-pi`.
-///
-/// Install order:
-/// 1. GitHub release asset via published `install.sh` / `install.ps1`
-/// 2. `npm install -g grok-pi@…` via npmmirror, then registry.npmjs.org
+/// Check and/or install the latest `grok-pi` from GitHub Releases only.
 ///
 /// Returns the installed version when an install ran; `None` for check-only
 /// or when already up to date without `--force`.
@@ -214,19 +133,9 @@ pub async fn run_pi_update(opts: PiUpdateOptions) -> Result<Option<String>> {
     }
 
     eprintln!("Updating grok-pi {current} → {target}…");
-    match install_pi_from_github(&target).await {
-        Ok(()) => {
-            eprintln!("Installed grok-pi v{target} from GitHub releases.");
-            Ok(Some(target))
-        }
-        Err(gh_err) => {
-            tracing::warn!(error = %gh_err, "pi update: GitHub install failed; trying npm");
-            eprintln!("GitHub install failed ({gh_err:#}); trying npm…");
-            install_pi_from_npm(&target).await?;
-            eprintln!("Installed grok-pi v{target} from npm.");
-            Ok(Some(target))
-        }
-    }
+    install_pi_from_github(&target).await?;
+    eprintln!("Installed grok-pi v{target} from GitHub releases.");
+    Ok(Some(target))
 }
 
 fn print_pi_update_status(current: &str, latest: &str, json: bool) -> Result<()> {
@@ -236,7 +145,7 @@ fn print_pi_update_status(current: &str, latest: &str, json: bool) -> Result<()>
             "current": current,
             "latest": latest,
             "updateAvailable": update_available,
-            "sources": ["github-releases", "npm-mirror"],
+            "sources": ["github-releases"],
         });
         println!("{}", serde_json::to_string_pretty(&payload)?);
         return Ok(());
@@ -281,12 +190,10 @@ async fn install_pi_from_github(version: &str) -> Result<()> {
 #[cfg(not(windows))]
 async fn install_pi_unix_sh(tag: &str) -> Result<()> {
     // The installer script is identical across tags; pin the binary via env.
-    let script_url =
-        "https://github.com/Dwsy/grok-pi/releases/latest/download/install.sh";
+    let script_url = "https://github.com/Dwsy/grok-pi/releases/latest/download/install.sh";
     let mut cmd = tokio::process::Command::new("sh");
-    cmd.arg("-c").arg(format!(
-        "curl -fsSL {script_url} | GROK_PI_VERSION={tag} sh"
-    ));
+    cmd.arg("-c")
+        .arg(format!("curl -fsSL {script_url} | GROK_PI_VERSION={tag} sh"));
     cmd.env("GROK_PI_VERSION", tag);
     cmd.stdin(std::process::Stdio::null());
     xai_grok_tools::util::detach_command(&mut cmd);
@@ -306,7 +213,13 @@ async fn install_pi_windows_ps1(tag: &str) -> Result<()> {
         "$env:GROK_PI_VERSION='{tag}'; irm https://github.com/Dwsy/grok-pi/releases/latest/download/install.ps1 | iex"
     );
     let mut cmd = tokio::process::Command::new("powershell");
-    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script]);
+    cmd.args([
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        &script,
+    ]);
     cmd.stdin(std::process::Stdio::null());
     xai_grok_tools::util::detach_command(&mut cmd);
     let status = cmd.status().await.context("spawn install.ps1")?;
@@ -314,31 +227,6 @@ async fn install_pi_windows_ps1(tag: &str) -> Result<()> {
         anyhow::bail!("install.ps1 exited with {status}");
     }
     Ok(())
-}
-
-async fn install_pi_from_npm(version: &str) -> Result<()> {
-    let pkg = format!("{PI_NPM_PACKAGE}@{version}");
-    let registries = [
-        "https://registry.npmmirror.com",
-        "https://registry.npmjs.org",
-    ];
-    let mut last_err = None;
-    for registry in registries {
-        let mut cmd = tokio::process::Command::new("npm");
-        cmd.args(["install", "--global", &pkg, &format!("--registry={registry}")]);
-        cmd.stdin(std::process::Stdio::null());
-        xai_grok_tools::util::detach_command(&mut cmd);
-        match cmd.status().await {
-            Ok(status) if status.success() => return Ok(()),
-            Ok(status) => {
-                last_err = Some(anyhow!("npm install failed via {registry}: {status}"));
-            }
-            Err(e) => {
-                last_err = Some(anyhow!("spawn npm via {registry}: {e}"));
-            }
-        }
-    }
-    Err(last_err.unwrap_or_else(|| anyhow!("npm install failed")))
 }
 
 #[cfg(test)]
