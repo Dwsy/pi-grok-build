@@ -129,3 +129,19 @@ cd ..
 8. `/new`、`/compact instructions`、`/rename` 生效；
 9. 重启已有 Pi session 时历史、reasoning、图片和工具结果恢复；
 10. minimal/fullscreen 通过启动参数选择，终端退出后正确恢复。
+
+## Upstream sync record (98c3b24)
+
+日期：2026-07-17  
+分支：`sync/upstream-98c3b24`（尚未 merge 回 `main`）
+
+| 项 | 结果 |
+|---|---|
+| 上游 tip | `98c3b24`（含 `8adf901`） |
+| 策略 | 有共同祖先 `c68e39f` 的 Git merge + 接缝修复，**非**直接在 main 碰运气 merge |
+| `pi-grok-adapter` tests | PASS（46） |
+| `grok-pi` cargo check | PASS |
+| `grok-pi` unit tests | 4/5 PASS；1 项 `--append-system-prompt` 命名漂移为 main 既有失败 |
+| 架构不变量 | adapter headless；Pager 唯一 TUI；Pi 唯一 core |
+
+已知仍独立的基础设施 blocker 见上文 `verify.sh` / Pager focused lib tests 段落。
