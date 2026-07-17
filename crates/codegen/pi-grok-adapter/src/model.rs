@@ -1,5 +1,6 @@
 use serde_json::Value;
 use std::{
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
@@ -36,6 +37,445 @@ pub fn parse_session_switch(value: &Value) -> PiSessionSwitch {
             .and_then(Value::as_bool)
             .unwrap_or(false),
     }
+}
+
+/// One flattened Pi session-tree row for Grok's native tree surface.
+///
+/// Tree ownership stays in Pi (`get_tree` / `navigateTree`); this is only a
+/// display projection of `{entry, children, label?, labelTimestamp?}`.
+///
+/// `depth` is the structural parent-chain length from the root (not the
+/// visual indent). Visual indent/connectors are recomputed in the Pager
+/// using Pi TreeSelector rules after filtering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PiTreeRow {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub depth: usize,
+    pub is_leaf: bool,
+    pub is_current: bool,
+    pub on_active_path: bool,
+    pub role: String,
+    pub preview: String,
+    /// Longer body for detail pane (still truncated server-side).
+    pub detail: String,
+    pub label: Option<String>,
+    pub label_timestamp: Option<String>,
+    pub entry_type: String,
+    pub timestamp: Option<String>,
+    pub child_ids: Vec<String>,
+    /// True when an assistant message has non-empty text content.
+    /// Pi's default filter hides tool-only assistants (`hasText == false`).
+    pub has_text: bool,
+}
+
+/// Parsed Pi `get_tree` response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PiSessionTree {
+    pub leaf_id: Option<String>,
+    pub rows: Vec<PiTreeRow>,
+}
+
+pub fn parse_session_tree(value: &Value) -> PiSessionTree {
+    let leaf_id = string(value, &["leafId", "leaf_id"]).map(str::to_owned);
+    let tree = value.get("tree").and_then(Value::as_array);
+    let mut rows = Vec::new();
+    if let Some(roots) = tree {
+        for root in roots {
+            flatten_tree_node(root, 0, None, leaf_id.as_deref(), &mut rows);
+        }
+    }
+    // Mark the path from leaf to roots (Pi highlights active branch).
+    // Guard against cycles so a corrupt parent chain cannot hang /tree forever.
+    if let Some(leaf) = leaf_id.as_deref() {
+        let parents: HashMap<String, Option<String>> = rows
+            .iter()
+            .map(|row| (row.id.clone(), row.parent_id.clone()))
+            .collect();
+        let mut cursor = Some(leaf.to_string());
+        let mut seen = HashSet::new();
+        while let Some(id) = cursor {
+            if !seen.insert(id.clone()) {
+                break;
+            }
+            if let Some(row) = rows.iter_mut().find(|row| row.id == id) {
+                row.on_active_path = true;
+            }
+            cursor = parents.get(&id).cloned().flatten();
+        }
+    }
+    PiSessionTree { leaf_id, rows }
+}
+
+fn flatten_tree_node(
+    root: &Value,
+    depth: usize,
+    parent_id: Option<&str>,
+    leaf_id: Option<&str>,
+    out: &mut Vec<PiTreeRow>,
+) {
+    // Iterative DFS: deep sessions must not blow the stack or hang the adapter.
+    // toolCallMap is filled while walking assistant messages so toolResult
+    // rows can show `[bash: cmd]` like Pi TreeSelector, not bare `[bash]`.
+    let mut stack: Vec<(Value, usize, Option<String>)> =
+        vec![(root.clone(), depth, parent_id.map(str::to_owned))];
+    let mut visiting = HashSet::new();
+    let mut tool_calls: HashMap<String, (String, Value)> = HashMap::new();
+    while let Some((node, depth, parent_id)) = stack.pop() {
+        let entry = node.get("entry").cloned().unwrap_or_else(|| node.clone());
+        let Some(id) = string(&entry, &["id"]).map(str::to_owned) else {
+            continue;
+        };
+        if !visiting.insert(id.clone()) {
+            // Cycle / duplicate id in tree payload.
+            continue;
+        }
+        let entry_type = string(&entry, &["type"]).unwrap_or("unknown").to_string();
+        if entry_type == "message" {
+            collect_tool_calls(entry.get("message").unwrap_or(&entry), &mut tool_calls);
+        }
+        let label = string(&node, &["label"])
+            .or_else(|| string(&entry, &["label"]))
+            .map(str::to_owned);
+        let label_timestamp =
+            string(&node, &["labelTimestamp", "label_timestamp"]).map(str::to_owned);
+        let timestamp = string(&entry, &["timestamp"]).map(str::to_owned);
+        let (role, preview, detail, has_text) =
+            tree_entry_display(&entry, &entry_type, &tool_calls);
+        let children = node
+            .get("children")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let child_ids: Vec<String> = children
+            .iter()
+            .filter_map(|child| {
+                let entry = child.get("entry").unwrap_or(child);
+                string(entry, &["id"]).map(str::to_owned)
+            })
+            .collect();
+        let is_current = leaf_id == Some(id.as_str());
+        out.push(PiTreeRow {
+            id: id.clone(),
+            parent_id,
+            depth,
+            is_leaf: children.is_empty(),
+            is_current,
+            on_active_path: false,
+            role,
+            preview,
+            detail,
+            label,
+            label_timestamp,
+            entry_type,
+            timestamp,
+            child_ids,
+            has_text,
+        });
+        // Push children in reverse so left-to-right order is preserved.
+        for child in children.into_iter().rev() {
+            stack.push((child, depth + 1, Some(id.clone())));
+        }
+    }
+}
+
+fn collect_tool_calls(message: &Value, out: &mut HashMap<String, (String, Value)>) {
+    let Some(parts) = message.get("content").and_then(Value::as_array) else {
+        return;
+    };
+    for part in parts {
+        if part.get("type").and_then(Value::as_str) != Some("toolCall") {
+            continue;
+        }
+        let Some(id) = string(part, &["id"]).map(str::to_owned) else {
+            continue;
+        };
+        let name = string(part, &["name"]).unwrap_or("tool").to_string();
+        let args = part
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Default::default()));
+        out.insert(id, (name, args));
+    }
+}
+
+/// Returns `(role, one-line preview, short detail, has_text)`.
+///
+/// Keep this deliberately small: Pi `get_tree` already returns full entries
+/// (often multi-MB). Shipping full message bodies over ACP freezes the
+/// SessionTree loading UI. List/detail use short projections; full text can
+/// be re-fetched later if needed.
+fn tree_entry_display(
+    entry: &Value,
+    entry_type: &str,
+    tool_calls: &HashMap<String, (String, Value)>,
+) -> (String, String, String, bool) {
+    match entry_type {
+        "message" => {
+            let message = entry.get("message").unwrap_or(entry);
+            let role = string(message, &["role"]).unwrap_or("message");
+            let stop_reason = string(message, &["stopReason"]);
+            let error_message = string(message, &["errorMessage"]).unwrap_or("");
+            let (body, has_text) = match role {
+                "user" => {
+                    let text = first_text_preview(message.get("content"));
+                    let has = !text.trim().is_empty();
+                    (text, has)
+                }
+                "assistant" => {
+                    let text = first_text_preview(message.get("content"));
+                    let has = !text.trim().is_empty();
+                    let body = if has {
+                        text
+                    } else if stop_reason == Some("aborted") {
+                        "(aborted)".into()
+                    } else if !error_message.is_empty() {
+                        truncate_chars(error_message, 80)
+                    } else {
+                        String::new()
+                    };
+                    // Pi always shows current leaf; has_text drives default hide.
+                    (body, has)
+                }
+                "toolResult" => {
+                    let tool_call_id = string(message, &["toolCallId"]);
+                    let body = if let Some(id) = tool_call_id {
+                        if let Some((name, args)) = tool_calls.get(id) {
+                            format_tool_call(name, args)
+                        } else {
+                            let name = string(message, &["toolName", "name"]).unwrap_or("tool");
+                            format!("[{name}]")
+                        }
+                    } else {
+                        let name = string(message, &["toolName", "name"]).unwrap_or("tool");
+                        format!("[{name}]")
+                    };
+                    (body, false)
+                }
+                "bashExecution" => {
+                    let command = string(message, &["command"]).unwrap_or("");
+                    (format!("[bash]: {command}"), false)
+                }
+                other => (format!("[{other}]"), false),
+            };
+            let preview = if body.is_empty() && role == "assistant" {
+                "(no content)".into()
+            } else {
+                normalize_preview(&body)
+            };
+            let detail = if body.is_empty() {
+                preview.clone()
+            } else {
+                truncate_chars(body.trim(), 280)
+            };
+            (role.to_string(), preview, detail, has_text)
+        }
+        "custom_message" => {
+            let custom = string(entry, &["customType"]).unwrap_or("custom");
+            let body = first_text_preview(entry.get("content"));
+            (
+                custom.to_string(),
+                normalize_preview(&body),
+                truncate_chars(body.trim(), 280),
+                !body.trim().is_empty(),
+            )
+        }
+        "compaction" => {
+            let tokens = entry
+                .get("tokensBefore")
+                .and_then(Value::as_f64)
+                .map(|tokens| (tokens / 1000.0).round() as i64)
+                .unwrap_or(0);
+            let preview = format!("[compaction: {tokens}k tokens]");
+            let summary = string(entry, &["summary"]).unwrap_or("");
+            let detail = if summary.is_empty() {
+                preview.clone()
+            } else {
+                format!("{preview}\n{}", truncate_chars(summary, 200))
+            };
+            ("compaction".into(), preview, detail, true)
+        }
+        "branch_summary" => {
+            let summary = string(entry, &["summary"]).unwrap_or("");
+            (
+                "branch".into(),
+                normalize_preview(&format!("[branch summary]: {summary}")),
+                truncate_chars(summary, 280),
+                true,
+            )
+        }
+        "model_change" => {
+            let text = format!(
+                "[model: {}]",
+                string(entry, &["modelId"]).unwrap_or("unknown")
+            );
+            ("model".into(), text.clone(), text, false)
+        }
+        "thinking_level_change" => {
+            let text = format!(
+                "[thinking: {}]",
+                string(entry, &["thinkingLevel"]).unwrap_or("?")
+            );
+            ("thinking".into(), text.clone(), text, false)
+        }
+        "custom" => {
+            let custom = string(entry, &["customType"]).unwrap_or("?");
+            let preview = format!("[custom: {custom}]");
+            ("custom".into(), preview.clone(), preview, false)
+        }
+        "label" => {
+            let text = format!(
+                "[label: {}]",
+                string(entry, &["label"]).unwrap_or("")
+            );
+            ("label".into(), text.clone(), text, false)
+        }
+        "session_info" => {
+            let text = format!(
+                "[session: {}]",
+                string(entry, &["name"]).unwrap_or("")
+            );
+            ("session".into(), text.clone(), text, false)
+        }
+        other => {
+            let text = format!("[{other}]");
+            (other.to_string(), text.clone(), text, false)
+        }
+    }
+}
+
+fn format_tool_call(name: &str, args: &Value) -> String {
+    let arg = |keys: &[&str]| -> String {
+        for key in keys {
+            if let Some(v) = args.get(*key).and_then(Value::as_str) {
+                return v.to_string();
+            }
+        }
+        String::new()
+    };
+    let shorten_path = |p: &str| -> String {
+        if let Ok(home) = std::env::var("HOME") {
+            if !home.is_empty() && p.starts_with(&home) {
+                return format!("~{}", &p[home.len()..]);
+            }
+        }
+        p.to_string()
+    };
+    match name {
+        "read" => {
+            let path = shorten_path(&arg(&["path", "file_path"]));
+            let offset = args.get("offset").and_then(Value::as_u64);
+            let limit = args.get("limit").and_then(Value::as_u64);
+            let mut display = path;
+            if offset.is_some() || limit.is_some() {
+                let start = offset.unwrap_or(1);
+                display.push_str(&format!(":{start}"));
+                if let Some(limit) = limit {
+                    display.push_str(&format!("-{}", start + limit - 1));
+                }
+            }
+            format!("[read: {display}]")
+        }
+        "write" => format!("[write: {}]", shorten_path(&arg(&["path", "file_path"]))),
+        "edit" => format!("[edit: {}]", shorten_path(&arg(&["path", "file_path"]))),
+        "bash" => {
+            let raw = arg(&["command"]);
+            let cmd = normalize_preview(&raw);
+            let clipped = truncate_chars(&cmd, 50);
+            if raw.chars().count() > 50 {
+                format!("[bash: {clipped}...]")
+            } else {
+                format!("[bash: {clipped}]")
+            }
+        }
+        "grep" => {
+            let pattern = arg(&["pattern"]);
+            let path = shorten_path(&arg(&["path"]));
+            let path = if path.is_empty() { ".".into() } else { path };
+            format!("[grep: /{pattern}/ in {path}]")
+        }
+        "find" => {
+            let pattern = arg(&["pattern"]);
+            let path = shorten_path(&arg(&["path"]));
+            let path = if path.is_empty() { ".".into() } else { path };
+            format!("[find: {pattern} in {path}]")
+        }
+        "ls" => {
+            let path = shorten_path(&arg(&["path"]));
+            let path = if path.is_empty() { ".".into() } else { path };
+            format!("[ls: {path}]")
+        }
+        other => {
+            let args_str = serde_json::to_string(args).unwrap_or_else(|_| "{}".into());
+            let clipped = truncate_chars(&args_str, 40);
+            if args_str.len() > 40 {
+                format!("[{other}: {clipped}...]")
+            } else {
+                format!("[{other}: {clipped}]")
+            }
+        }
+    }
+}
+
+fn first_text_preview(content: Option<&Value>) -> String {
+    // Stop early: tree projection only needs a short preview. Reading full
+    // multi-MB assistant/tool payloads is what made /tree hang on large sessions.
+    const BUDGET: usize = 320;
+    match content {
+        Some(Value::String(text)) => truncate_chars(text, BUDGET),
+        Some(Value::Array(parts)) => {
+            let mut out = String::new();
+            for part in parts {
+                let piece = if part.get("type").and_then(Value::as_str) == Some("text") {
+                    string(part, &["text"]).unwrap_or("")
+                } else if part.get("type").and_then(Value::as_str) == Some("thinking") {
+                    // Skip thinking blobs for tree preview.
+                    ""
+                } else {
+                    ""
+                };
+                if piece.is_empty() {
+                    continue;
+                }
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                for ch in piece.chars() {
+                    if out.chars().count() >= BUDGET {
+                        out.push('…');
+                        return out;
+                    }
+                    out.push(ch);
+                }
+            }
+            out
+        }
+        _ => String::new(),
+    }
+}
+
+fn normalize_preview(text: &str) -> String {
+    let collapsed = text
+        .chars()
+        .map(|ch| if ch.is_whitespace() { ' ' } else { ch })
+        .collect::<String>();
+    let trimmed = collapsed.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_chars(&trimmed, 80)
+}
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for (index, ch) in text.chars().enumerate() {
+        if index + 1 >= max {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// Scan one Pi session storage directory, matching `SessionManager.listAll()`.
@@ -800,6 +1240,90 @@ pub fn json_text(value: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn parse_session_tree_flattens_depth_and_marks_current_leaf() {
+        let tree = parse_session_tree(&json!({
+            "leafId": "a2",
+            "tree": [{
+                "entry": {
+                    "type": "message",
+                    "id": "u1",
+                    "message": { "role": "user", "content": "first\nline" }
+                },
+                "children": [{
+                    "entry": {
+                        "type": "message",
+                        "id": "a2",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{ "type": "text", "text": "reply" }]
+                        }
+                    },
+                    "children": [],
+                    "label": "checkpoint"
+                }]
+            }]
+        }));
+        assert_eq!(tree.leaf_id.as_deref(), Some("a2"));
+        assert_eq!(tree.rows.len(), 2);
+        assert_eq!(tree.rows[0].id, "u1");
+        assert_eq!(tree.rows[0].depth, 0);
+        assert_eq!(tree.rows[0].role, "user");
+        assert_eq!(tree.rows[0].preview, "first line");
+        assert!(!tree.rows[0].is_current);
+        assert!(tree.rows[0].on_active_path);
+        assert_eq!(tree.rows[0].child_ids, vec!["a2".to_string()]);
+        assert_eq!(tree.rows[1].id, "a2");
+        assert_eq!(tree.rows[1].parent_id.as_deref(), Some("u1"));
+        assert_eq!(tree.rows[1].depth, 1);
+        assert!(tree.rows[1].is_current);
+        assert!(tree.rows[1].on_active_path);
+        assert_eq!(tree.rows[1].label.as_deref(), Some("checkpoint"));
+        assert_eq!(tree.rows[1].role, "assistant");
+        assert_eq!(tree.rows[1].preview, "reply");
+        assert_eq!(tree.rows[1].detail, "reply");
+        assert!(tree.rows[1].has_text);
+    }
+
+    #[test]
+    fn parse_session_tree_formats_tool_results_from_tool_calls() {
+        let tree = parse_session_tree(&json!({
+            "leafId": "tr1",
+            "tree": [{
+                "entry": {
+                    "type": "message",
+                    "id": "a1",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{
+                            "type": "toolCall",
+                            "id": "call-1",
+                            "name": "bash",
+                            "arguments": { "command": "echo hi" }
+                        }]
+                    }
+                },
+                "children": [{
+                    "entry": {
+                        "type": "message",
+                        "id": "tr1",
+                        "message": {
+                            "role": "toolResult",
+                            "toolCallId": "call-1",
+                            "toolName": "bash",
+                            "content": [{ "type": "text", "text": "hi" }]
+                        }
+                    },
+                    "children": []
+                }]
+            }]
+        }));
+        assert_eq!(tree.rows.len(), 2);
+        assert!(!tree.rows[0].has_text);
+        assert_eq!(tree.rows[0].preview, "(no content)");
+        assert_eq!(tree.rows[1].preview, "[bash: echo hi]");
+    }
 
     #[test]
     fn history_preserves_reasoning_tools_and_results() {

@@ -335,6 +335,40 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             app.mark_external_session_catalog_failed();
             vec![]
         }
+        TaskResult::SessionTreeLoaded {
+            agent_id,
+            session_id,
+            leaf_id,
+            nodes,
+        } => super::session::tree::handle_session_tree_loaded(
+            app, agent_id, session_id, leaf_id, nodes,
+        ),
+        TaskResult::SessionTreeFailed { agent_id, error } => {
+            super::session::tree::handle_session_tree_failed(app, agent_id, error)
+        }
+        TaskResult::SessionTreeNavigated {
+            agent_id,
+            session_id,
+            leaf_id,
+        } => super::session::tree::handle_session_tree_navigated(
+            app, agent_id, session_id, leaf_id,
+        ),
+        TaskResult::SessionTreeNavigateFailed { agent_id, error } => {
+            super::session::tree::handle_session_tree_navigate_failed(app, agent_id, error)
+        }
+        TaskResult::SessionTreeLabeled {
+            agent_id,
+            session_id,
+            entry_id,
+            label,
+            leaf_id,
+            nodes,
+        } => super::session::tree::handle_session_tree_labeled(
+            app, agent_id, session_id, entry_id, label, leaf_id, nodes,
+        ),
+        TaskResult::SessionTreeLabelFailed { agent_id, error } => {
+            super::session::tree::handle_session_tree_label_failed(app, agent_id, error)
+        }
         TaskResult::SessionListFailed { error, seq, query } => {
             handle_session_list_failed(app, error, seq, query)
         }

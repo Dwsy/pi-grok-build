@@ -203,6 +203,11 @@ pub enum ActiveModal {
         /// Shared modal window chrome state.
         window: ModalWindowState,
     },
+    /// Pi session entry tree (`/tree`) with filters, search, detail pane.
+    SessionTree {
+        state: crate::views::session_tree::SessionTreeState,
+        window: ModalWindowState,
+    },
     /// Session picker (opened from /resume command or command palette).
     SessionPicker {
         /// Unified picker state.
@@ -606,6 +611,7 @@ impl ActiveModal {
                 .collect(),
             ActiveModal::CommandPalette { .. }
             | ActiveModal::ArgPicker { .. }
+            | ActiveModal::SessionTree { .. }
             | ActiveModal::SessionPicker { .. }
             | ActiveModal::DocPicker { .. }
             | ActiveModal::DocViewer { .. }
@@ -625,6 +631,7 @@ impl ActiveModal {
                 }
             }
             ActiveModal::CommandPalette { .. } => "Commands",
+            ActiveModal::SessionTree { .. } => "Session tree",
             ActiveModal::SessionPicker { .. } => "Resume session",
             ActiveModal::ArgPicker {
                 command,

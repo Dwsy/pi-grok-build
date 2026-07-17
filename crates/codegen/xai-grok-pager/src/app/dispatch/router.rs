@@ -72,6 +72,10 @@ use super::session::load::{
     session_picker_external_filter_active,
 };
 use super::session::modal::dispatch_rename_session;
+use super::session::tree::{
+    dispatch_label_session_tree_entry, dispatch_navigate_session_tree,
+    dispatch_session_tree_closed, dispatch_show_session_tree,
+};
 use super::settings::setters::{
     clear_default_model, clear_fork_secondary_model, preview_auto_dark_theme,
     preview_auto_light_theme, preview_theme, set_ask_user_question_timeout_enabled,
@@ -205,6 +209,16 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::CycleSessionSourceFilter => dispatch_cycle_session_source_filter(app),
         Action::RefreshExternalSessionCatalog => dispatch_refresh_external_session_catalog(app),
         Action::ShowSessionPicker => dispatch_show_session_picker(app),
+        Action::ShowSessionTree => dispatch_show_session_tree(app),
+        Action::NavigateSessionTree {
+            entry_id,
+            summarize,
+            custom_instructions,
+        } => dispatch_navigate_session_tree(app, entry_id, summarize, custom_instructions),
+        Action::LabelSessionTreeEntry { entry_id, label } => {
+            dispatch_label_session_tree_entry(app, entry_id, label)
+        }
+        Action::SessionTreeClosed => dispatch_session_tree_closed(app),
         Action::SessionPickerClosed => dispatch_session_picker_closed(app),
         Action::PickSession(index) => dispatch_pick_session(app, index),
         Action::PickSessionInWorktree(index) => dispatch_pick_session_in_worktree(app, index),

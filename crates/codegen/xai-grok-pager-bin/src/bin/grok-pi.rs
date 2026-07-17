@@ -9,9 +9,12 @@ use clap::Parser;
 use pi_grok_adapter::{PiAgent, PiBootstrap, PiRpc, SpawnConfig};
 use std::{
     ffi::{OsStr, OsString},
+    fs::File,
+    io::Write,
     path::PathBuf,
     rc::Rc,
 };
+use tempfile::NamedTempFile;
 use tokio::task::LocalSet;
 use tokio_util::sync::CancellationToken;
 use xai_acp_lib::acp_channels;
@@ -32,6 +35,8 @@ const PI_GROK_NATIVE_COMMANDS: &[&str] = &[
     "effort",
     "rename",
     "resume",
+    // Pi session entry tree via native ArgPicker + adapter navigate.
+    "tree",
     // Native multi-session overview; idle rows come from pi/session/list.
     "dashboard",
     // Native Grok transcript/navigation surfaces over the Pi-backed session.
@@ -230,7 +235,15 @@ async fn run(mut args: Args) -> Result<()> {
     let _theme_report = xai_grok_pager::theme::pi::init_discovery(&cwd);
 
     let pi_session_dir = pi_session_dir(&args.pi_args, &cwd);
-    let pi_args = pi_args_with_startup_flags(std::mem::take(&mut args.pi_args), &args);
+    // Keep the bridge extension alive for the process lifetime. Pi loads it via
+    // `--extension`; drop would unlink the temp path before Pi finishes boot.
+    let navigate_tree_extension = write_navigate_tree_extension()
+        .context("failed to create Pi navigateTree bridge extension")?;
+    let pi_args = pi_args_with_startup_flags(
+        std::mem::take(&mut args.pi_args),
+        &args,
+        Some(navigate_tree_extension.path()),
+    );
     let process = PiRpc::spawn(SpawnConfig {
         program: args.pi_bin,
         prefix_args: args.pi_prefix_args,
@@ -238,6 +251,8 @@ async fn run(mut args: Args) -> Result<()> {
         pi_args,
     })
     .await?;
+    // Hold the NamedTempFile so the extension path remains valid.
+    let _navigate_tree_extension = navigate_tree_extension;
     let bootstrap = PiBootstrap::load(&process.rpc)
         .await
         .context("failed to bootstrap Pi RPC state")?;
@@ -339,7 +354,11 @@ fn normalize_compound_short_flags(args: impl IntoIterator<Item = OsString>) -> V
         .collect()
 }
 
-fn pi_args_with_startup_flags(mut pi_args: Vec<String>, args: &Args) -> Vec<String> {
+fn pi_args_with_startup_flags(
+    mut pi_args: Vec<String>,
+    args: &Args,
+    bridge_extension: Option<&std::path::Path>,
+) -> Vec<String> {
     if args.continue_last_session {
         pi_args.push("--continue".to_string());
     }
@@ -361,6 +380,13 @@ fn pi_args_with_startup_flags(mut pi_args: Vec<String>, args: &Args) -> Vec<Stri
     for extension in &args.extensions {
         pi_args.extend(["--extension".to_string(), extension.clone()]);
     }
+    // Explicit --extension paths still load under --no-extensions.
+    if let Some(path) = bridge_extension {
+        pi_args.extend([
+            "--extension".to_string(),
+            path.to_string_lossy().into_owned(),
+        ]);
+    }
     if args.no_extensions {
         pi_args.push("--no-extensions".to_string());
     }
@@ -374,6 +400,68 @@ fn pi_args_with_startup_flags(mut pi_args: Vec<String>, args: &Args) -> Vec<Stri
         pi_args.extend(["--name".to_string(), name.clone()]);
     }
     pi_args
+}
+
+/// Inject a headless Pi extension that exposes tree control over RPC without
+/// modifying Pi source. Hidden from slash UI by adapter filtering.
+fn write_navigate_tree_extension() -> Result<NamedTempFile> {
+    // NamedTempFile defaults to no suffix; force `.ts` so Pi's loader accepts it.
+    let mut file = tempfile::Builder::new()
+        .prefix("pi-grok-tree-bridge-")
+        .suffix(".ts")
+        .tempfile()
+        .context("create tree bridge extension tempfile")?;
+    // Official ExtensionCommandContext: navigateTree + setLabel (rpc-mode).
+    const SOURCE: &str = r#"export default function (pi) {
+  pi.registerCommand("__pi_navigate_tree", {
+    description: "Internal Pi-Grok bridge: navigate session tree leaf",
+    handler: async (args, ctx) => {
+      const raw = String(args ?? "").trim();
+      if (!raw) throw new Error("entry id required");
+      const summarize = /(?:^|\s)--summarize(?:\s|$)/.test(raw);
+      let customInstructions;
+      const instrMatch = raw.match(/(?:^|\s)--instructions\s+([\s\S]+)$/);
+      if (instrMatch) customInstructions = instrMatch[1].trim();
+      const entryId = raw
+        .replace(/(?:^|\s)--summarize(?:\s|$)/g, " ")
+        .replace(/(?:^|\s)--instructions\s+[\s\S]+$/, " ")
+        .trim()
+        .split(/\s+/)[0];
+      if (!entryId) throw new Error("entry id required");
+      const result = await ctx.navigateTree(entryId, {
+        summarize,
+        customInstructions: customInstructions || undefined,
+      });
+      if (result?.cancelled) throw new Error("tree navigation cancelled");
+    },
+  });
+
+  pi.registerCommand("__pi_tree_label", {
+    description: "Internal Pi-Grok bridge: set/clear session tree label",
+    handler: async (args, ctx) => {
+      const raw = String(args ?? "").trim();
+      if (!raw) throw new Error("entry id required");
+      const tokens = raw.split(/\s+/);
+      const entryId = tokens[0];
+      if (!entryId) throw new Error("entry id required");
+      if (tokens.includes("--clear")) {
+        ctx.setLabel(entryId, undefined);
+        return;
+      }
+      const label = raw.slice(entryId.length).trim();
+      ctx.setLabel(entryId, label || undefined);
+    },
+  });
+}
+"#;
+    file.write_all(SOURCE.as_bytes())
+        .context("write tree bridge extension source")?;
+    file.flush().context("flush tree bridge extension")?;
+    // Ensure the file is durable before Pi spawns.
+    File::open(file.path())
+        .and_then(|f| f.sync_all())
+        .ok();
+    Ok(file)
 }
 
 fn pi_session_dir(pi_args: &[String], cwd: &std::path::Path) -> PathBuf {
@@ -435,7 +523,7 @@ mod tests {
         let args = Args::try_parse_from(["grok-pi", "--continue"]).unwrap();
         assert!(args.continue_last_session);
         assert_eq!(
-            pi_args_with_startup_flags(args.pi_args.clone(), &args),
+            pi_args_with_startup_flags(args.pi_args.clone(), &args, None),
             vec!["--continue"]
         );
     }
@@ -445,7 +533,7 @@ mod tests {
         let args = Args::try_parse_from(["grok-pi", "-c"]).unwrap();
         assert!(args.continue_last_session);
         assert_eq!(
-            pi_args_with_startup_flags(args.pi_args.clone(), &args),
+            pi_args_with_startup_flags(args.pi_args.clone(), &args, None),
             vec!["--continue"]
         );
     }
@@ -479,7 +567,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            pi_args_with_startup_flags(args.pi_args.clone(), &args),
+            pi_args_with_startup_flags(
+                args.pi_args.clone(),
+                &args,
+                Some(std::path::Path::new("/tmp/bridge.ts")),
+            ),
             vec![
                 "--system-prompt",
                 "base prompt",
@@ -493,6 +585,8 @@ mod tests {
                 "first.ts",
                 "--extension",
                 "second.ts",
+                "--extension",
+                "/tmp/bridge.ts",
                 "--no-extensions",
                 "--no-tools",
                 "--no-session",
@@ -500,6 +594,17 @@ mod tests {
                 "named-session",
             ]
         );
+    }
+
+    #[test]
+    fn navigate_tree_extension_source_is_valid_ts_module() {
+        let file = write_navigate_tree_extension().expect("temp extension");
+        let source = std::fs::read_to_string(file.path()).expect("read extension");
+        assert!(source.contains("registerCommand(\"__pi_navigate_tree\""));
+        assert!(source.contains("registerCommand(\"__pi_tree_label\""));
+        assert!(source.contains("ctx.navigateTree"));
+        assert!(source.contains("ctx.setLabel"));
+        assert!(file.path().extension().and_then(|e| e.to_str()) == Some("ts"));
     }
 
     #[test]

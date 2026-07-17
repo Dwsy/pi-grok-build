@@ -1,8 +1,9 @@
 use crate::{
     model::{
-        PiCommand, PiHistoryItem, PiModel, PiSessionSwitch, PiState, PiToolContent, extract_delta,
-        json_text, number, parse_commands, parse_messages, parse_models, parse_session_switch,
-        parse_state, scan_local_sessions, scan_local_sessions_for_cwd, string,
+        PiCommand, PiHistoryItem, PiModel, PiSessionSwitch, PiSessionTree, PiState, PiToolContent,
+        extract_delta, json_text, number, parse_commands, parse_messages, parse_models,
+        parse_session_switch, parse_session_tree, parse_state, scan_local_sessions,
+        scan_local_sessions_for_cwd, string,
     },
     pi_rpc::PiRpc,
     queue_bridge::{QueueLane, QueueMirror, queue_changed_params, string_list},
@@ -236,6 +237,116 @@ impl PiAgent {
         let bootstrap = PiBootstrap::load(&self.rpc).await?;
         self.replace_bootstrap(bootstrap);
         Ok(result)
+    }
+
+    /// Read-only projection of Pi's current entry tree (`get_tree`).
+    ///
+    /// Parse + flatten + drop of the nested Value happen on a large-stack
+    /// worker: long sessions produce trees deep enough to overflow the default
+    /// Tokio worker stack even after serde_json recursion limits are disabled.
+    async fn fetch_session_tree(&self) -> Result<PiSessionTree> {
+        let data = self.rpc.request(json!({ "type": "get_tree" })).await?;
+        let tree = tokio::task::spawn_blocking(move || {
+            crate::pi_rpc::with_large_stack(move || {
+                let tree = parse_session_tree(&data);
+                drop(data);
+                tree
+            })
+        })
+        .await
+        .map_err(|error| anyhow!("Pi get_tree worker failed: {error}"))?;
+        Ok(tree)
+    }
+
+    /// Run a hidden bridge extension command (`/__pi_*`) and wait for the
+    /// non-agent preflight probe to complete.
+    async fn run_bridge_command(&self, command: &str, args: &str) -> Result<(), acp::Error> {
+        let message = if args.trim().is_empty() {
+            format!("/{command}")
+        } else {
+            format!("/{command} {args}")
+        };
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let prompt_id = {
+            let mut state = self.state.borrow_mut();
+            let prompt_id = state.next_prompt_id;
+            state.next_prompt_id = state.next_prompt_id.wrapping_add(1).max(1);
+            state.active_prompts.push(ActivePrompt {
+                id: prompt_id,
+                client_prompt_id: None,
+                completion: completion_tx,
+                agent_started: false,
+                cancelled: false,
+            });
+            prompt_id
+        };
+        let request = json!({ "type": "prompt", "message": message });
+        if let Err(error) = self.rpc.request(request).await {
+            self.remove_prompt(prompt_id);
+            return Err(acp_internal(error));
+        }
+        let probe = self.clone();
+        tokio::task::spawn_local(async move {
+            probe.probe_prompt_without_agent().await;
+        });
+        let _ = completion_rx.await;
+        Ok(())
+    }
+
+    /// Navigate Pi's leaf via the injected `__pi_navigate_tree` extension
+    /// command (official `ctx.navigateTree`).
+    async fn navigate_session_tree(
+        &self,
+        entry_id: &str,
+        summarize: bool,
+        custom_instructions: Option<&str>,
+    ) -> Result<Value, acp::Error> {
+        let entry_id = entry_id.trim();
+        if entry_id.is_empty() {
+            return Err(acp::Error::invalid_params().data("tree entry id is empty"));
+        }
+        let mut args = entry_id.to_string();
+        if summarize {
+            args.push_str(" --summarize");
+        }
+        if let Some(instructions) = custom_instructions.map(str::trim).filter(|s| !s.is_empty()) {
+            // Extension parses --instructions <rest-of-line>.
+            args.push_str(" --instructions ");
+            args.push_str(instructions);
+        }
+        self.run_bridge_command(NAVIGATE_TREE_COMMAND, &args).await?;
+
+        // Leaf moved inside the same session file. Refresh adapter state only;
+        // the pager issues session/load to clear scrollback and re-replay.
+        let bootstrap = self.refresh().await.map_err(acp_internal)?;
+        let tree = self.fetch_session_tree().await.map_err(acp_internal)?;
+        Ok(json!({
+            "sessionId": bootstrap.state.session_id,
+            "leafId": tree.leaf_id,
+            "cancelled": false,
+        }))
+    }
+
+    async fn set_session_tree_label(
+        &self,
+        entry_id: &str,
+        label: Option<&str>,
+    ) -> Result<Value, acp::Error> {
+        let entry_id = entry_id.trim();
+        if entry_id.is_empty() {
+            return Err(acp::Error::invalid_params().data("tree entry id is empty"));
+        }
+        let args = match label.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(text) => format!("{entry_id} {text}"),
+            None => format!("{entry_id} --clear"),
+        };
+        self.run_bridge_command(LABEL_TREE_COMMAND, &args).await?;
+        let tree = self.fetch_session_tree().await.map_err(acp_internal)?;
+        Ok(json!({
+            "leafId": tree.leaf_id,
+            "entryId": entry_id,
+            "label": label,
+        }))
     }
 
     fn replace_bootstrap(&self, bootstrap: PiBootstrap) {
@@ -1468,6 +1579,70 @@ impl acp::Agent for PiAgent {
                 self.publish_session_catalog(cwd, all).await;
                 ext_response(json!({})).map_err(acp_internal)
             }
+            // Pi session entry tree (read-only projection of get_tree).
+            "pi/session/tree" => {
+                let tree = self.fetch_session_tree().await.map_err(acp_internal)?;
+                ext_response(json!({
+                    "leafId": tree.leaf_id,
+                    "nodes": tree.rows.iter().map(|row| json!({
+                        "id": row.id,
+                        "parentId": row.parent_id,
+                        "depth": row.depth,
+                        "isLeaf": row.is_leaf,
+                        "isCurrent": row.is_current,
+                        "onActivePath": row.on_active_path,
+                        "role": row.role,
+                        "preview": row.preview,
+                        "detail": row.detail,
+                        "label": row.label,
+                        "labelTimestamp": row.label_timestamp,
+                        "entryType": row.entry_type,
+                        "timestamp": row.timestamp,
+                        "childIds": row.child_ids,
+                        "hasText": row.has_text,
+                    })).collect::<Vec<_>>(),
+                }))
+                .map_err(acp_internal)
+            }
+            // Navigate leaf via injected extension command → ctx.navigateTree.
+            "pi/session/navigate_tree" => {
+                let params: Value =
+                    serde_json::from_str(arguments.params.get()).unwrap_or_default();
+                let entry_id = string(&params, &["entryId", "id", "targetId"])
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| acp::Error::invalid_params().data("entryId is required"))?;
+                let summarize = params
+                    .get("summarize")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let custom_instructions =
+                    string(&params, &["customInstructions", "instructions"]);
+                let data = self
+                    .navigate_session_tree(entry_id, summarize, custom_instructions)
+                    .await?;
+                ext_response(data).map_err(acp_internal)
+            }
+            // Set/clear entry label via injected extension → ctx.setLabel.
+            "pi/session/tree_label" => {
+                let params: Value =
+                    serde_json::from_str(arguments.params.get()).unwrap_or_default();
+                let entry_id = string(&params, &["entryId", "id", "targetId"])
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| acp::Error::invalid_params().data("entryId is required"))?;
+                let clear = params
+                    .get("clear")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let label = if clear {
+                    None
+                } else {
+                    string(&params, &["label", "text"])
+                };
+                let data = self.set_session_tree_label(entry_id, label).await?;
+                ext_response(data).map_err(acp_internal)
+            }
             "x.ai/session/rename" => {
                 let params: Value =
                     serde_json::from_str(arguments.params.get()).map_err(acp_internal)?;
@@ -1617,6 +1792,15 @@ fn build_model_catalog(
     (available, current)
 }
 
+/// Internal bridge commands injected by grok-pi; never advertised to slash UI.
+const NAVIGATE_TREE_COMMAND: &str = "__pi_navigate_tree";
+const LABEL_TREE_COMMAND: &str = "__pi_tree_label";
+
+fn is_bridge_command(name: &str) -> bool {
+    name.eq_ignore_ascii_case(NAVIGATE_TREE_COMMAND)
+        || name.eq_ignore_ascii_case(LABEL_TREE_COMMAND)
+}
+
 fn command_catalog(commands: &[PiCommand]) -> Vec<acp::AvailableCommand> {
     // The adapter reports Pi's command catalog verbatim (normalized and
     // deduplicated). Grok's native CommandRegistry owns collision policy with
@@ -1626,7 +1810,10 @@ fn command_catalog(commands: &[PiCommand]) -> Vec<acp::AvailableCommand> {
         .iter()
         .filter_map(|command| {
             let name = command.name.trim().trim_start_matches('/');
-            if name.is_empty() || !seen.insert(name.to_ascii_lowercase()) {
+            if name.is_empty()
+                || is_bridge_command(name)
+                || !seen.insert(name.to_ascii_lowercase())
+            {
                 return None;
             }
             let description = if command.description.trim().is_empty() {
@@ -2836,6 +3023,16 @@ mod tests {
                 description: String::new(),
                 source: "skill".into(),
             },
+            PiCommand {
+                name: NAVIGATE_TREE_COMMAND.into(),
+                description: "internal".into(),
+                source: "extension".into(),
+            },
+            PiCommand {
+                name: LABEL_TREE_COMMAND.into(),
+                description: "internal".into(),
+                source: "extension".into(),
+            },
         ];
         let serialized = serde_json::to_value(command_catalog(&commands)).unwrap();
         let text = serialized.to_string();
@@ -2843,6 +3040,8 @@ mod tests {
         assert!(text.contains("Review changes"));
         assert!(text.contains("brief"));
         assert!(text.contains("Pi skill command"));
+        assert!(!text.contains(NAVIGATE_TREE_COMMAND));
+        assert!(!text.contains(LABEL_TREE_COMMAND));
     }
 
     #[test]

@@ -104,6 +104,12 @@ impl AgentView {
             return InputOutcome::Changed;
         };
 
+        // Session tree has its own key handler (filters/search/label/detail).
+        if matches!(modal, ActiveModal::SessionTree { .. }) {
+            let ev = crossterm::event::Event::Key(*key);
+            return self.handle_session_tree_input(&ev);
+        }
+
         // Picker-based modals: route Esc through ModalWindow chrome first,
         // then delegate remaining keys to the picker input handler.
         if matches!(
@@ -120,6 +126,19 @@ impl AgentView {
                 }
                 ActiveModal::ArgPicker { window, state, .. } => {
                     (window, state.query.is_empty(), false, false)
+                }
+                ActiveModal::SessionTree { window, state, .. } => {
+                    (
+                        window,
+                        state.search_query.is_empty()
+                            && !matches!(
+                                state.focus,
+                                crate::views::session_tree::SessionTreeFocus::LabelEdit
+                                    | crate::views::session_tree::SessionTreeFocus::Search
+                            ),
+                        false,
+                        false,
+                    )
                 }
                 ActiveModal::SessionPicker {
                     window,
@@ -480,6 +499,7 @@ impl AgentView {
             } => self.handle_edit_confirm_choice(confirm, pending_target, ch),
             ActiveModal::CommandPalette { .. }
             | ActiveModal::ArgPicker { .. }
+            | ActiveModal::SessionTree { .. }
             | ActiveModal::SessionPicker { .. }
             | ActiveModal::DocPicker { .. }
             | ActiveModal::DocViewer { .. }
@@ -874,6 +894,11 @@ impl AgentView {
                 }
             }
             ActiveModal::ArgPicker { .. } => unreachable!("routed via handle_arg_picker_input"),
+            ActiveModal::SessionTree { .. } => {
+                // Modal already restored by caller for owned-match paths; for
+                // ref matches this arm is unused because early routing handles it.
+                self.handle_session_tree_input(ev)
+            }
             ActiveModal::SessionPicker {
                 entries,
                 state,
@@ -1493,6 +1518,22 @@ impl AgentView {
             }
         }
 
+        // SessionTree: chrome first, then list click / scroll / double-click go.
+        if let Some(ActiveModal::SessionTree { state, window }) = &mut self.active_modal {
+            let outcome = mw::handle_modal_mouse(window, mouse.kind, mouse.column, mouse.row);
+            match outcome {
+                ModalWindowOutcome::CloseRequested => {
+                    self.active_modal = None;
+                    return InputOutcome::Action(Action::SessionTreeClosed);
+                }
+                ModalWindowOutcome::Handled => return InputOutcome::Changed,
+                ModalWindowOutcome::Unhandled => {
+                    return Self::handle_session_tree_mouse(state, mouse);
+                }
+                _ => return InputOutcome::Changed,
+            }
+        }
+
         // MemoryBrowser: route through ModalWindow chrome, then delegate.
         if let Some(ActiveModal::MemoryBrowser { state }) = &mut self.active_modal {
             let outcome =
@@ -1764,6 +1805,8 @@ impl AgentView {
                 let compact = self.scrollback.appearance().prompt.compact;
                 // Surface `i search` in the footer when vim nav mode is active.
                 mw::push_vim_nav_search_hint(&mut picker_shortcuts, state.search_active);
+                // Model picker is shorter than generic arg pickers (theme, etc.).
+                let is_model_picker = matches!(command.as_str(), "model" | "m");
                 let modal_config = ModalWindowConfig {
                     title,
                     tabs: None,
@@ -1772,7 +1815,7 @@ impl AgentView {
                         width_pct: 0.50,
                         max_width: 80,
                         min_width: 44,
-                        v_margin: 4,
+                        v_margin: if is_model_picker { 8 } else { 4 },
                         h_pad: 2,
                         v_pad: 1,
                         footer_lines: 2,
@@ -1793,6 +1836,40 @@ impl AgentView {
                         &[],
                         false,
                     );
+                }
+            } else if let modal::ActiveModal::SessionTree { state, window } = active_modal {
+                use crate::views::session_tree::render_session_tree;
+                let shortcuts = [
+                    mw::Shortcut { label: "↑/↓ nav", clickable: false, id: 0 },
+                    mw::Shortcut { label: "click select", clickable: false, id: 0 },
+                    mw::Shortcut { label: "dblclick go", clickable: false, id: 0 },
+                    mw::Shortcut { label: "Tab fold", clickable: false, id: 0 },
+                    mw::Shortcut { label: "Esc close", clickable: false, id: 0 },
+                ];
+                let title = if state.loading {
+                    "Session tree · loading".to_string()
+                } else {
+                    format!("Session tree · {}", state.filter.label())
+                };
+                let modal_config = ModalWindowConfig {
+                    title: title.as_str(),
+                    tabs: None,
+                    shortcuts: &shortcuts,
+                    sizing: ModalSizing {
+                        width_pct: 0.72,
+                        max_width: 120,
+                        min_width: 56,
+                        v_margin: 2,
+                        h_pad: 1,
+                        v_pad: 0,
+                        footer_lines: 2,
+                    }
+                    .with_compact(compact),
+                    fold_info: None,
+                };
+                if let Some(mca) = mw::render_modal_window(buf, area, window, &modal_config, &theme)
+                {
+                    render_session_tree(buf, mca.content, state, &theme);
                 }
             } else if let modal::ActiveModal::SessionPicker {
                 entries,
@@ -1880,11 +1957,12 @@ impl AgentView {
                     title: "Resume session",
                     tabs: external.then_some(&external_tabs),
                     shortcuts: &session_shortcuts,
+                    // Match model picker: taller outer margin → shorter popup.
                     sizing: ModalSizing {
                         width_pct: 0.65,
                         max_width: 120,
                         min_width: 48,
-                        v_margin: 4,
+                        v_margin: 8,
                         h_pad: 2,
                         v_pad: 1,
                         footer_lines: 2,
@@ -2306,6 +2384,280 @@ impl AgentView {
             }
         }
     }
+
+
+    fn handle_session_tree_mouse(
+        state: &mut crate::views::session_tree::SessionTreeState,
+        mouse: &crossterm::event::MouseEvent,
+    ) -> InputOutcome {
+        use crate::app::actions::Action;
+        use crate::views::session_tree::SessionTreeFocus;
+        use crossterm::event::{MouseButton, MouseEventKind};
+        use std::time::{Duration, Instant};
+
+        // Simple double-click detection via thread-local last click.
+        thread_local! {
+            static LAST_CLICK: std::cell::RefCell<Option<(Instant, usize)>> = const { std::cell::RefCell::new(None) };
+        }
+
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                if state.detail_expanded {
+                    state.detail_scroll = state.detail_scroll.saturating_sub(1);
+                } else {
+                    state.move_selection(-1);
+                }
+                return InputOutcome::Changed;
+            }
+            MouseEventKind::ScrollDown => {
+                if state.detail_expanded {
+                    state.detail_scroll = state.detail_scroll.saturating_add(1);
+                } else {
+                    state.move_selection(1);
+                }
+                return InputOutcome::Changed;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(index) = state.hit_test_list_row(mouse.column, mouse.row) {
+                    let is_double = LAST_CLICK.with(|cell| {
+                        let mut last = cell.borrow_mut();
+                        let now = Instant::now();
+                        let dbl = matches!(
+                            *last,
+                            Some((t, i)) if i == index && now.duration_since(t) < Duration::from_millis(400)
+                        );
+                        *last = Some((now, index));
+                        dbl
+                    });
+                    state.selected = index;
+                    state.detail_scroll = 0;
+                    state.focus = SessionTreeFocus::List;
+                    state.ensure_visible(state.list_viewport.max(1));
+                    if is_double {
+                        if let Some(entry_id) = state.selected_id() {
+                            return InputOutcome::Action(Action::NavigateSessionTree {
+                                entry_id,
+                                summarize: false,
+                                custom_instructions: None,
+                            });
+                        }
+                    }
+                    return InputOutcome::Changed;
+                }
+                InputOutcome::Unchanged
+            }
+            _ => InputOutcome::Unchanged,
+        }
+    }
+
+    fn handle_session_tree_input(&mut self, ev: &crossterm::event::Event) -> InputOutcome {
+        use crate::app::actions::{Action, SessionTreeFilter};
+        use crate::views::session_tree::{SessionTreeEsc, SessionTreeFocus};
+        use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+
+        let Event::Key(key) = ev else {
+            return InputOutcome::Unchanged;
+        };
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return InputOutcome::Unchanged;
+        }
+
+        let Some(ActiveModal::SessionTree { state, .. }) = self.active_modal.as_mut() else {
+            return InputOutcome::Unchanged;
+        };
+
+        if matches!(state.focus, SessionTreeFocus::LabelEdit) {
+            match key.code {
+                KeyCode::Esc => {
+                    let _ = state.clear_search_or_cancel_edit();
+                    return InputOutcome::Changed;
+                }
+                KeyCode::Enter => {
+                    let entry_id = state.selected_id();
+                    let label = {
+                        let draft = state.label_draft.trim().to_string();
+                        if draft.is_empty() {
+                            None
+                        } else {
+                            Some(draft)
+                        }
+                    };
+                    state.focus = SessionTreeFocus::List;
+                    state.label_draft.clear();
+                    if let Some(entry_id) = entry_id {
+                        return InputOutcome::Action(Action::LabelSessionTreeEntry {
+                            entry_id,
+                            label,
+                        });
+                    }
+                    return InputOutcome::Changed;
+                }
+                KeyCode::Backspace => {
+                    state.label_draft.pop();
+                    return InputOutcome::Changed;
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    state.label_draft.push(c);
+                    return InputOutcome::Changed;
+                }
+                _ => return InputOutcome::Unchanged,
+            }
+        }
+
+        if state.detail_expanded {
+            match key.code {
+                KeyCode::Esc => {
+                    state.detail_expanded = false;
+                    state.focus = SessionTreeFocus::List;
+                    return InputOutcome::Changed;
+                }
+                KeyCode::Up => {
+                    state.detail_scroll = state.detail_scroll.saturating_sub(1);
+                    return InputOutcome::Changed;
+                }
+                KeyCode::Down => {
+                    state.detail_scroll = state.detail_scroll.saturating_add(1);
+                    return InputOutcome::Changed;
+                }
+                KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    state.detail_expanded = false;
+                    state.focus = SessionTreeFocus::List;
+                    return InputOutcome::Changed;
+                }
+                _ => {}
+            }
+        }
+
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
+        match key.code {
+            KeyCode::Esc => match state.clear_search_or_cancel_edit() {
+                SessionTreeEsc::Close => {
+                    self.active_modal = None;
+                    InputOutcome::Action(Action::SessionTreeClosed)
+                }
+                SessionTreeEsc::Consumed => InputOutcome::Changed,
+            },
+            KeyCode::Up => {
+                state.move_selection(-1);
+                InputOutcome::Changed
+            }
+            KeyCode::Down => {
+                state.move_selection(1);
+                InputOutcome::Changed
+            }
+            KeyCode::Left | KeyCode::PageUp => {
+                state.page(-1, 10);
+                InputOutcome::Changed
+            }
+            KeyCode::Right | KeyCode::PageDown => {
+                state.page(1, 10);
+                InputOutcome::Changed
+            }
+            KeyCode::Tab => {
+                let _ = state.toggle_fold_selected();
+                InputOutcome::Changed
+            }
+            KeyCode::Enter => {
+                let summarize = shift;
+                if let Some(entry_id) = state.selected_id() {
+                    InputOutcome::Action(Action::NavigateSessionTree {
+                        entry_id,
+                        summarize,
+                        custom_instructions: None,
+                    })
+                } else {
+                    InputOutcome::Changed
+                }
+            }
+            KeyCode::Char('c') if !ctrl => {
+                if let Some(node) = state.selected_node() {
+                    let text = if node.detail.is_empty() {
+                        node.preview.clone()
+                    } else {
+                        node.detail.clone()
+                    };
+                    let _ = crate::clipboard::SystemClipboard::try_set(&text);
+                    self.show_toast("Copied tree entry");
+                }
+                InputOutcome::Changed
+            }
+            KeyCode::Char('l') if !ctrl => {
+                state.begin_label_edit();
+                InputOutcome::Changed
+            }
+            KeyCode::Char('t') if shift && !ctrl => {
+                state.show_label_timestamps = !state.show_label_timestamps;
+                InputOutcome::Changed
+            }
+            KeyCode::Char('o') if ctrl && shift => {
+                state.cycle_filter_backward();
+                InputOutcome::Changed
+            }
+            KeyCode::Char('o') if ctrl => {
+                state.cycle_filter_forward();
+                InputOutcome::Changed
+            }
+            KeyCode::Char('d') if ctrl => {
+                state.set_filter(SessionTreeFilter::Default);
+                InputOutcome::Changed
+            }
+            KeyCode::Char('t') if ctrl => {
+                state.set_filter(SessionTreeFilter::NoTools);
+                InputOutcome::Changed
+            }
+            KeyCode::Char('u') if ctrl => {
+                state.set_filter(SessionTreeFilter::UserOnly);
+                InputOutcome::Changed
+            }
+            KeyCode::Char('l') if ctrl => {
+                state.set_filter(SessionTreeFilter::LabeledOnly);
+                InputOutcome::Changed
+            }
+            KeyCode::Char('a') if ctrl => {
+                state.set_filter(SessionTreeFilter::All);
+                InputOutcome::Changed
+            }
+            KeyCode::Char('r') if ctrl => {
+                state.detail_expanded = !state.detail_expanded;
+                state.focus = if state.detail_expanded {
+                    SessionTreeFocus::DetailExpanded
+                } else {
+                    SessionTreeFocus::List
+                };
+                state.detail_scroll = 0;
+                InputOutcome::Changed
+            }
+            KeyCode::Char('/') if !ctrl => {
+                state.focus = SessionTreeFocus::Search;
+                InputOutcome::Changed
+            }
+            KeyCode::Backspace => {
+                if !state.search_query.is_empty() {
+                    state.search_query.pop();
+                    state.folded.clear();
+                    state.selected = 0;
+                    state.scroll = 0;
+                    state.clamp_selected();
+                    InputOutcome::Changed
+                } else {
+                    InputOutcome::Unchanged
+                }
+            }
+            KeyCode::Char(c) if !ctrl => {
+                state.focus = SessionTreeFocus::Search;
+                state.search_query.push(c);
+                state.folded.clear();
+                state.selected = 0;
+                state.scroll = 0;
+                state.clamp_selected();
+                InputOutcome::Changed
+            }
+            _ => InputOutcome::Unchanged,
+        }
+    }
+
 }
 
 #[cfg(test)]

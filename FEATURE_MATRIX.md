@@ -56,7 +56,7 @@
 | 启动资源、提示词与会话选项 | 适配 | `--system-prompt`、`--append-system-prompt`、`--no-skills`、`--no-context-files`、`--extension`、`--no-extensions`、`--no-tools`、`--no-session` 与 `--name` 由 `grok-pi` 转发给 Pi |
 | Pi extension/prompt/skill commands | 原生+适配 | `get_commands` → Grok slash registry |
 | Grok cloud/session history picker | 边界 | 依赖 Grok session store，Pi profile 不暴露 `/history` |
-| Pi tree/fork/switch UI | 边界 | 当前不新增自定义命令/UI；可由 Pi 动态扩展命令自行提供 |
+| Pi session tree (`/tree`) | 适配 | 原生 `SessionTree` modal：筛选/搜索/折叠/详情/复制/标签；Enter/`Shift+Enter` 经注入 extension 调 `ctx.navigateTree`（可 summarize）；`session/load` 回放；TreeX 风格详情面板；不改 Pi 源码 |
 | Pi HTML export RPC | 边界 | 保留 Grok 原生 transcript `/export`，不另造重复命令 |
 
 ## Extension UI

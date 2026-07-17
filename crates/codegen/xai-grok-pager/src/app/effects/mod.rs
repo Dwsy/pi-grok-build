@@ -712,6 +712,203 @@ pub(crate) fn execute(
                 }
             });
         }
+        Effect::FetchSessionTree {
+            agent_id,
+            session_id,
+        } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let request = acp::ExtRequest::new(
+                    "pi/session/tree",
+                    serde_json::value::to_raw_value(&serde_json::json!({}))
+                        .expect("serialize Pi session tree request")
+                        .into(),
+                );
+                match acp_send(request, &tx).await {
+                    Ok(resp) => {
+                        let raw = resp.0.get();
+                        let value: serde_json::Value = match serde_json::from_str(raw) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                tracing::warn!(%error, bytes = raw.len(), "failed to parse Pi session tree response");
+                                return TaskResult::SessionTreeFailed {
+                                    agent_id,
+                                    error: format!(
+                                        "Invalid tree response ({} bytes): {error}",
+                                        raw.len()
+                                    ),
+                                };
+                            }
+                        };
+                        // ext_response wraps payload under "result".
+                        let payload = value.get("result").cloned().unwrap_or(value);
+                        let leaf_id = payload
+                            .get("leafId")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned);
+                        let nodes = parse_session_tree_nodes(&payload);
+                        if nodes.is_empty() && payload.get("nodes").is_none() {
+                            tracing::warn!(
+                                keys = ?payload.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()),
+                                "Pi session tree payload missing nodes"
+                            );
+                        }
+                        TaskResult::SessionTreeLoaded {
+                            agent_id,
+                            session_id,
+                            leaf_id,
+                            nodes,
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to fetch Pi session tree");
+                        TaskResult::SessionTreeFailed {
+                            agent_id,
+                            error: sanitize_user_error(&error.to_string()),
+                        }
+                    }
+                }
+            });
+        }
+        Effect::NavigateSessionTree {
+            agent_id,
+            session_id,
+            entry_id,
+            summarize,
+            custom_instructions,
+        } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let mut params = serde_json::json!({
+                    "entryId": entry_id,
+                    "summarize": summarize,
+                });
+                if let Some(instructions) = custom_instructions
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    params["customInstructions"] = serde_json::Value::String(instructions.to_owned());
+                }
+                let request = acp::ExtRequest::new(
+                    "pi/session/navigate_tree",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize Pi navigate_tree request")
+                        .into(),
+                );
+                match acp_send(request, &tx).await {
+                    Ok(resp) => {
+                        let value: serde_json::Value =
+                            serde_json::from_str(resp.0.get()).unwrap_or_default();
+                        let payload = value.get("result").cloned().unwrap_or(value);
+                        let leaf_id = payload
+                            .get("leafId")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned);
+                        TaskResult::SessionTreeNavigated {
+                            agent_id,
+                            session_id,
+                            leaf_id,
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to navigate Pi session tree");
+                        TaskResult::SessionTreeNavigateFailed {
+                            agent_id,
+                            error: sanitize_user_error(&error.to_string()),
+                        }
+                    }
+                }
+            });
+        }
+        Effect::LabelSessionTreeEntry {
+            agent_id,
+            session_id,
+            entry_id,
+            label,
+        } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let mut params = serde_json::json!({ "entryId": entry_id });
+                match label.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    Some(text) => {
+                        params["label"] = serde_json::Value::String(text.to_owned());
+                    }
+                    None => {
+                        params["clear"] = serde_json::Value::Bool(true);
+                    }
+                }
+                let request = acp::ExtRequest::new(
+                    "pi/session/tree_label",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize Pi tree_label request")
+                        .into(),
+                );
+                match acp_send(request, &tx).await {
+                    Ok(resp) => {
+                        let value: serde_json::Value =
+                            serde_json::from_str(resp.0.get()).unwrap_or_default();
+                        let payload = value.get("result").cloned().unwrap_or(value);
+                        // Re-fetch full tree so modal stays consistent.
+                        let tree_req = acp::ExtRequest::new(
+                            "pi/session/tree",
+                            serde_json::value::to_raw_value(&serde_json::json!({}))
+                                .expect("serialize tree refresh")
+                                .into(),
+                        );
+                        let (leaf_id, nodes) = match acp_send(tree_req, &tx).await {
+                            Ok(tree_resp) => {
+                                let tree_value: serde_json::Value =
+                                    serde_json::from_str(tree_resp.0.get()).unwrap_or_default();
+                                let tree_payload =
+                                    tree_value.get("result").cloned().unwrap_or(tree_value);
+                                let leaf = tree_payload
+                                    .get("leafId")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_owned)
+                                    .or_else(|| {
+                                        payload
+                                            .get("leafId")
+                                            .and_then(|v| v.as_str())
+                                            .map(str::to_owned)
+                                    });
+                                (leaf, parse_session_tree_nodes(&tree_payload))
+                            }
+                            Err(_) => (
+                                payload
+                                    .get("leafId")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_owned),
+                                Vec::new(),
+                            ),
+                        };
+                        TaskResult::SessionTreeLabeled {
+                            agent_id,
+                            session_id,
+                            entry_id: payload
+                                .get("entryId")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(&entry_id)
+                                .to_owned(),
+                            label: payload
+                                .get("label")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_owned)
+                                .or(label),
+                            leaf_id,
+                            nodes,
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to label Pi session tree entry");
+                        TaskResult::SessionTreeLabelFailed {
+                            agent_id,
+                            error: sanitize_user_error(&error.to_string()),
+                        }
+                    }
+                }
+            });
+        }
         Effect::FetchSessionList { query, seq } => {
             let tx = acp_tx.clone();
             let cwd = cwd.to_path_buf();

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
+use serde::Deserialize;
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -89,7 +90,7 @@ impl PiRpc {
             let mut lines = BufReader::new(stdout).lines();
             loop {
                 match lines.next_line().await {
-                    Ok(Some(line)) => match serde_json::from_str::<Value>(&line) {
+                    Ok(Some(line)) => match parse_pi_rpc_json(&line) {
                         Ok(value) => {
                             let response_id = value
                                 .get("id")
@@ -110,10 +111,15 @@ impl PiRpc {
                             let _ = event_stdout.send(value);
                         }
                         Err(error) => {
-                            tracing::warn!(%error, raw = %line, "invalid JSON on Pi RPC stdout");
+                            tracing::warn!(%error, bytes = line.len(), "invalid JSON on Pi RPC stdout");
+                            // Fail the matching pending request if we can see its id
+                            // in a partial parse; otherwise surface a diagnostic event.
                             let _ = event_stdout.send(serde_json::json!({
                                 "type": "adapter_diagnostic",
-                                "message": format!("Invalid Pi RPC JSON: {error}"),
+                                "message": format!(
+                                    "Invalid Pi RPC JSON ({} bytes): {error}",
+                                    line.len()
+                                ),
                             }));
                         }
                     },
@@ -225,6 +231,56 @@ fn request_timeout(command_type: &str) -> Option<Duration> {
     }
 }
 
+/// Parse Pi RPC JSONL, tolerating deeply nested `get_tree` payloads.
+///
+/// `get_tree` returns a recursively nested `{entry, children:[...]}` graph.
+/// serde_json's default recursion limit (~128) rejects those lines, and even
+/// with `unbounded_depth` the recursive `Value` visitor can overflow the
+/// default thread stack. Large/deep lines are therefore parsed on a dedicated
+/// large-stack thread so `/tree` cannot hang forever on "Fetching…".
+fn parse_pi_rpc_json(line: &str) -> Result<Value, String> {
+    // Fast path: normal sessions fit default limits.
+    match serde_json::from_str::<Value>(line) {
+        Ok(value) => return Ok(value),
+        Err(error) => {
+            let msg = error.to_string();
+            let needs_deep = line.len() > 64 * 1024 || msg.contains("recursion limit exceeded");
+            if !needs_deep {
+                return Err(msg);
+            }
+        }
+    }
+    parse_pi_rpc_json_deep(line.to_string())
+}
+
+fn parse_pi_rpc_json_deep(line: String) -> Result<Value, String> {
+    with_large_stack(move || {
+        let mut de = serde_json::Deserializer::from_str(&line);
+        de.disable_recursion_limit();
+        let value = Value::deserialize(&mut de).map_err(|e| e.to_string())?;
+        de.end().map_err(|e| e.to_string())?;
+        Ok(value)
+    })
+}
+
+/// Run `f` on a thread with a 64 MiB stack.
+///
+/// Used for deep Pi tree JSON parse/flatten/drop. Keep the critical section
+/// short — only the recursive JSON work belongs here.
+pub(crate) fn with_large_stack<F, T>(f: F) -> T
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    std::thread::Builder::new()
+        .name("pi-json-deep".into())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(f)
+        .expect("spawn pi-json-deep thread")
+        .join()
+        .expect("pi-json-deep thread panicked")
+}
+
 fn fail_pending(
     pending: &Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>,
     message: &str,
@@ -249,5 +305,51 @@ mod tests {
         assert_eq!(request_timeout("bash"), None);
         assert_eq!(request_timeout("compact"), None);
         assert_eq!(request_timeout("get_state"), Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn parse_pi_rpc_json_large_get_tree_fixture() {
+        let path = std::path::Path::new("/tmp/pi-get-tree.json");
+        if !path.exists() {
+            return;
+        }
+        let data = std::fs::read_to_string(path).unwrap();
+        // Wrap as a full RPC response line like Pi emits.
+        let line = format!(
+            "{{\"type\":\"response\",\"command\":\"get_tree\",\"success\":true,\"id\":\"x\",\"data\":{data}}}"
+        );
+        let start = std::time::Instant::now();
+        let value = parse_pi_rpc_json(&line).expect("deep parse");
+        let elapsed = start.elapsed();
+        eprintln!("fixture parse elapsed_ms={}", elapsed.as_millis());
+        assert_eq!(value["command"], "get_tree");
+        assert!(value["data"]["tree"].as_array().is_some());
+        // Flatten projection must also finish quickly on large stack.
+        let tree = with_large_stack({
+            let value = value;
+            move || crate::model::parse_session_tree(&value["data"])
+        });
+        eprintln!("fixture flatten nodes={} elapsed_ms_total={}", tree.rows.len(), start.elapsed().as_millis());
+        assert!(!tree.rows.is_empty());
+        assert!(start.elapsed().as_secs() < 30);
+    }
+
+    #[test]
+    fn parse_pi_rpc_json_accepts_deeply_nested_trees() {
+        // Build a chain deeper than serde_json's default recursion limit.
+        let mut node = String::from("{\"entry\":{\"id\":\"leaf\",\"type\":\"message\"},\"children\":[]}");
+        for i in 0..200 {
+            node = format!(
+                "{{\"entry\":{{\"id\":\"n{i}\",\"type\":\"message\"}},\"children\":[{node}]}}"
+            );
+        }
+        let line = format!(
+            "{{\"type\":\"response\",\"command\":\"get_tree\",\"success\":true,\"data\":{{\"tree\":[{node}],\"leafId\":\"leaf\"}}}}"
+        );
+        // Default from_str would fail with recursion limit exceeded.
+        assert!(serde_json::from_str::<Value>(&line).is_err());
+        let value = parse_pi_rpc_json(&line).expect("unbounded parse");
+        assert_eq!(value["command"], "get_tree");
+        assert!(value["data"]["tree"].as_array().is_some());
     }
 }

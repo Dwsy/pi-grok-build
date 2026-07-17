@@ -9,6 +9,72 @@
 use super::agent::AgentId;
 use agent_client_protocol as acp;
 use xai_grok_shell::sampling::types::ReasoningEffort;
+
+/// Flattened Pi session-tree node for the `/tree` surface.
+#[derive(Debug, Clone)]
+pub struct SessionTreeNode {
+    pub id: String,
+    pub parent_id: Option<String>,
+    /// Structural depth from root (parent-chain length). Visual indent is
+    /// recomputed after filter using Pi TreeSelector branch-compression rules.
+    pub depth: usize,
+    pub is_leaf: bool,
+    pub is_current: bool,
+    pub on_active_path: bool,
+    pub role: String,
+    pub preview: String,
+    pub detail: String,
+    pub label: Option<String>,
+    pub label_timestamp: Option<String>,
+    pub entry_type: String,
+    pub timestamp: Option<String>,
+    pub child_ids: Vec<String>,
+    /// Assistant messages without text are hidden in default filter (Pi parity).
+    pub has_text: bool,
+}
+
+/// Filter modes aligned with Pi `TreeSelector` / settings `treeFilterMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SessionTreeFilter {
+    #[default]
+    Default,
+    NoTools,
+    UserOnly,
+    LabeledOnly,
+    All,
+}
+
+impl SessionTreeFilter {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::NoTools => "no-tools",
+            Self::UserOnly => "user",
+            Self::LabeledOnly => "labeled",
+            Self::All => "all",
+        }
+    }
+
+    pub fn cycle_forward(self) -> Self {
+        match self {
+            Self::Default => Self::NoTools,
+            Self::NoTools => Self::UserOnly,
+            Self::UserOnly => Self::LabeledOnly,
+            Self::LabeledOnly => Self::All,
+            Self::All => Self::Default,
+        }
+    }
+
+    pub fn cycle_backward(self) -> Self {
+        match self {
+            Self::Default => Self::All,
+            Self::NoTools => Self::Default,
+            Self::UserOnly => Self::NoTools,
+            Self::LabeledOnly => Self::UserOnly,
+            Self::All => Self::LabeledOnly,
+        }
+    }
+}
 /// Typed error for model switch failures. Replaces the raw `String` in
 /// `TaskResult::SwitchModelComplete` so dispatch can match on the variant
 /// instead of parsing strings.
@@ -90,6 +156,21 @@ pub enum Action {
     },
     /// Open the session picker overlay (from within an active session via /resume).
     ShowSessionPicker,
+    /// Open the Pi session entry tree picker (`/tree`).
+    ShowSessionTree,
+    /// Navigate the active Pi session leaf to `entry_id` (`ctx.navigateTree`).
+    NavigateSessionTree {
+        entry_id: String,
+        summarize: bool,
+        custom_instructions: Option<String>,
+    },
+    /// Set or clear a Pi session-tree label (`ctx.setLabel`).
+    LabelSessionTreeEntry {
+        entry_id: String,
+        label: Option<String>,
+    },
+    /// Close the session tree modal without navigating.
+    SessionTreeClosed,
     /// The session picker overlay was dismissed without a pick: invalidate any
     /// in-flight list/search/foreign scan so a late response can't fall
     /// through to the welcome picker fields.
@@ -1406,6 +1487,26 @@ pub enum Effect {
     /// Ask an external ACP agent to lazily publish one scoped session catalog
     /// when the native session picker opens or its tab changes.
     FetchExternalSessionCatalog { cwd: std::path::PathBuf, all: bool },
+    /// Fetch Pi `get_tree` for the active agent and open ArgPicker.
+    FetchSessionTree {
+        agent_id: crate::app::agent::AgentId,
+        session_id: String,
+    },
+    /// Navigate Pi leaf then reload scrollback for the same session id.
+    NavigateSessionTree {
+        agent_id: crate::app::agent::AgentId,
+        session_id: String,
+        entry_id: String,
+        summarize: bool,
+        custom_instructions: Option<String>,
+    },
+    /// Set/clear a Pi tree label then refresh the open tree modal.
+    LabelSessionTreeEntry {
+        agent_id: crate::app::agent::AgentId,
+        session_id: String,
+        entry_id: String,
+        label: Option<String>,
+    },
     /// Fetch session list for the welcome screen session picker.
     FetchSessionList {
         /// Text search pushed down to `x.ai/session/list` as `query` (chat
@@ -2149,6 +2250,42 @@ pub enum TaskResult {
     /// The external-agent session catalog request failed before any catalog
     /// notification could arrive — clear loading flags on dashboard/picker.
     ExternalSessionCatalogFailed,
+    /// Pi session tree loaded for `/tree` ArgPicker.
+    SessionTreeLoaded {
+        agent_id: crate::app::agent::AgentId,
+        session_id: String,
+        leaf_id: Option<String>,
+        nodes: Vec<SessionTreeNode>,
+    },
+    /// Pi session tree fetch failed.
+    SessionTreeFailed {
+        agent_id: crate::app::agent::AgentId,
+        error: String,
+    },
+    /// Pi tree navigation completed; reload scrollback for the same session.
+    SessionTreeNavigated {
+        agent_id: crate::app::agent::AgentId,
+        session_id: String,
+        leaf_id: Option<String>,
+    },
+    /// Pi tree navigation failed; keep current view.
+    SessionTreeNavigateFailed {
+        agent_id: crate::app::agent::AgentId,
+        error: String,
+    },
+    /// Pi tree label set/cleared; refresh nodes if modal still open.
+    SessionTreeLabeled {
+        agent_id: crate::app::agent::AgentId,
+        session_id: String,
+        entry_id: String,
+        label: Option<String>,
+        leaf_id: Option<String>,
+        nodes: Vec<SessionTreeNode>,
+    },
+    SessionTreeLabelFailed {
+        agent_id: crate::app::agent::AgentId,
+        error: String,
+    },
     /// Session list fetched for the welcome screen picker.
     SessionListLoaded {
         sessions: Vec<crate::app::app_view::SessionPickerEntry>,

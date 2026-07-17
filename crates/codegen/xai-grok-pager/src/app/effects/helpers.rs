@@ -1441,3 +1441,77 @@ pub(super) fn unregister_active_session_best_effort_in(
         Err(e) => tracing::warn!(? e, "Failed to unregister active session"),
     }
 }
+
+pub(super) fn parse_session_tree_nodes(payload: &serde_json::Value) -> Vec<crate::app::actions::SessionTreeNode> {
+    payload
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|node| {
+            Some(crate::app::actions::SessionTreeNode {
+                id: node.get("id")?.as_str()?.to_owned(),
+                parent_id: node
+                    .get("parentId")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
+                depth: node.get("depth").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                is_leaf: node
+                    .get("isLeaf")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                is_current: node
+                    .get("isCurrent")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                on_active_path: node
+                    .get("onActivePath")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                role: node
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                preview: node
+                    .get("preview")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                detail: node
+                    .get("detail")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                label: node
+                    .get("label")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
+                label_timestamp: node
+                    .get("labelTimestamp")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
+                entry_type: node
+                    .get("entryType")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                timestamp: node
+                    .get("timestamp")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
+                child_ids: node
+                    .get("childIds")
+                    .and_then(|v| v.as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect(),
+                has_text: node
+                    .get("hasText")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+            })
+        })
+        .collect()
+}
