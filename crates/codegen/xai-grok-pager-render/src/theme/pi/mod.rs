@@ -1,0 +1,21 @@
+//! Pi theme JSON → Grok [`Theme`] adapter.
+//!
+//! Loads themes in the format documented by Pi coding-agent (`themes.md`),
+//! resolves `vars`, and maps color tokens onto the Grok pager's semantic
+//! palette. Themes are addressed as `pi:<name>` to avoid clashing with
+//! Grok built-in aliases (`dark` / `light`).
+
+mod color;
+mod load;
+mod map;
+mod registry;
+mod schema;
+
+pub use load::{load_from_path, load_from_str, load_theme_palette, load_theme_palette_from_str, LoadError};
+pub use map::{map_pi_theme, MapError};
+pub use registry::{
+    apply_pi_theme, ensure_builtins, init_discovery, is_pi_theme_id, list_themes, load_palette,
+    parse_pi_theme_id, reset_for_test, reset_registry, theme_id, DiscoveryReport, PiThemeMeta,
+    PI_THEME_PREFIX,
+};
+pub use schema::{ColorValue, PiThemeColors, PiThemeJson};

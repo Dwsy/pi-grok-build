@@ -17,6 +17,7 @@ mod groknight;
 pub mod md_style;
 pub mod osc11;
 mod oscura;
+pub mod pi;
 mod rosepine;
 pub mod system_appearance;
 mod terminal_default;
@@ -269,15 +270,19 @@ impl Theme {
         if cache::terminal_native_locked() {
             return Self::terminal_default().quantized(level);
         }
-        let base = match cache::current_kind() {
-            ThemeKind::GrokNight => Self::groknight(),
-            ThemeKind::TokyoNight => Self::tokyonight(),
-            ThemeKind::GrokDay => Self::grokday(),
-            ThemeKind::RosePineMoon => Self::rosepine_moon(),
-            ThemeKind::OscuraMidnight => Self::oscura_midnight(),
-            // Auto is resolved to a concrete theme before being stored;
-            // if reached, fall back to GrokNight.
-            ThemeKind::Auto => Self::groknight(),
+        let base = if let Some(custom) = cache::custom() {
+            custom.palette
+        } else {
+            match cache::current_kind() {
+                ThemeKind::GrokNight => Self::groknight(),
+                ThemeKind::TokyoNight => Self::tokyonight(),
+                ThemeKind::GrokDay => Self::grokday(),
+                ThemeKind::RosePineMoon => Self::rosepine_moon(),
+                ThemeKind::OscuraMidnight => Self::oscura_midnight(),
+                // Auto is resolved to a concrete theme before being stored;
+                // if reached, fall back to GrokNight.
+                ThemeKind::Auto => Self::groknight(),
+            }
         };
         // Sample polarity pre-quantization — post-quantize `bg_base` may
         // land on a named/indexed entry whose luminance is host-palette-
@@ -312,8 +317,31 @@ impl Theme {
     }
 
     /// Get the currently active theme kind.
+    ///
+    /// When a custom (Pi) palette is active this returns the nominal
+    /// placeholder kind (`GrokNight`); use [`Self::current_display_id`] for
+    /// the user-facing theme id.
     pub fn current_kind() -> ThemeKind {
         cache::current_kind()
+    }
+
+    /// User-facing theme id (`groknight`, `auto`, `pi:dark`, …).
+    pub fn current_display_id() -> String {
+        cache::current_display_id()
+    }
+
+    /// Apply a custom (non-enum) palette without persisting.
+    ///
+    /// Used for Pi themes and live preview of custom JSON palettes.
+    /// No-op while the terminal-native lock is engaged.
+    pub fn apply_custom(id: impl Into<String>, palette: Self) -> String {
+        if cache::terminal_native_locked() {
+            return cache::current_display_id();
+        }
+        let id = id.into();
+        cache::set_custom(id.clone(), palette);
+        apply_cursor_color();
+        id
     }
 
     /// Whether this theme paints no diff row bands (`diff_*_bg` = `Reset`),
@@ -328,7 +356,7 @@ impl Theme {
     /// Apply a theme kind to the in-memory state without persisting.
     /// Used by the dispatcher, live-preview, and the appearance watcher.
     ///
-    /// No-op while the terminal-native lock is engaged.
+    /// Clears any custom palette. No-op while the terminal-native lock is engaged.
     pub fn apply_kind(kind: ThemeKind) -> ThemeKind {
         if cache::terminal_native_locked() {
             return cache::current_kind();

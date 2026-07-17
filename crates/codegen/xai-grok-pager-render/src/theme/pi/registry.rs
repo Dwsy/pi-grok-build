@@ -1,0 +1,306 @@
+//! In-process catalog of discoverable Pi themes.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+
+use super::load::{load_from_path, load_theme_palette_from_str, LoadError};
+use super::map::map_pi_theme;
+use crate::theme::Theme;
+
+/// Canonical id prefix for Pi themes in Grok config / slash UI.
+pub const PI_THEME_PREFIX: &str = "pi:";
+
+const BUILTIN_DARK: &str = include_str!("../../../assets/pi-themes/dark.json");
+const BUILTIN_LIGHT: &str = include_str!("../../../assets/pi-themes/light.json");
+
+/// Metadata for a registered Pi theme (palette may be loaded lazily).
+#[derive(Debug, Clone)]
+pub struct PiThemeMeta {
+    /// Theme `name` field from JSON.
+    pub name: String,
+    /// Canonical id: `pi:<name>`.
+    pub id: String,
+    /// Source path if loaded from disk; `None` for embedded builtins.
+    pub path: Option<PathBuf>,
+    pub builtin: bool,
+}
+
+/// Result of a discovery pass.
+#[derive(Debug, Clone, Default)]
+pub struct DiscoveryReport {
+    pub loaded: usize,
+    pub skipped: usize,
+    pub errors: Vec<String>,
+}
+
+struct RegistryState {
+    /// name → meta (first registration wins).
+    by_name: HashMap<String, PiThemeMeta>,
+    /// Cached palettes for builtins and already-loaded customs.
+    palettes: HashMap<String, Theme>,
+    initialized: bool,
+}
+
+impl RegistryState {
+    fn empty() -> Self {
+        Self {
+            by_name: HashMap::new(),
+            palettes: HashMap::new(),
+            initialized: false,
+        }
+    }
+}
+
+static REGISTRY: LazyLock<Mutex<RegistryState>> =
+    LazyLock::new(|| Mutex::new(RegistryState::empty()));
+
+/// Build the canonical id for a Pi theme name.
+pub fn theme_id(name: &str) -> String {
+    format!("{PI_THEME_PREFIX}{name}")
+}
+
+/// Returns `Some(name)` if `id` is a Pi theme id (`pi:name` or bare name
+/// that is registered). Prefer the `pi:` form for persistence.
+pub fn parse_pi_theme_id(id: &str) -> Option<String> {
+    let trimmed = id.trim();
+    if let Some(rest) = trimmed.strip_prefix(PI_THEME_PREFIX) {
+        if rest.is_empty() {
+            return None;
+        }
+        return Some(rest.to_string());
+    }
+    None
+}
+
+/// Whether a theme setting string refers to a Pi theme.
+pub fn is_pi_theme_id(id: &str) -> bool {
+    parse_pi_theme_id(id).is_some()
+}
+
+/// Ensure builtins are registered (idempotent). Call before list/load.
+pub fn ensure_builtins() {
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.initialized {
+        return;
+    }
+    register_builtin(&mut guard, BUILTIN_DARK);
+    register_builtin(&mut guard, BUILTIN_LIGHT);
+    guard.initialized = true;
+}
+
+fn register_builtin(state: &mut RegistryState, json: &str) {
+    match load_theme_palette_from_str(json) {
+        Ok((name, palette)) => {
+            let id = theme_id(&name);
+            state.by_name.entry(name.clone()).or_insert(PiThemeMeta {
+                name: name.clone(),
+                id,
+                path: None,
+                builtin: true,
+            });
+            state.palettes.insert(name, palette);
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to load embedded Pi builtin theme");
+        }
+    }
+}
+
+/// Discover Pi themes from standard locations (Pi-aligned).
+///
+/// Order (first wins on name collision):
+/// 1. Embedded builtins (`dark`, `light`)
+/// 2. `~/.pi/agent/themes/*.json`
+/// 3. `<cwd>/.pi/themes/*.json`
+/// 4. Paths from `PI_THEME_PATHS` (os path separator list)
+pub fn init_discovery(cwd: &Path) -> DiscoveryReport {
+    ensure_builtins();
+    let mut report = DiscoveryReport::default();
+    // Count builtins already present.
+    {
+        let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        report.loaded = guard.by_name.len();
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let global = home.join(".pi").join("agent").join("themes");
+        scan_dir(&global, &mut report);
+    }
+
+    let project = cwd.join(".pi").join("themes");
+    scan_dir(&project, &mut report);
+
+    if let Ok(extra) = std::env::var("PI_THEME_PATHS") {
+        for part in std::env::split_paths(&extra) {
+            if part.is_dir() {
+                scan_dir(&part, &mut report);
+            } else if part.is_file() {
+                try_register_file(&part, &mut report);
+            }
+        }
+    }
+
+    tracing::info!(
+        target: "pi_theme",
+        loaded = report.loaded,
+        skipped = report.skipped,
+        errors = report.errors.len(),
+        "Pi theme discovery finished"
+    );
+    report
+}
+
+fn scan_dir(dir: &Path, report: &mut DiscoveryReport) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        })
+        .collect();
+    paths.sort();
+    for path in paths {
+        try_register_file(&path, report);
+    }
+}
+
+fn try_register_file(path: &Path, report: &mut DiscoveryReport) {
+    match load_from_path(path) {
+        Ok(doc) => {
+            let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.by_name.contains_key(&doc.name) {
+                report.skipped += 1;
+                tracing::debug!(
+                    target: "pi_theme",
+                    name = %doc.name,
+                    path = %path.display(),
+                    "Pi theme name collision — keeping first registration"
+                );
+                return;
+            }
+            match map_pi_theme(&doc) {
+                Ok(palette) => {
+                    let name = doc.name.clone();
+                    let id = theme_id(&name);
+                    guard.by_name.insert(
+                        name.clone(),
+                        PiThemeMeta {
+                            name: name.clone(),
+                            id,
+                            path: Some(path.to_path_buf()),
+                            builtin: false,
+                        },
+                    );
+                    guard.palettes.insert(name, palette);
+                    report.loaded += 1;
+                }
+                Err(e) => {
+                    report.errors.push(format!("{}: {e}", path.display()));
+                }
+            }
+        }
+        Err(e) => {
+            report.errors.push(format!("{}: {e}", path.display()));
+        }
+    }
+}
+
+/// List all registered Pi themes (sorted by name).
+pub fn list_themes() -> Vec<PiThemeMeta> {
+    ensure_builtins();
+    let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    let mut list: Vec<_> = guard.by_name.values().cloned().collect();
+    list.sort_by(|a, b| a.name.cmp(&b.name));
+    list
+}
+
+/// Load the palette for a Pi theme id (`pi:name` or registered name via prefix).
+pub fn load_palette(id: &str) -> Result<(String, Theme), LoadError> {
+    ensure_builtins();
+    let name = parse_pi_theme_id(id).ok_or_else(|| LoadError::InvalidName(id.to_string()))?;
+    let path_to_reload = {
+        let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(palette) = guard.palettes.get(&name) {
+            return Ok((theme_id(&name), *palette));
+        }
+        // Registered with path but palette missing (should not happen) — reload.
+        guard
+            .by_name
+            .get(&name)
+            .and_then(|meta| meta.path.clone())
+    };
+    if let Some(path) = path_to_reload {
+        let (n, palette) = super::load::load_theme_palette(&path)?;
+        let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        guard.palettes.insert(n.clone(), palette);
+        return Ok((theme_id(&n), palette));
+    }
+    Err(LoadError::InvalidName(format!("unknown Pi theme: {id}")))
+}
+
+/// Apply a Pi theme by id into the Grok custom palette slot.
+pub fn apply_pi_theme(id: &str) -> Result<String, LoadError> {
+    let (canonical_id, palette) = load_palette(id)?;
+    crate::theme::Theme::apply_custom(canonical_id.clone(), palette);
+    Ok(canonical_id)
+}
+
+/// Clear the in-process catalog (tests / re-discovery).
+pub fn reset_registry() {
+    let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = RegistryState::empty();
+}
+
+/// Alias used by unit tests in this crate and dependent packages.
+pub fn reset_for_test() {
+    reset_registry();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtins_registered() {
+        reset_registry();
+        ensure_builtins();
+        let list = list_themes();
+        let names: Vec<_> = list.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"dark"));
+        assert!(names.contains(&"light"));
+        let (id, theme) = load_palette("pi:dark").unwrap();
+        assert_eq!(id, "pi:dark");
+        assert!(theme.is_dark());
+    }
+
+    #[test]
+    fn discover_custom_file() {
+        reset_registry();
+        let dir = tempfile::tempdir().unwrap();
+        let themes = dir.path().join(".pi").join("themes");
+        std::fs::create_dir_all(&themes).unwrap();
+        // Minimal valid theme based on dark with renamed name.
+        let mut json = include_str!("../../../assets/pi-themes/dark.json").to_string();
+        json = json.replacen("\"dark\"", "\"custom-test\"", 1);
+        std::fs::write(themes.join("custom-test.json"), json).unwrap();
+
+        let report = init_discovery(dir.path());
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        let list = list_themes();
+        assert!(list.iter().any(|t| t.name == "custom-test"));
+        let (_id, _) = load_palette("pi:custom-test").unwrap();
+    }
+
+    #[test]
+    fn parse_id() {
+        assert_eq!(parse_pi_theme_id("pi:dark").as_deref(), Some("dark"));
+        assert_eq!(parse_pi_theme_id("pi:").as_deref(), None);
+        assert_eq!(parse_pi_theme_id("dark").as_deref(), None);
+    }
+}
