@@ -4,6 +4,20 @@ All notable changes to **grok-pi** (Pi agent core in Grok Build's production TUI
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.0.4] - 2026-07-17
+
+### Added
+
+- Context click / `/context`: adapter implements `x.ai/session/info` from Pi `get_session_stats` + message estimate → native `ContextInfoBlock`
+- Queue pane bridge: Pi `queue_update` full arrays → `x.ai/queue/changed` so optimistic dequeue works
+- Product version stamp via `GROK_PI_VERSION` / git describe (no more upstream `0.1.220-alpha.*` on `--version`)
+
+### Fixed
+
+- Context breakdown no longer dumps the whole window into Reasoning/overhead when message estimate is empty (fallback → Messages)
+- Session-info payload omits null Option fields for safer pager deserial
+- Welcome / dashboard / session load paths for Pi catalog continuity
+
 ## [0.0.3] - 2026-07-17
 
 ### Changed

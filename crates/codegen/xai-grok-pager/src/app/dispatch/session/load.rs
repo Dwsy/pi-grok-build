@@ -1201,8 +1201,12 @@ pub(in crate::app::dispatch) fn handle_deep_search_results(
 /// never used for external agents.
 pub(in crate::app::dispatch) fn dispatch_show_session_picker(app: &mut AppView) -> Vec<Effect> {
     use crate::views::modal::ActiveModal;
+    use super::lifecycle::discard_welcome_prewarm;
     let external_agent = app.external_agent;
     let has_agent = matches!(app.active_view, crate::app::app_view::ActiveView::Agent(_));
+    // Resume replaces the empty prewarmed session; drop it so we do not leak
+    // a background Pi session the user never typed into.
+    let mut effects = discard_welcome_prewarm(app);
     with_active_agent(app, |agent| {
         agent.active_modal = Some(ActiveModal::SessionPicker {
             state: crate::views::picker::PickerState::default(),
@@ -1225,15 +1229,16 @@ pub(in crate::app::dispatch) fn dispatch_show_session_picker(app: &mut AppView) 
     });
     if external_agent {
         if has_agent {
-            dispatch_refresh_external_session_catalog(app)
+            effects.extend(dispatch_refresh_external_session_catalog(app));
         } else {
             // Welcome screen: no agent modal yet — drive the native welcome
             // picker with the same Pi catalog `/resume` uses.
-            dispatch_refresh_external_session_catalog_welcome(app)
+            effects.extend(dispatch_refresh_external_session_catalog_welcome(app));
         }
     } else {
-        dispatch_fetch_session_list(app)
+        effects.extend(dispatch_fetch_session_list(app));
     }
+    effects
 }
 
 /// Populate the welcome-screen session picker from the external (Pi) catalog.

@@ -67,10 +67,14 @@ const PI_LOGO: &str = "\
   ██    ██\n\
 ";
 
+/// Product version for `grok-pi --version` (release tag / git describe).
+/// Not the upstream workspace crate version (`0.1.220-alpha.*`).
+const GROK_PI_VERSION: &str = env!("GROK_PI_VERSION");
+
 #[derive(Debug, Parser)]
 #[command(
     name = "grok-pi",
-    version,
+    version = GROK_PI_VERSION,
     about = "Run the Pi agent core in Grok Build's production TUI",
     after_help = "Pi-compatible aliases:\n  -ns  Alias for --no-skills\n  -nc  Alias for --no-context-files\n  -ne  Alias for --no-extensions\n  -nt  Alias for --no-tools\n\nUpdate (GitHub releases only):\n  grok-pi update            Install latest from Dwsy/grok-pi\n  grok-pi update --check    Print current vs latest\n  Welcome Ctrl+U            Same install when an update is offered"
 )]

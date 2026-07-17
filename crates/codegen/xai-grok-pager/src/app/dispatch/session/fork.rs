@@ -14,7 +14,31 @@ use crate::scrollback::block::RenderBlock;
 use crate::scrollback::blocks::SessionEvent;
 use crate::scrollback::state::ScrollbackState;
 use agent_client_protocol as acp;
+use chrono::{DateTime, Utc};
+use std::path::PathBuf;
 use std::time::Instant;
+
+/// Collect recent project dirs without panicking under a Tokio `LocalSet`.
+///
+/// Stock Grok used `block_in_place` + `Handle::block_on`, which panics inside
+/// a `LocalSet` (how `grok-pi` hosts the pager — multi-thread runtime + LocalSet
+/// for `!Send` Pi adapter). Run the async collect on a dedicated OS thread with
+/// its own tiny runtime instead.
+pub(in crate::app::dispatch) fn collect_recent_dirs_blocking(
+    limit: usize,
+) -> Vec<(PathBuf, DateTime<Utc>)> {
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("project picker helper runtime")
+                .block_on(crate::project_picker::sources::collect_recent_dirs(limit))
+        })
+        .join()
+        .unwrap_or_default()
+    })
+}
 /// Top-level `/fork` dispatcher. Resolves the worktree decision: an
 /// explicit `--worktree` / `--no-worktree` flag short-circuits to
 /// [`dispatch_fork_resolved`]. When no flag is given and a persisted
@@ -275,10 +299,10 @@ pub(in crate::app::dispatch) fn open_project_question(
     if agent.question_view.is_some() {
         return vec![];
     }
-    let recent_dirs = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(crate::project_picker::sources::collect_recent_dirs(10))
-    });
+    // `block_in_place` panics inside a Tokio `LocalSet` (grok-pi composition).
+    // Prefer it when legal; otherwise run the async collect on a worker thread
+    // so the sync dispatch path never aborts.
+    let recent_dirs = collect_recent_dirs_blocking(10);
     let pq = crate::project_picker::build_project_question(&recent_dirs, &app.cwd);
     if pq.resolved_paths.len() <= 1 {
         return dispatch_project_selected(app, app.cwd.clone(), prompt_text, false);

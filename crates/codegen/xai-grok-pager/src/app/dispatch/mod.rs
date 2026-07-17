@@ -49,6 +49,8 @@ pub(super) use queue::{
 };
 pub(in crate::app) use rewind::{find_user_prompt_entry_for_shell_index, shell_prompt_index_at};
 pub(crate) use router::dispatch;
+/// Welcome-screen session prewarm for external (Pi) hosts.
+pub(crate) use session::lifecycle::dispatch_prewarm_welcome_session;
 pub(crate) use settings::ui::refresh_open_settings_modals;
 pub(crate) use status::commit_minimal_update_notice;
 pub(crate) use turn::reconcile_overdue_turn_ends;

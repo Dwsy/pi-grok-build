@@ -1402,6 +1402,19 @@ pub(crate) async fn run(
             return Ok(make_run_result(&app));
         }
         app.draw(terminal);
+    } else if external_agent
+        && matches!(materialized, MaterializedStartup::NewAuto)
+        && matches!(app.active_view, ActiveView::Welcome)
+        && app.session_startup_allowed()
+        && !app.is_zdr_blocked()
+    {
+        // Pi: start `new_session` while Welcome is still on screen so the
+        // first keystroke attaches a warm agent instead of waiting on RPC.
+        let effs = dispatch::dispatch_prewarm_welcome_session(&mut app);
+        if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
+            return Ok(make_run_result(&app));
+        }
+        app.draw(terminal);
     }
 
     // Initial prompt from the CLI positional (`grok "fix the bug"`). When

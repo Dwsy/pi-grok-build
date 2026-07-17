@@ -757,12 +757,9 @@ pub(super) fn dispatch_dashboard_open_location_picker(app: &mut AppView) -> Vec<
     }
 
     let cwd = app.cwd.clone();
-    // Same pattern as `open_project_question` — the recent-dirs source is
-    // async; block the current runtime thread briefly to collect it.
-    let recent = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(crate::project_picker::sources::collect_recent_dirs(10))
-    });
+    // LocalSet-safe collect (see `collect_recent_dirs_blocking`); never
+    // `block_in_place` here — panics under grok-pi's composition runtime.
+    let recent = super::session::fork::collect_recent_dirs_blocking(10);
 
     // Worktree label index (root path → label), built once and reused to
     // tag both recents and live directory suggestions.

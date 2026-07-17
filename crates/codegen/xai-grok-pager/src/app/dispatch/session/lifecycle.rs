@@ -132,6 +132,15 @@ pub(in crate::app::dispatch) fn dispatch_new_session(app: &mut AppView) -> Vec<E
     // any other hosted agent). The native pager still creates and renders the
     // new session; only the backend decision is delegated directly to ACP.
     if app.external_agent {
+        // Welcome prewarm: attach the background agent started on the
+        // welcome screen so the first keystroke is not blocked on cold
+        // `new_session` RPC latency.
+        if let Some(id) = app.welcome_prewarm_agent.take() {
+            if app.agents.contains_key(&id) {
+                switch_to_agent(app, id, SwitchCause::New);
+                return vec![];
+            }
+        }
         return dispatch_new_session_inner(app, None);
     }
     let in_git_repo = get_active_agent(app)
@@ -387,7 +396,7 @@ pub(in crate::app::dispatch) fn dispatch_new_session_inner_with_id(
 }
 /// Exit the current session and return to the welcome screen.
 pub(in crate::app::dispatch) fn dispatch_exit_session(app: &mut AppView) -> Vec<Effect> {
-    let effects =
+    let mut effects =
         unregister_session_effect(get_active_agent(app).and_then(|a| a.session.session_id.clone()));
     show_welcome(app);
     app.welcome_prompt_focused = true;
@@ -397,7 +406,44 @@ pub(in crate::app::dispatch) fn dispatch_exit_session(app: &mut AppView) -> Vec<
     app.session_picker_content_results = None;
     app.session_picker_content_loading = false;
     app.exit_session_pending = None;
+    // Pi: re-arm welcome prewarm so the next first keystroke is fast again.
+    effects.extend(dispatch_prewarm_welcome_session(app));
     effects
+}
+
+/// Start a background session while Welcome stays visible (external/Pi only).
+///
+/// Pi's `new_session` RPC is relatively expensive; firing it as soon as the
+/// welcome card appears means the first typed character only attaches the
+/// already-warming agent instead of blocking on "Starting session…".
+pub(crate) fn dispatch_prewarm_welcome_session(app: &mut AppView) -> Vec<Effect> {
+    if !app.external_agent || !app.session_startup_allowed() {
+        return vec![];
+    }
+    if app.welcome_prewarm_agent.is_some() {
+        return vec![];
+    }
+    if !matches!(app.active_view, ActiveView::Welcome) {
+        return vec![];
+    }
+    let (agent_id, effects) = dispatch_new_session_inner_with_id(app, None);
+    // `dispatch_new_session_inner_with_id` switches to the agent view; put
+    // Welcome back so the logo/menu stay on screen while CreateSession runs.
+    show_welcome(app);
+    app.welcome_prompt_focused = true;
+    app.welcome_prewarm_agent = Some(agent_id);
+    effects
+}
+
+/// Drop a welcome prewarm agent (e.g. user is resuming another session).
+pub(in crate::app::dispatch) fn discard_welcome_prewarm(app: &mut AppView) -> Vec<Effect> {
+    let Some(id) = app.welcome_prewarm_agent.take() else {
+        return vec![];
+    };
+    let Some(agent) = app.agents.shift_remove(&id) else {
+        return vec![];
+    };
+    unregister_session_effect(agent.session.session_id)
 }
 /// Handle the user accepting the folder-trust question: persist the grant for
 /// the workspace (writes `~/.grok/trusted_folders.toml`), mark trust resolved,

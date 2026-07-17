@@ -180,6 +180,9 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             tracing::error!(
                 agent = ? agent_id, error = % error, "Session creation failed"
             );
+            if app.welcome_prewarm_agent == Some(agent_id) {
+                app.welcome_prewarm_agent = None;
+            }
             if let Some(agent) = app.agents.get_mut(&agent_id) {
                 agent.pending_extensions_fetch = false;
                 agent.session.prompt_history_loading = false;

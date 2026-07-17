@@ -8,6 +8,7 @@
 mod model;
 mod pi_adapter;
 mod pi_rpc;
+mod queue_bridge;
 mod todo_bridge;
 
 pub use model::{PiSessionInfo, PiSessionSwitch, scan_local_sessions};

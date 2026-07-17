@@ -22,6 +22,7 @@ xai_grok_pager::app::run_external(...)
 - `get_state`、`get_available_models`、`get_commands`、`get_messages` bootstrap；
 - Pi model/thinking level ↔ Grok model/effort；
 - Pi prompt/steer/follow-up/Bash ↔ ACP prompt；
+- Pi `queue_update` 全文 → `x.ai/queue/changed`（原生 QueuePane 镜像 + 出队）；
 - Pi text/reasoning/tool/history/image ↔ ACP SessionUpdate；
 - Pi queue/compaction/retry/session-name 状态 ↔ Grok 原生状态/标题；
 - Pi Extension UI ↔ Grok toast/banner/PromptWidget/QuestionView；

@@ -5,6 +5,7 @@ use crate::{
         parse_state, scan_local_sessions, scan_local_sessions_for_cwd, string,
     },
     pi_rpc::PiRpc,
+    queue_bridge::{QueueLane, QueueMirror, queue_changed_params, string_list},
     todo_bridge::plan_update_for_tool,
 };
 use agent_client_protocol as acp;
@@ -80,9 +81,17 @@ impl PiBootstrap {
 
 struct ActivePrompt {
     id: u64,
-    completion: oneshot::Sender<acp::StopReason>,
+    /// Pager-minted id (`_meta.promptId`); echoed on PromptResponse so non-running
+    /// mid-turn completions are discarded instead of emitting phantom turns.
+    client_prompt_id: Option<String>,
+    completion: oneshot::Sender<PromptCompletion>,
     agent_started: bool,
     cancelled: bool,
+}
+
+struct PromptCompletion {
+    reason: acp::StopReason,
+    client_prompt_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -107,6 +116,8 @@ struct AdapterState {
     /// Latest Pi context-window usage (tokens used). Stamped on ACP session
     /// updates as `_meta.totalTokens` so Grok's native context bar can render.
     last_context_tokens: Option<u64>,
+    /// Pi steering / follow-up queue mirrored as Grok `x.ai/queue/changed`.
+    queue_mirror: QueueMirror,
 }
 
 #[derive(Clone)]
@@ -145,6 +156,7 @@ impl PiAgent {
                 session_paths: HashMap::new(),
                 tool_args: HashMap::new(),
                 last_context_tokens: None,
+                queue_mirror: QueueMirror::default(),
             })),
         }
     }
@@ -327,12 +339,21 @@ impl PiAgent {
             .request(json!({ "type": "get_session_stats" }))
             .await
             .map_err(acp_internal)?;
-        // Best-effort breakdown. Stats alone still produce a usable bar.
-        let messages = self
-            .rpc
-            .request(json!({ "type": "get_messages" }))
-            .await
-            .ok();
+        // Best-effort breakdown. Prefer live messages; fall back to branch entries
+        // (session file shape) so empty/failed get_messages still yields a bar.
+        let messages = match self.rpc.request(json!({ "type": "get_messages" })).await {
+            Ok(value) if value.get("messages").and_then(Value::as_array).is_some_and(|m| !m.is_empty())
+                || value.as_array().is_some_and(|m| !m.is_empty()) =>
+            {
+                Some(value)
+            }
+            _ => self
+                .rpc
+                .request(json!({ "type": "get_entries" }))
+                .await
+                .ok()
+                .map(entries_to_messages_value),
+        };
         let (session_id, model, cached_tokens) = {
             let state = self.state.borrow();
             (
@@ -369,6 +390,45 @@ impl PiAgent {
             json!({ "statusKey": key, "statusText": text }),
         )
         .await;
+    }
+
+    /// Publish Pi's authoritative queue as Grok's native shared-queue surface.
+    async fn publish_queue_snapshot(&self) {
+        let (session_id, snapshot) = {
+            let state = self.state.borrow();
+            (
+                state.acp_session_id.clone(),
+                state.queue_mirror.snapshot(),
+            )
+        };
+        let steering_text = (snapshot.steering_count > 0)
+            .then(|| format!("{} steering", snapshot.steering_count));
+        let follow_up_text = (snapshot.follow_up_count > 0)
+            .then(|| format!("{} follow-up", snapshot.follow_up_count));
+        self.send_status("steering", steering_text.as_deref()).await;
+        self.send_status("follow-up", follow_up_text.as_deref())
+            .await;
+        self.send_ext_notification(
+            "x.ai/queue/changed",
+            queue_changed_params(&session_id, &snapshot),
+        )
+        .await;
+    }
+
+    async fn apply_pi_queue_update(&self, event: &Value) {
+        let steering = string_list(event.get("steering"));
+        let follow_up = string_list(event.get("followUp"));
+        {
+            let mut state = self.state.borrow_mut();
+            state
+                .queue_mirror
+                .apply_queue_update(&steering, &follow_up);
+        }
+        self.publish_queue_snapshot().await;
+    }
+
+    async fn rebroadcast_queue_mirror(&self) {
+        self.publish_queue_snapshot().await;
     }
 
     async fn send_title(&self, title: Option<&str>) {
@@ -511,6 +571,13 @@ impl PiAgent {
             }
             "agent_settled" => {
                 self.refresh_context_usage().await;
+                {
+                    let mut state = self.state.borrow_mut();
+                    state.queue_mirror.clear_running();
+                }
+                // Idle barrier: drop any stale runningPromptId so the pager can
+                // drain local rows without waiting on a ghost running id.
+                self.rebroadcast_queue_mirror().await;
                 self.finish_prompts(acp::StopReason::EndTurn);
             }
             // `agent_end` is not the Pi idle barrier. Retry, compaction and
@@ -578,19 +645,9 @@ impl PiAgent {
                 }
             }
             "queue_update" => {
-                let steering = event
-                    .get("steering")
-                    .and_then(Value::as_array)
-                    .map_or(0, Vec::len);
-                let follow_up = event
-                    .get("followUp")
-                    .and_then(Value::as_array)
-                    .map_or(0, Vec::len);
-                let steering_text = (steering > 0).then(|| format!("{steering} steering"));
-                let follow_up_text = (follow_up > 0).then(|| format!("{follow_up} follow-up"));
-                self.send_status("steering", steering_text.as_deref()).await;
-                self.send_status("follow-up", follow_up_text.as_deref())
-                    .await;
+                // Pi emits full text arrays; mirror them into the native queue
+                // pane so optimistic server rows confirm and dequeue.
+                self.apply_pi_queue_update(&event).await;
             }
             "thinking_level_changed" | "session_info_changed" => match self.refresh().await {
                 Ok(bootstrap) => self.publish_bootstrap(&bootstrap).await,
@@ -689,7 +746,10 @@ impl PiAgent {
             } else {
                 requested_reason.clone()
             };
-            let _ = active.completion.send(reason);
+            let _ = active.completion.send(PromptCompletion {
+                reason,
+                client_prompt_id: active.client_prompt_id,
+            });
         }
     }
 
@@ -1228,22 +1288,42 @@ impl acp::Agent for PiAgent {
             return Err(acp::Error::invalid_params().data("Pi prompt is empty"));
         }
 
+        let client_prompt_id = arguments
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("promptId"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string);
+
         let (completion_tx, completion_rx) = oneshot::channel();
         let (prompt_id, streaming_behavior) = {
             let mut state = self.state.borrow_mut();
             let already_active = !state.active_prompts.is_empty();
             let prompt_id = state.next_prompt_id;
             state.next_prompt_id = state.next_prompt_id.wrapping_add(1).max(1);
+            let streaming_behavior =
+                prompt_streaming_behavior(already_active, arguments.meta.as_ref());
+            // Prefer the pager's client promptId so optimistic queue echoes
+            // confirm by id (not only by text content).
+            if let Some(lane) = streaming_behavior.and_then(queue_lane_for_behavior)
+                && let Some(client_id) = client_prompt_id.as_deref()
+            {
+                state.queue_mirror.reserve(
+                    client_id.to_string(),
+                    message.clone(),
+                    lane,
+                );
+            }
             state.active_prompts.push(ActivePrompt {
                 id: prompt_id,
+                client_prompt_id: client_prompt_id.clone(),
                 completion: completion_tx,
                 agent_started: false,
                 cancelled: false,
             });
-            (
-                prompt_id,
-                prompt_streaming_behavior(already_active, arguments.meta.as_ref()),
-            )
+            (prompt_id, streaming_behavior)
         };
         let mut request = json!({ "type": "prompt", "message": message });
         if !images.is_empty() {
@@ -1260,8 +1340,21 @@ impl acp::Agent for PiAgent {
         tokio::task::spawn_local(async move {
             probe.probe_prompt_without_agent().await;
         });
-        let reason = completion_rx.await.unwrap_or(acp::StopReason::Cancelled);
-        Ok(acp::PromptResponse::new(reason))
+        // Wait for agent_settled (or cancel). Mid-turn followUp/steer prompts
+        // share this barrier with the primary turn; PromptResponse MUST carry
+        // promptId so the pager discards non-current completions instead of
+        // painting phantom "Worked for 0.0s" markers for each queued item.
+        let completion = completion_rx.await.unwrap_or(PromptCompletion {
+            reason: acp::StopReason::Cancelled,
+            client_prompt_id: client_prompt_id.clone(),
+        });
+        Ok(prompt_response(
+            completion.reason,
+            completion
+                .client_prompt_id
+                .as_deref()
+                .or(client_prompt_id.as_deref()),
+        ))
     }
 
     async fn cancel(&self, _arguments: acp::CancelNotification) -> Result<(), acp::Error> {
@@ -1350,35 +1443,7 @@ impl acp::Agent for PiAgent {
 
     async fn ext_method(&self, arguments: acp::ExtRequest) -> Result<acp::ExtResponse, acp::Error> {
         match arguments.method.as_ref() {
-            "x.ai/interject" => {
-                let params: Value =
-                    serde_json::from_str(arguments.params.get()).map_err(acp_internal)?;
-                let blocks = params
-                    .get("content")
-                    .cloned()
-                    .and_then(|value| serde_json::from_value::<Vec<acp::ContentBlock>>(value).ok());
-                let (message, images) = if let Some(blocks) = blocks.as_deref() {
-                    prompt_to_pi(blocks)
-                } else {
-                    (
-                        string(&params, &["text"]).unwrap_or_default().to_string(),
-                        Vec::new(),
-                    )
-                };
-                if message.trim().is_empty() && images.is_empty() {
-                    return Err(acp::Error::invalid_params().data("Pi interjection is empty"));
-                }
-                let mut request = json!({
-                    "type": "prompt",
-                    "message": message,
-                    "streamingBehavior": "steer",
-                });
-                if !images.is_empty() {
-                    request["images"] = Value::Array(images);
-                }
-                let data = self.rpc.request(request).await.map_err(acp_internal)?;
-                ext_response(data).map_err(acp_internal)
-            }
+            "x.ai/interject" => self.handle_steer_message(arguments.params.get()).await,
             "x.ai/compact_conversation" => {
                 let params: Value =
                     serde_json::from_str(arguments.params.get()).unwrap_or_default();
@@ -1431,8 +1496,95 @@ impl acp::Agent for PiAgent {
         }
     }
 
-    async fn ext_notification(&self, _arguments: acp::ExtNotification) -> Result<(), acp::Error> {
-        Ok(())
+    async fn ext_notification(&self, arguments: acp::ExtNotification) -> Result<(), acp::Error> {
+        match arguments.method.as_ref() {
+            "x.ai/queue/remove" | "x.ai/queue/clear" | "x.ai/queue/edit" | "x.ai/queue/reorder" => {
+                // Pi RPC does not expose per-item queue mutation / clearQueue.
+                // Rebroadcast the authoritative Pi mirror so the pager cannot
+                // keep a client-only ghost removal, and surface the boundary.
+                if matches!(
+                    arguments.method.as_ref(),
+                    "x.ai/queue/remove" | "x.ai/queue/clear" | "x.ai/queue/edit"
+                ) {
+                    self.send_ui_notification(
+                        "Pi queue is read-mirrored; remove/edit/clear are not supported over RPC",
+                        Some("warning"),
+                    )
+                    .await;
+                }
+                self.rebroadcast_queue_mirror().await;
+                Ok(())
+            }
+            "x.ai/queue/interject" => {
+                // Promote by text via steer (same lane as x.ai/interject).
+                // Pi cannot drop a single follow-up row, so a follow-up item may
+                // still deliver later — documented adapter boundary.
+                let params: Value =
+                    serde_json::from_str(arguments.params.get()).unwrap_or_default();
+                let id = string(&params, &["id"]).unwrap_or_default();
+                let text = {
+                    let state = self.state.borrow();
+                    state.queue_mirror.text_for_id(id).map(str::to_string)
+                };
+                let text = text.or_else(|| {
+                    string(&params, &["newText", "text"]).map(str::to_string)
+                });
+                if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
+                    let _ = self
+                        .rpc
+                        .request(json!({
+                            "type": "prompt",
+                            "message": text,
+                            "streamingBehavior": "steer",
+                        }))
+                        .await;
+                }
+                self.rebroadcast_queue_mirror().await;
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+impl PiAgent {
+    async fn handle_steer_message(&self, params_raw: &str) -> Result<acp::ExtResponse, acp::Error> {
+        let params: Value = serde_json::from_str(params_raw).map_err(acp_internal)?;
+        let blocks = params
+            .get("content")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<Vec<acp::ContentBlock>>(value).ok());
+        let (message, images) = if let Some(blocks) = blocks.as_deref() {
+            prompt_to_pi(blocks)
+        } else {
+            (
+                string(&params, &["text"]).unwrap_or_default().to_string(),
+                Vec::new(),
+            )
+        };
+        if message.trim().is_empty() && images.is_empty() {
+            return Err(acp::Error::invalid_params().data("Pi interjection is empty"));
+        }
+        if let Some(client_id) = string(&params, &["interjectionId", "promptId"])
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            self.state.borrow_mut().queue_mirror.reserve(
+                client_id.to_string(),
+                message.clone(),
+                QueueLane::Steering,
+            );
+        }
+        let mut request = json!({
+            "type": "prompt",
+            "message": message,
+            "streamingBehavior": "steer",
+        });
+        if !images.is_empty() {
+            request["images"] = Value::Array(images);
+        }
+        let data = self.rpc.request(request).await.map_err(acp_internal)?;
+        ext_response(data).map_err(acp_internal)
     }
 }
 
@@ -1580,6 +1732,34 @@ fn estimate_tokens_value(value: &Value) -> u64 {
     }
 }
 
+/// Project `get_entries` payload into a `{ messages: [...] }` shape that
+/// [`estimate_message_tokens`] already understands.
+fn entries_to_messages_value(entries: Value) -> Value {
+    let items = entries
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .or_else(|| entries.as_array().cloned())
+        .unwrap_or_default();
+    let messages: Vec<Value> = items
+        .into_iter()
+        .filter_map(|entry| {
+            let kind = string(&entry, &["type", "kind"])
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if kind == "message" || kind.is_empty() {
+                Some(entry.get("message").cloned().unwrap_or(entry))
+            } else if kind.contains("compaction") || kind.contains("branch") {
+                // Keep summary text so compaction/branch tokens contribute.
+                Some(entry)
+            } else {
+                None
+            }
+        })
+        .collect();
+    json!({ "messages": messages })
+}
+
 /// Raw (unscaled) message-window estimate, mirroring pi-context categories.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct MessageTokenEstimate {
@@ -1721,8 +1901,20 @@ fn build_session_info_response(
     let estimate = messages
         .map(estimate_message_tokens)
         .unwrap_or_default();
-    let scaled = scale_token_parts(&[estimate.messages, estimate.tool_payload], used);
-    let message_tokens = scaled.first().copied().unwrap_or(0);
+    // When message estimation fails (RPC error / empty transcript), put the
+    // whole window into Messages so the bar is not 100% "Reasoning/overhead".
+    let raw_parts = [estimate.messages, estimate.tool_payload];
+    let raw_total: u64 = raw_parts.iter().sum();
+    let message_tokens = if used == 0 {
+        0
+    } else if raw_total == 0 {
+        used
+    } else {
+        scale_token_parts(&raw_parts, used)
+            .first()
+            .copied()
+            .unwrap_or(used)
+    };
     // tool_payload becomes Reasoning/overhead via used - system - messages.
     // System prompt / tool definitions are not exposed over Pi RPC, so they stay 0
     // (pi-context can read them in-process; we cannot without expanding RPC).
@@ -1740,17 +1932,13 @@ fn build_session_info_response(
         }
     });
 
-    json!({
+    // Build without explicit JSON nulls so Option fields that lack
+    // `#[serde(default)]` never see `null` on the wire.
+    let mut response = json!({
         "sessionId": session_id,
         "cwd": cwd,
         "agentName": "pi",
-        "model": model_id,
-        "modelDisplayName": model_label,
-        "resolvedModelId": Value::Null,
-        "modelFingerprint": Value::Null,
         "showModelFingerprint": false,
-        "apiBackend": Value::Null,
-        "conversationId": Value::Null,
         "turns": turns,
         "turnIndex": turns.saturating_sub(1),
         "context": {
@@ -1767,9 +1955,17 @@ fn build_session_info_response(
             "freeTokens": free_tokens,
             "usagePct": usage_pct,
             "autoCompactThresholdPercent": 85_u8,
-            "usageCategories": [],
         }
-    })
+    });
+    if let Some(obj) = response.as_object_mut() {
+        if let Some(id) = model_id {
+            obj.insert("model".into(), Value::String(id));
+        }
+        if let Some(label) = model_label {
+            obj.insert("modelDisplayName".into(), Value::String(label));
+        }
+    }
+    response
 }
 
 /// Approximate context tokens from a Pi assistant `usage` object.
@@ -2372,6 +2568,21 @@ fn direct_bash_command(blocks: &[acp::ContentBlock]) -> Option<String> {
     })
 }
 
+/// Stamp client `promptId` on PromptResponse so the pager can discard queued
+/// mid-turn RPC completions that never became `current_prompt_id`.
+fn prompt_response(
+    reason: acp::StopReason,
+    client_prompt_id: Option<&str>,
+) -> acp::PromptResponse {
+    let mut response = acp::PromptResponse::new(reason);
+    if let Some(prompt_id) = client_prompt_id.filter(|id| !id.is_empty()) {
+        let mut meta = acp::Meta::new();
+        meta.insert("promptId".into(), Value::String(prompt_id.to_string()));
+        response = response.meta(Some(meta));
+    }
+    response
+}
+
 fn prompt_streaming_behavior(
     already_active: bool,
     meta: Option<&acp::Meta>,
@@ -2379,11 +2590,32 @@ fn prompt_streaming_behavior(
     if !already_active {
         return None;
     }
-    let follow_up = meta
+    // Cancel-and-send / send-now is an interrupt (steer).
+    if meta
+        .and_then(|meta| meta.get("sendNow"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Some("steer");
+    }
+    // Explicit followUp meta wins; otherwise mid-turn prompts queue as follow-up
+    // (FEATURE_MATRIX: default active-turn prompt → Pi follow_up).
+    if meta
         .and_then(|meta| meta.get("followUp"))
         .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Some(if follow_up { "followUp" } else { "steer" })
+        == Some(false)
+    {
+        return Some("steer");
+    }
+    Some("followUp")
+}
+
+fn queue_lane_for_behavior(behavior: &str) -> Option<QueueLane> {
+    match behavior {
+        "steer" => Some(QueueLane::Steering),
+        "followUp" => Some(QueueLane::FollowUp),
+        _ => None,
+    }
 }
 
 fn format_bash_result(result: &Value) -> String {
@@ -2624,15 +2856,46 @@ mod tests {
     }
 
     #[test]
+    fn prompt_response_echoes_client_prompt_id() {
+        let response = prompt_response(acp::StopReason::EndTurn, Some("client-uuid"));
+        assert_eq!(response.stop_reason, acp::StopReason::EndTurn);
+        assert_eq!(
+            response
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("promptId"))
+                .and_then(Value::as_str),
+            Some("client-uuid")
+        );
+        let bare = prompt_response(acp::StopReason::Cancelled, None);
+        assert!(bare.meta.is_none());
+    }
+
+    #[test]
     fn pi_tui_queue_modes_map_to_pi_streaming_behavior() {
         assert_eq!(prompt_streaming_behavior(false, None), None);
-        assert_eq!(prompt_streaming_behavior(true, None), Some("steer"));
+        // Mid-turn default is follow-up (wait for turn), not steer.
+        assert_eq!(prompt_streaming_behavior(true, None), Some("followUp"));
 
         let mut meta = acp::Meta::new();
         meta.insert("followUp".into(), Value::Bool(true));
         assert_eq!(
             prompt_streaming_behavior(true, Some(&meta)),
             Some("followUp")
+        );
+
+        let mut send_now = acp::Meta::new();
+        send_now.insert("sendNow".into(), Value::Bool(true));
+        assert_eq!(
+            prompt_streaming_behavior(true, Some(&send_now)),
+            Some("steer")
+        );
+
+        let mut force_steer = acp::Meta::new();
+        force_steer.insert("followUp".into(), Value::Bool(false));
+        assert_eq!(
+            prompt_streaming_behavior(true, Some(&force_steer)),
+            Some("steer")
         );
     }
 
@@ -2805,7 +3068,29 @@ mod tests {
         assert_eq!(response["context"]["used"], json!(42_000));
         assert_eq!(response["context"]["total"], json!(100_000));
         assert_eq!(response["context"]["freeTokens"], json!(58_000));
-        assert_eq!(response["context"]["messageTokens"], json!(0));
+        // No message estimate → put the full used window into Messages.
+        assert_eq!(response["context"]["messageTokens"], json!(42_000));
+        assert!(response.get("model").is_none());
+        assert!(response.get("resolvedModelId").is_none());
+    }
+
+    #[test]
+    fn entries_payload_projects_message_roles() {
+        let entries = json!({
+            "entries": [
+                { "type": "message", "message": { "role": "user", "content": "hi there" } },
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{ "type": "text", "text": "hello" }]
+                    }
+                }
+            ]
+        });
+        let messages = entries_to_messages_value(entries);
+        let estimate = estimate_message_tokens(&messages);
+        assert!(estimate.messages > 0);
     }
 
     #[test]

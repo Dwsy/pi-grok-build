@@ -1165,6 +1165,10 @@ pub struct AppView {
     /// True when the native pager is hosting an external ACP adapter. Used to
     /// suppress Grok-backend persistence while preserving native controls.
     pub external_agent: bool,
+    /// Background session created while the Welcome screen is visible (Pi).
+    /// First keystroke attaches this agent instead of waiting on a cold
+    /// `new_session` RPC. Cleared on attach, resume-pick, or discard.
+    pub welcome_prewarm_agent: Option<AgentId>,
 }
 impl AppView {
     pub fn is_zdr_blocked(&self) -> bool {
@@ -1435,6 +1439,7 @@ impl AppView {
             voice_state: VoiceState::Idle,
             external_ui: ExternalUiState::default(),
             external_agent: false,
+            welcome_prewarm_agent: None,
         }
     }
     /// Seed `deferred_model_switch` from CLI `-m`. The CLI effort token is
@@ -1735,8 +1740,13 @@ impl AppView {
         }
     }
     /// Whether the project picker should intercept the next prompt.
+    ///
+    /// External ACP hosts (Pi) own cwd themselves and run under a Tokio
+    /// `LocalSet`, where Grok's project-picker path (`block_in_place`) panics.
+    /// Skip the picker for external agents entirely.
     pub fn needs_project_picker(&self) -> bool {
-        !self.project_picker_shown
+        !self.external_agent
+            && !self.project_picker_shown
             && !self.project_picker_disabled
             && !crate::project_picker::detection::is_project_dir(&self.cwd)
     }
@@ -5606,6 +5616,7 @@ pub(crate) mod tests {
             voice_state: VoiceState::Idle,
             external_ui: ExternalUiState::default(),
             external_agent: false,
+            welcome_prewarm_agent: None,
         }
     }
     fn test_app_with_agent() -> AppView {

@@ -29,3 +29,7 @@ cargo test -p xai-grok-pager logo --lib
 
 - `allowedModifiedFiles` 增加 `views/welcome/mod.rs`
 - `native_renderer_sha256.json` 同步 logo.rs / mod.rs hash
+
+## Session 预热（同日补）
+
+进入 Welcome 即 `dispatch_prewarm_welcome_session`：后台 CreateSession，UI 仍留在 Welcome。首字/Enter 走 `NewSession` 时 attach 预热 agent，不再冷等 RPC。Resume 会 discard 预热；`/home` 退出后再预热。
