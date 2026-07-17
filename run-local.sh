@@ -2,8 +2,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GROK_ROOT="$ROOT"
-PI_CLI="$ROOT/pi-main/packages/coding-agent/dist/cli.js"
 BIN="${GROK_PI_BIN:-$GROK_ROOT/target/debug/grok-pi}"
+PI_BIN="${PI_BIN:-pi}"
 
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 <project-directory> [Pi arguments...]" >&2
@@ -12,14 +12,13 @@ fi
 PROJECT_DIR="$(cd "$1" && pwd)"
 shift
 
-if [[ ! -f "$PI_CLI" ]]; then
-  echo "error: local Pi is not built: $PI_CLI" >&2
-  echo "run ./build.sh first" >&2
-  exit 1
-fi
 if [[ ! -x "$BIN" ]]; then
   echo "error: grok-pi is not built: $BIN" >&2
   echo "run ./build.sh first" >&2
+  exit 1
+fi
+if ! command -v "$PI_BIN" >/dev/null 2>&1; then
+  echo "error: system Pi executable not found: $PI_BIN" >&2
   exit 1
 fi
 
@@ -29,8 +28,7 @@ ui_args=()
 [[ "${GROK_PI_NO_ALT_SCREEN:-0}" == "1" ]] && ui_args+=(--no-alt-screen)
 
 exec "$BIN" \
-  --pi-bin node \
-  --pi-prefix-arg "$PI_CLI" \
+  --pi-bin "$PI_BIN" \
   --pi-cwd "$PROJECT_DIR" \
   "${ui_args[@]}" \
   -- "$@"

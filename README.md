@@ -106,26 +106,21 @@ grok-pi --pi-bin pi --pi-cwd /path/to/project -- --no-session
 ./build.sh
 ```
 
-The build script builds the bundled Pi distribution first, then the `grok-pi` binary:
+The build script requires a system-installed `pi` command and builds the `grok-pi` binary only. Set `PI_BIN` to use a different Pi executable:
 
 ```bash
-cd pi-main
-npm install
-npm run build
-
-cd ..
-cargo build -p xai-grok-pager-bin --bin grok-pi
+PI_BIN=pi ./build.sh
 ```
 
 ## Run
 
-Run with the bundled Pi source:
+Run with the system-installed `pi` command:
 
 ```bash
-./run-local.sh /path/to/project --no-session
+PI_BIN=pi ./run-local.sh /path/to/project --no-session
 ```
 
-Run with a system-installed `pi` command:
+`run-installed.sh` remains available as an equivalent system-Pi entry point:
 
 ```bash
 PI_BIN=pi ./run-installed.sh /path/to/project --no-session
@@ -134,9 +129,9 @@ PI_BIN=pi ./run-installed.sh /path/to/project --no-session
 Arguments following `--no-session` are passed to Pi unchanged. Choose Grok's native rendering mode at startup:
 
 ```bash
-GROK_PI_MINIMAL=1 ./run-local.sh /path/to/project
-GROK_PI_FULLSCREEN=1 ./run-local.sh /path/to/project
-GROK_PI_NO_ALT_SCREEN=1 ./run-local.sh /path/to/project
+GROK_PI_MINIMAL=1 PI_BIN=pi ./run-local.sh /path/to/project
+GROK_PI_FULLSCREEN=1 PI_BIN=pi ./run-local.sh /path/to/project
+GROK_PI_NO_ALT_SCREEN=1 PI_BIN=pi ./run-local.sh /path/to/project
 ```
 
 Direct invocation is also supported:
@@ -147,8 +142,7 @@ cargo run \
   -p xai-grok-pager-bin \
   --bin grok-pi \
   -- \
-  --pi-bin node \
-  --pi-prefix-arg "$PWD/pi-main/packages/coding-agent/dist/cli.js" \
+  --pi-bin pi \
   --pi-cwd /path/to/project \
   -- --no-session
 ```

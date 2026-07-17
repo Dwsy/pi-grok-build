@@ -106,26 +106,21 @@ grok-pi --pi-bin pi --pi-cwd /path/to/project -- --no-session
 ./build.sh
 ```
 
-构建脚本会先构建包内 Pi，再构建 `grok-pi` 二进制：
+构建脚本要求系统已安装 `pi` 命令，并且只构建 `grok-pi` 二进制。可设置 `PI_BIN` 使用其他 Pi 可执行程序：
 
 ```bash
-cd pi-main
-npm install
-npm run build
-
-cd ..
-cargo build -p xai-grok-pager-bin --bin grok-pi
+PI_BIN=pi ./build.sh
 ```
 
 ## 运行
 
-使用包内 Pi 源码：
+使用系统安装的 `pi` 命令：
 
 ```bash
-./run-local.sh /path/to/project --no-session
+PI_BIN=pi ./run-local.sh /path/to/project --no-session
 ```
 
-使用系统安装的 `pi` 命令：
+`run-installed.sh` 保留为等价的系统 Pi 入口：
 
 ```bash
 PI_BIN=pi ./run-installed.sh /path/to/project --no-session
@@ -134,9 +129,9 @@ PI_BIN=pi ./run-installed.sh /path/to/project --no-session
 `--no-session` 之后的参数会原样传给 Pi。Grok 的原生渲染模式在启动时选择：
 
 ```bash
-GROK_PI_MINIMAL=1 ./run-local.sh /path/to/project
-GROK_PI_FULLSCREEN=1 ./run-local.sh /path/to/project
-GROK_PI_NO_ALT_SCREEN=1 ./run-local.sh /path/to/project
+GROK_PI_MINIMAL=1 PI_BIN=pi ./run-local.sh /path/to/project
+GROK_PI_FULLSCREEN=1 PI_BIN=pi ./run-local.sh /path/to/project
+GROK_PI_NO_ALT_SCREEN=1 PI_BIN=pi ./run-local.sh /path/to/project
 ```
 
 也支持直接调用：
@@ -147,8 +142,7 @@ cargo run \
   -p xai-grok-pager-bin \
   --bin grok-pi \
   -- \
-  --pi-bin node \
-  --pi-prefix-arg "$PWD/pi-main/packages/coding-agent/dist/cli.js" \
+  --pi-bin pi \
   --pi-cwd /path/to/project \
   -- --no-session
 ```
