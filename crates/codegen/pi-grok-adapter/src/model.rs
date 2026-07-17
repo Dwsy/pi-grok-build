@@ -104,7 +104,9 @@ fn parse_session_file(path: &Path) -> Option<PiSessionInfo> {
     let mut name = None;
     let mut message_count = 0;
     let mut first_message = None;
-    let mut modified_at = None;
+    // Mirror Pi SessionManager.buildSessionInfo: max activity over user/assistant
+    // messages, preferring message.timestamp (ms) then entry.timestamp (ISO).
+    let mut last_activity_ms: Option<i64> = None;
 
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         let value: Value = serde_json::from_str(&line).ok()?;
@@ -133,29 +135,63 @@ fn parse_session_file(path: &Path) -> Option<PiSessionInfo> {
         let Some(message) = value.get("message") else {
             continue;
         };
+        if let Some(ms) = message_activity_time_ms(&value, message) {
+            last_activity_ms = Some(last_activity_ms.map_or(ms, |prev| prev.max(ms)));
+        }
         let role = string(message, &["role"]).unwrap_or_default();
-        if !matches!(role, "user" | "assistant") {
-            continue;
-        }
-        if let Some(timestamp) = message.get("timestamp").and_then(Value::as_i64) {
-            modified_at = Some(timestamp.to_string());
-        }
         if role == "user" && first_message.is_none() {
             first_message = session_message_text(message);
         }
     }
 
     let (id, cwd, created_at) = header?;
+    let modified_at = last_activity_ms
+        .and_then(format_timestamp_ms)
+        .unwrap_or_else(|| created_at.clone());
     Some(PiSessionInfo {
         path: path.to_path_buf(),
         id,
         cwd,
         name,
-        modified_at: modified_at.unwrap_or_else(|| created_at.clone()),
+        modified_at,
         created_at,
         message_count,
         first_message: first_message.unwrap_or_else(|| "(no messages)".to_owned()),
     })
+}
+
+/// Match Pi `getMessageActivityTime`: only user/assistant messages contribute.
+/// Prefer numeric `message.timestamp` (epoch ms); else parse entry-level ISO.
+fn message_activity_time_ms(entry: &Value, message: &Value) -> Option<i64> {
+    let role = string(message, &["role"]).unwrap_or_default();
+    if !matches!(role, "user" | "assistant") {
+        return None;
+    }
+    if let Some(ms) = message.get("timestamp").and_then(Value::as_i64) {
+        return Some(ms);
+    }
+    if let Some(ms) = message
+        .get("timestamp")
+        .and_then(Value::as_f64)
+        .map(|value| value as i64)
+    {
+        return Some(ms);
+    }
+    entry
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(parse_timestamp_ms)
+}
+
+fn parse_timestamp_ms(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
+fn format_timestamp_ms(ms: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
 fn session_message_text(message: &Value) -> Option<String> {
@@ -817,6 +853,32 @@ mod tests {
         assert_eq!(sessions[0].name.as_deref(), Some("Named session"));
         assert_eq!(sessions[0].message_count, 1);
         assert_eq!(sessions[0].first_message, "hello");
+        // Entry-level ISO becomes modified_at when message.timestamp is absent.
+        assert_eq!(sessions[0].created_at, "2026-07-01T00:00:00.000Z");
+        assert_eq!(sessions[0].modified_at, "2026-07-01T00:00:01.000Z");
+    }
+
+    #[test]
+    fn session_modified_at_prefers_message_timestamp_ms_as_rfc3339() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("sessions/project");
+        std::fs::create_dir_all(&project).unwrap();
+        // 2026-07-01T00:00:02.000Z == 1782864002000 ms
+        std::fs::write(
+            project.join("session.jsonl"),
+            concat!(
+                "{\"type\":\"session\",\"id\":\"session-ms\",\"timestamp\":\"2026-07-01T00:00:00.000Z\",\"cwd\":\"/repo\"}\n",
+                "{\"type\":\"message\",\"id\":\"1\",\"parentId\":null,\"timestamp\":\"2026-07-01T00:00:01.000Z\",\"message\":{\"role\":\"user\",\"content\":\"hello\",\"timestamp\":1782864002000}}\n"
+            ),
+        )
+        .unwrap();
+
+        let sessions = scan_local_sessions(&root.path().join("sessions"));
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].modified_at, "2026-07-01T00:00:02.000Z");
+        // Must be parseable RFC3339, never a bare millis digit string.
+        assert!(sessions[0].modified_at.parse::<chrono::DateTime<chrono::Utc>>().is_ok());
+        assert!(!sessions[0].modified_at.chars().all(|c| c.is_ascii_digit()));
     }
 
     #[test]

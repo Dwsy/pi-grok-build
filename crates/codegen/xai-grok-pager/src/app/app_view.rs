@@ -379,6 +379,32 @@ pub struct SessionPickerEntry {
     /// Lazy-loaded detail for the expanded card view.
     pub card_detail: Option<CardDetail>,
 }
+
+/// Convert a resume-picker / external catalog entry into a dormant dashboard
+/// roster row (Inactive group). Mirrors the Grok non-leader
+/// `session_picker_entry_to_roster` path used for on-disk idle sessions.
+fn session_picker_entry_to_dashboard_roster(
+    entry: &SessionPickerEntry,
+) -> crate::app::roster::RosterEntry {
+    use crate::app::roster::{RosterActivity, RosterEntry, RosterOrigin};
+    let last_change = entry.last_active_at.unwrap_or(entry.updated_at);
+    RosterEntry {
+        session_id: entry.id.clone(),
+        title: Some(entry.summary.clone()).filter(|s| !s.trim().is_empty()),
+        cwd: entry.cwd.clone(),
+        is_worktree: entry.worktree_label.is_some(),
+        model_id: entry.model_id.clone(),
+        yolo: false,
+        activity: RosterActivity::Dormant,
+        resident: false,
+        last_change_unix_ms: last_change.timestamp_millis(),
+        origin: RosterOrigin {
+            kind: entry.source.clone(),
+            host: entry.hostname.clone(),
+        },
+    }
+}
+
 /// Detail loaded on-demand when a session card is expanded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CardDetail {
@@ -1758,7 +1784,13 @@ impl AppView {
         self.external_ui.pending_toasts.push_back(rendered);
     }
 
-    /// Update one external status key and redraw the native sticky banner.
+    /// Project an external session catalog into the native picker and/or the
+    /// dashboard dormant-session roster.
+    ///
+    /// - `/resume` SessionPicker: fills the External source tab (`current`/`all`).
+    /// - Welcome Resume (no agent yet): fills the welcome-screen session list.
+    /// - Agent Dashboard: cwd-scoped (`current`) entries become inactive roster
+    ///   rows so Pi idle sessions appear beside live in-memory agents.
     pub fn set_external_session_catalog(
         &mut self,
         entries: Vec<SessionPickerEntry>,
@@ -1767,11 +1799,42 @@ impl AppView {
         if !self.external_agent {
             return false;
         }
+
+        let mut changed = false;
+
+        // Dashboard non-leader roster: only the cwd-scoped catalog matches the
+        // Grok `x.ai/session/list` fallback semantics used for idle rows.
+        if matches!(self.active_view, ActiveView::AgentDashboard) && scope == "current" {
+            let sessions: Vec<crate::app::roster::RosterEntry> = entries
+                .iter()
+                .map(session_picker_entry_to_dashboard_roster)
+                .collect();
+            // RosterEntry is not PartialEq; always replace and clear loading so
+            // open/poll paths never stick on the spinner.
+            self.dashboard_local_sessions = sessions;
+            self.dashboard_sessions_loading = false;
+            changed = true;
+        }
+
+        // Welcome-screen Resume: same catalog `/resume` uses, projected into
+        // the native welcome picker (no agent modal yet).
+        if matches!(self.active_view, ActiveView::Welcome)
+            && self.session_picker_source_filter
+                == crate::views::session_picker::SourceFilter::External
+            && scope == "current"
+        {
+            let picker_changed =
+                self.session_picker_entries.as_ref() != Some(&entries) || self.session_picker_loading;
+            self.session_picker_entries = Some(entries.clone());
+            self.session_picker_loading = false;
+            return changed || picker_changed;
+        }
+
         let ActiveView::Agent(agent_id) = self.active_view else {
-            return false;
+            return changed;
         };
         let Some(agent) = self.agents.get_mut(&agent_id) else {
-            return false;
+            return changed;
         };
         let Some(crate::views::modal::ActiveModal::SessionPicker {
             entries: picker_entries,
@@ -1781,21 +1844,52 @@ impl AppView {
             ..
         }) = agent.active_modal.as_mut()
         else {
-            return false;
+            return changed;
         };
         let expected_tab = match scope {
             "current" => 0,
             "all" => 1,
-            _ => return false,
+            _ => return changed,
         };
         if *source_filter != crate::views::session_picker::SourceFilter::External
             || window.active_tab != expected_tab
         {
-            return false;
+            return changed;
         }
-        let changed = picker_entries.as_ref() != Some(&entries) || *loading;
+        let picker_changed = picker_entries.as_ref() != Some(&entries) || *loading;
         *picker_entries = Some(entries);
         *loading = false;
+        changed || picker_changed
+    }
+
+    /// Clear dashboard/picker loading when an external catalog request fails
+    /// before any `pi/ui/session_catalog` notification arrives.
+    pub fn mark_external_session_catalog_failed(&mut self) -> bool {
+        if !self.external_agent {
+            return false;
+        }
+        let mut changed = false;
+        if self.dashboard_sessions_loading {
+            self.dashboard_sessions_loading = false;
+            changed = true;
+        }
+        if matches!(self.active_view, ActiveView::Welcome) && self.session_picker_loading {
+            self.session_picker_loading = false;
+            changed = true;
+        }
+        if let ActiveView::Agent(agent_id) = self.active_view
+            && let Some(agent) = self.agents.get_mut(&agent_id)
+            && let Some(crate::views::modal::ActiveModal::SessionPicker {
+                loading,
+                source_filter,
+                ..
+            }) = agent.active_modal.as_mut()
+            && *source_filter == crate::views::session_picker::SourceFilter::External
+            && *loading
+        {
+            *loading = false;
+            changed = true;
+        }
         changed
     }
 
@@ -2355,7 +2449,11 @@ impl AppView {
                     menu_count: if zdr_blocked {
                         2
                     } else {
-                        3 + if self.has_claude_import { 1 } else { 0 }
+                        let hide_worktree = crate::views::welcome::logo::welcome_menu_override()
+                            .is_some_and(|m| m.hide_new_worktree);
+                        // Resume + Quit, plus optional New worktree.
+                        (if hide_worktree { 2 } else { 3 })
+                            + if self.has_claude_import { 1 } else { 0 }
                             + if self.welcome_show_changelog_action {
                                 1
                             } else {
@@ -2396,6 +2494,7 @@ impl AppView {
                     session_picker_grouped: self.session_picker_grouped,
                     sp_source_filter: &mut self.session_picker_source_filter,
                     chat_mode: self.chat_mode,
+                    external_agent: self.external_agent,
                 },
             ),
             ActiveView::Agent(id) => {
@@ -2960,6 +3059,9 @@ struct WelcomeInputCtx<'a> {
     /// Process-wide `--chat`: the session picker hides its Local/Remote
     /// source filter (conversations-only list), so `f` must not cycle it.
     chat_mode: bool,
+    /// External ACP host (e.g. Pi): resume must use `/resume` SessionPicker
+    /// semantics rather than Grok's session-store list.
+    external_agent: bool,
 }
 /// Welcome view input -- auth-state-aware routing.
 fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutcome {
@@ -3331,11 +3433,22 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                     xai_grok_telemetry::events::AnnouncementCtaSurface::Keyboard,
                 ));
             }
-            if key!('w', CONTROL).matches(key) && ctx.cwd_has_git_ancestor {
+            let menu_policy = crate::views::welcome::logo::welcome_menu_override();
+            let hide_worktree = menu_policy.is_some_and(|m| m.hide_new_worktree);
+            if key!('w', CONTROL).matches(key)
+                && ctx.cwd_has_git_ancestor
+                && !hide_worktree
+            {
                 return InputOutcome::Action(Action::OpenNewWorktreeDialog);
             }
+            // External hosts: equivalent to `/resume` (native SessionPicker +
+            // Pi catalog). Stock Grok keeps the welcome inline session list.
             if key!('s', CONTROL).matches(key) {
-                return InputOutcome::Action(Action::FetchSessionList);
+                return InputOutcome::Action(if ctx.external_agent {
+                    Action::ShowSessionPicker
+                } else {
+                    Action::FetchSessionList
+                });
             }
             if ctx.has_pending_update && key!('u', CONTROL).matches(key) {
                 return InputOutcome::Action(Action::QuitForUpdate);
@@ -3386,6 +3499,7 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                     ctx.has_claude_import,
                     ctx.show_changelog_action,
                     ctx.changelog_markdown.as_deref(),
+                    ctx.external_agent,
                 );
             }
             if crate::input::key::is_text_input_key(key) {
@@ -3515,6 +3629,7 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                             ctx.has_claude_import,
                             ctx.show_changelog_action,
                             ctx.changelog_markdown.as_deref(),
+                            ctx.external_agent,
                         );
                     }
                 }
@@ -3537,12 +3652,18 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                 }
                 if let Some(rect) = ctx.changelog_cta_rect
                     && rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
-                    && let Some(md) = ctx.changelog_markdown.as_deref()
                 {
-                    return InputOutcome::Action(Action::ShowReleaseNotes {
-                        title: "Release Notes".to_string(),
-                        content: md.trim().to_string(),
-                    });
+                    if let Some(url) = crate::views::welcome::logo::welcome_menu_override()
+                        .and_then(|m| m.changelog_url)
+                    {
+                        return InputOutcome::Action(Action::OpenUrl(url.to_string()));
+                    }
+                    if let Some(md) = ctx.changelog_markdown.as_deref() {
+                        return InputOutcome::Action(Action::ShowReleaseNotes {
+                            title: "Release Notes".to_string(),
+                            content: md.trim().to_string(),
+                        });
+                    }
                 }
                 if let Some(rect) = ctx.announcement_rect
                     && (ctx.announcement_truncated || *ctx.announcement_expanded)
@@ -3710,42 +3831,56 @@ fn dispatch_access_gate_menu_action(index: usize) -> InputOutcome {
 }
 /// Dispatch an action for a welcome menu item by index.
 ///
-/// Menu order: `[Import]`, New worktree, Resume session, `[Changelog]`, Quit.
-/// `show_changelog_action` is true when the Changelog row is rendered; release
-/// notes open only once `changelog_md` is available.
+/// Menu order: `[Import]`, `[New worktree]`, Resume session, `[Changelog]`, Quit.
+/// `show_changelog_action` is true when the Changelog row is rendered. External
+/// hosts may hide New worktree, open Changelog as a URL, and route Resume to
+/// the same SessionPicker as `/resume`.
 fn dispatch_menu_action(
     index: usize,
     has_claude_import: bool,
     show_changelog_action: bool,
     changelog_md: Option<&str>,
+    external_agent: bool,
 ) -> InputOutcome {
-    let base = if has_claude_import { 1 } else { 0 };
-    let worktree_idx = base;
-    let resume_idx = base + 1;
-    let (changelog_idx, quit_idx) = if show_changelog_action {
-        (Some(base + 2), base + 3)
-    } else {
-        (None, base + 2)
-    };
+    let menu_policy = crate::views::welcome::logo::welcome_menu_override();
+    let hide_worktree = menu_policy.is_some_and(|m| m.hide_new_worktree);
+    let changelog_url = menu_policy.and_then(|m| m.changelog_url);
+
+    let mut next = if has_claude_import { 1 } else { 0 };
     if has_claude_import && index == 0 {
         return InputOutcome::Action(Action::ImportClaudeSettings);
     }
-    if index == worktree_idx {
-        return InputOutcome::Action(Action::OpenNewWorktreeDialog);
-    }
-    if index == resume_idx {
-        return InputOutcome::Action(Action::FetchSessionList);
-    }
-    if Some(index) == changelog_idx {
-        if let Some(md) = changelog_md {
-            return InputOutcome::Action(Action::ShowReleaseNotes {
-                title: "Release Notes".to_string(),
-                content: md.trim().to_string(),
-            });
+    if !hide_worktree {
+        if index == next {
+            return InputOutcome::Action(Action::OpenNewWorktreeDialog);
         }
-        return InputOutcome::Unchanged;
+        next += 1;
     }
-    if index == quit_idx {
+    if index == next {
+        // External (Pi): same path as `/resume`. Stock Grok: welcome inline list.
+        return InputOutcome::Action(if external_agent {
+            Action::ShowSessionPicker
+        } else {
+            Action::FetchSessionList
+        });
+    }
+    next += 1;
+    if show_changelog_action {
+        if index == next {
+            if let Some(url) = changelog_url {
+                return InputOutcome::Action(Action::OpenUrl(url.to_string()));
+            }
+            if let Some(md) = changelog_md {
+                return InputOutcome::Action(Action::ShowReleaseNotes {
+                    title: "Release Notes".to_string(),
+                    content: md.trim().to_string(),
+                });
+            }
+            return InputOutcome::Unchanged;
+        }
+        next += 1;
+    }
+    if index == next {
         return InputOutcome::Action(Action::Quit);
     }
     InputOutcome::Unchanged
@@ -7141,15 +7276,15 @@ pub(crate) mod tests {
     #[test]
     fn menu_action_indices_without_changelog() {
         assert!(matches!(
-            dispatch_menu_action(0, false, false, None),
+            dispatch_menu_action(0, false, false, None, false),
             InputOutcome::Action(Action::OpenNewWorktreeDialog)
         ));
         assert!(matches!(
-            dispatch_menu_action(1, false, false, None),
+            dispatch_menu_action(1, false, false, None, false),
             InputOutcome::Action(Action::FetchSessionList)
         ));
         assert!(matches!(
-            dispatch_menu_action(2, false, false, None),
+            dispatch_menu_action(2, false, false, None, false),
             InputOutcome::Action(Action::Quit)
         ));
     }
@@ -7157,22 +7292,22 @@ pub(crate) mod tests {
     fn menu_action_changelog_sits_above_quit() {
         let md = Some("# notes");
         assert!(matches!(
-            dispatch_menu_action(1, false, true, md),
+            dispatch_menu_action(1, false, true, md, false),
             InputOutcome::Action(Action::FetchSessionList)
         ));
         assert!(matches!(
-            dispatch_menu_action(2, false, true, md),
+            dispatch_menu_action(2, false, true, md, false),
             InputOutcome::Action(Action::ShowReleaseNotes { .. })
         ));
         assert!(matches!(
-            dispatch_menu_action(3, false, true, md),
+            dispatch_menu_action(3, false, true, md, false),
             InputOutcome::Action(Action::Quit)
         ));
     }
     #[test]
     fn menu_action_changelog_before_fetch_is_noop() {
         assert!(matches!(
-            dispatch_menu_action(2, false, true, None),
+            dispatch_menu_action(2, false, true, None, false),
             InputOutcome::Unchanged
         ));
     }
@@ -7180,24 +7315,31 @@ pub(crate) mod tests {
     fn menu_action_indices_with_import_and_changelog() {
         let md = Some("# notes");
         assert!(matches!(
-            dispatch_menu_action(0, true, true, md),
+            dispatch_menu_action(0, true, true, md, false),
             InputOutcome::Action(Action::ImportClaudeSettings)
         ));
         assert!(matches!(
-            dispatch_menu_action(1, true, true, md),
+            dispatch_menu_action(1, true, true, md, false),
             InputOutcome::Action(Action::OpenNewWorktreeDialog)
         ));
         assert!(matches!(
-            dispatch_menu_action(2, true, true, md),
+            dispatch_menu_action(2, true, true, md, false),
             InputOutcome::Action(Action::FetchSessionList)
         ));
         assert!(matches!(
-            dispatch_menu_action(3, true, true, md),
+            dispatch_menu_action(3, true, true, md, false),
             InputOutcome::Action(Action::ShowReleaseNotes { .. })
         ));
         assert!(matches!(
-            dispatch_menu_action(4, true, true, md),
+            dispatch_menu_action(4, true, true, md, false),
             InputOutcome::Action(Action::Quit)
+        ));
+    }
+    #[test]
+    fn menu_action_external_resume_uses_show_session_picker() {
+        assert!(matches!(
+            dispatch_menu_action(1, false, false, None, true),
+            InputOutcome::Action(Action::ShowSessionPicker)
         ));
     }
     #[test]

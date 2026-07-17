@@ -2119,6 +2119,9 @@ pub enum TaskResult {
     /// The external-agent session catalog request completed. The agent sends
     /// the actual entries separately through `pi/ui/session_catalog`.
     ExternalSessionCatalogRequested,
+    /// The external-agent session catalog request failed before any catalog
+    /// notification could arrive — clear loading flags on dashboard/picker.
+    ExternalSessionCatalogFailed,
     /// Session list fetched for the welcome screen picker.
     SessionListLoaded {
         sessions: Vec<crate::app::app_view::SessionPickerEntry>,

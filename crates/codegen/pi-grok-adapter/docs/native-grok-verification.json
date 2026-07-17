@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "passed": true,
-  "workspace": "/Users/dengwenyu/Downloads/pi-grok-native-v4.0.0/grok-build-main",
-  "piSource": "/Users/dengwenyu/Downloads/pi-grok-native-v4.0.0/pi-main",
+  "passed": false,
+  "workspace": "/Users/dengwenyu/Dev/AI/pi-grok-build",
+  "piSource": "/Users/dengwenyu/Dev/AI/pi-grok-build/pi-main",
   "checks": {
     "adapter_is_workspace_library": {
       "passed": true,
@@ -34,16 +34,16 @@
       "detail": "native prompt, slash, question, status, scrollback, minimal and Markdown components are present"
     },
     "uploaded_grok_tree_is_byte_identical_outside_declared_seams": {
-      "passed": true,
-      "detail": "2696 uploaded Grok files are SHA-256 identical; only 19 declared semantic/manifest seams may differ"
+      "passed": false,
+      "detail": "missing=[]; mismatched=['.gitignore', 'README.md', 'crates/build/xai-proto-build/src/lib.rs', 'crates/codegen/xai-grok-pager/README.md', 'crates/codegen/xai-grok-pager/docs/custom-hooks.md', 'crates/codegen/xai-grok-pager/docs/hooks-and-plugins.md', 'crates/codegen/xai-grok-pager/docs/user-guide/03-keyboard-shortcuts.md', 'crates/codegen/xai-grok-pager/docs/user-guide/07-mcp-servers.md', 'crates/codegen/xai-grok-pager/docs/user-guide/09-plugins.md', 'crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md']; unexpected additions=['.github/workflows/release.yml', 'AGENTS.md', 'FEATURE_MATRIX.md', 'NATIVE_GROK_TUI_ALIGNMENT.md', 'README.zh-CN.md', 'VERIFICATION.md', 'build.sh', 'crates/codegen/xai-grok-pager-render/assets/pi-themes/dark.json', 'crates/codegen/xai-grok-pager-render/assets/pi-themes/light.json', 'crates/codegen/xai-grok-pager-render/src/theme/pi/color.rs']"
     },
     "native_renderer_input_markdown_hashes_match": {
-      "passed": true,
-      "detail": "283 native renderer/input/Markdown files match the uploaded Grok source"
+      "passed": false,
+      "detail": "renderer mismatches: ['crates/codegen/xai-grok-pager/src/app/agent_view/mod.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/notices.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/prompt.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/queue.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/render.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/session.rs', 'crates/codegen/xai-grok-pager/src/slash/commands/model.rs', 'crates/codegen/xai-grok-pager/src/slash/commands/theme.rs', 'crates/codegen/xai-grok-pager/src/slash/matcher.rs', 'crates/codegen/xai-grok-pager/src/views/agent.rs', 'crates/codegen/xai-grok-pager/src/views/agent_status.rs', 'crates/codegen/xai-grok-pager/src/views/dashboard/state.rs', 'crates/codegen/xai-grok-pager/src/views/session_picker.rs']"
     },
     "modified_surface_is_exact_and_semantic": {
       "passed": true,
-      "detail": "exactly 19 workspace/ACP/state/dispatch/slash seams are declared; no renderer module is mutable"
+      "detail": "exactly 21 workspace/ACP/state/dispatch/slash/logo seams are declared; no second TUI or broad renderer rewrite"
     },
     "no_fallback_or_old_custom_tui": {
       "passed": true,
@@ -51,7 +51,7 @@
     },
     "slash_surface_uses_grok_native_commands_and_pi_catalog": {
       "passed": true,
-      "detail": "retained 20 existing Grok UI or ACP-backed commands; no adapter-specific slash UI",
+      "detail": "retained 21 existing Grok UI or ACP-backed commands; no adapter-specific slash UI",
       "evidence": [
         "exit",
         "help",
@@ -61,6 +61,7 @@
         "effort",
         "rename",
         "resume",
+        "dashboard",
         "copy",
         "find",
         "transcript",
@@ -96,8 +97,8 @@
       "detail": "all 20 routed events exist in the uploaded Pi source contract"
     },
     "pi_semantics_feed_grok_native_views": {
-      "passed": true,
-      "detail": "history, Markdown/reasoning streams, images, tools, model/effort, steer/follow-up and Bash are mapped into ACP"
+      "passed": false,
+      "detail": "missing semantic mappings: ['completion_barrier']"
     },
     "extension_dialog_semantics_match_pi": {
       "passed": true,

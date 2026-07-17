@@ -9,6 +9,10 @@
 | Terminal init/restore | 原生 | Grok `init_terminal` / `restore_terminal` |
 | Fullscreen / alternate screen | 原生 | Grok screen mode；启动时选择 |
 | Minimal / scrollback-native | 原生 | `xai-grok-pager-minimal`；启动时选择 |
+| Welcome / minimal logo | 原生+适配 | 默认进 Welcome（与 stock `grok` 一致）；`ExternalUiProfile.logo` 注入 π block art（行宽 pad 防居中错位）；仅 `grok-pi -c/--continue` 跳过 Welcome 直接 Resume |
+| Welcome 菜单（Pi） | 原生+适配 | Resume/Ctrl+S ≡ `/resume`（Pi catalog）；隐藏 New worktree；Changelog 打开 `github.com/Dwsy/grok-pi` 的 `CHANGELOG.MD` |
+| 更新检查/安装 | 适配 | 源：① GitHub releases JSON ② npm 镜像 JSON。路径：`grok-pi update` / `update --check` / Welcome **Ctrl+U** 退出后跑 install.sh（失败再 npm -g）；`GROK_PI_NO_AUTO_UPDATE=1` 关闭后台检查 |
+| Agent Dashboard | 原生+适配 | 原生 `/dashboard` · Ctrl+\\ · 列表/peek/dispatch；idle 行经 `pi/session/list` → `pi/ui/session_catalog` 投影到 dormant roster；不接 Grok leader FleetView |
 | Prompt editing | 原生 | PromptWidget |
 | Multiline / Vim mode | 原生 | Grok slash/settings |
 | Theme / timestamps / mouse | 原生+适配 | Grok appearance/input；Pi 主题 JSON 经 `theme::pi` 映射为 Grok `Theme`，`/theme` 可选 `pi:<name>` |
@@ -34,6 +38,8 @@
 | Retry | 适配 | Grok native sticky status/toast |
 | Compaction | 适配 | `/compact [instructions]` → Pi `compact` |
 | Queue count | 适配 | Pi `queue_update` → Grok status；Grok `/queue` 管理前端提交队列 |
+| Context bar used tokens | 适配 | Pi `contextUsage` / message usage → ACP `_meta.totalTokens` → 右上角 bar |
+| Context click / `/context` | 适配 | Grok `x.ai/session/info` → Pi `get_session_stats` + `get_messages` 估算 breakdown → 原生 `ContextInfoBlock` |
 
 ## Model、session 与命令
 
@@ -43,6 +49,7 @@
 | Thinking effort | 适配 | Pi levels → Grok effort selector；xhigh/max 做能力归一化 |
 | New session | 适配 | Grok `/new` → Pi `new_session` |
 | Rename | 适配 | Grok `/rename` → Pi `set_session_name` |
+| Session info / context snapshot | 适配 | Grok `x.ai/session/info` ← Pi stats（used/window/counts）+ message 字符估算；system/tool-defs 因 RPC 未暴露记 0 |
 | Session history replay | 适配 | `get_messages` → ACP replay，使用 Grok scrollback |
 | 启动时继续上一会话 | 适配 | `grok-pi --continue` / `-c` → Pi `--continue` |
 | 启动资源、提示词与会话选项 | 适配 | `--system-prompt`、`--append-system-prompt`、`--no-skills`、`--no-context-files`、`--extension`、`--no-extensions`、`--no-tools`、`--no-session` 与 `--name` 由 `grok-pi` 转发给 Pi |
@@ -74,7 +81,7 @@
 
 ### 保留的 Grok 原生命令
 
-`exit`、`help`、`new`、`compact`、`model`、`effort`、`rename`、`copy`、`find`、`transcript`、`export`、`expand`、`queue`、`multiline`、`compact-mode`、`vim-mode`、`theme`、`timestamps`、`toggle-mouse-reporting`。
+`exit`、`help`、`new`、`compact`、`model`、`effort`、`rename`、`resume`、`dashboard`、`copy`、`find`、`transcript`、`export`、`expand`、`queue`、`multiline`、`compact-mode`、`vim-mode`、`theme`、`timestamps`、`toggle-mouse-reporting`。
 
 ### 动态 Pi 命令
 

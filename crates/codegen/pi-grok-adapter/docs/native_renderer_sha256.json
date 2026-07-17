@@ -1,5 +1,5 @@
 {
-  "description": "SHA-256 of unmodified native Grok TUI/rendering/input/markdown components from the uploaded grok-build-main baseline.",
+  "description": "SHA-256 of native Grok TUI/rendering/input/markdown components. Matches the uploaded grok-build baseline except the declared welcome seams (views/welcome/logo.rs brand art override + views/welcome/mod.rs external menu policy).",
   "fileCount": 283,
   "files": {
     "crates/codegen/xai-grok-markdown-core/Cargo.toml": "67d0718e559d810afe744f7488c0ac7c5b8e197cfed9b3f4d764bd335b718495",
@@ -280,9 +280,9 @@
     "crates/codegen/xai-grok-pager/src/views/todo_pane.rs": "4935ddbfdcd28cad649936d64230f6489ee8fbac7c7dfa76c59e7141e226e405",
     "crates/codegen/xai-grok-pager/src/views/turn_status.rs": "b3a91ceb7f5a7b3410ac3a57ee86acb52a7ee86aabd9bf7d033c933ab9174933",
     "crates/codegen/xai-grok-pager/src/views/welcome/hero_box.rs": "a707c4f4f83bcc5a743827346f377c74465e712e03d5bb1f106d596d3f513fa4",
-    "crates/codegen/xai-grok-pager/src/views/welcome/logo.rs": "c2c07ff528d6a9684ddadb2bb0e5282feef44104fa52e70c7f603394dc066c34",
+    "crates/codegen/xai-grok-pager/src/views/welcome/logo.rs": "392eddebf93b1d1039203279dfe2e55d3068bcef42bf8baf527bfbec4bb2cf72",
     "crates/codegen/xai-grok-pager/src/views/welcome/menu.rs": "9fad792c30a466758559ff2201b41579f1e340e26937ab622850a48c5071a1f8",
-    "crates/codegen/xai-grok-pager/src/views/welcome/mod.rs": "4a7647cdb007cd2d833ef00c536f25729e87b36db6278879e62490cdbf3f3843",
+    "crates/codegen/xai-grok-pager/src/views/welcome/mod.rs": "256775aba47f6d78fa556236b76226bcc4ca70f85579da5a5172fc025dd76cb9",
     "crates/codegen/xai-grok-pager/src/views/welcome/prompt.rs": "97c8a2bad1b763cd19dace4d38168c9a8b6e6d2f50a8d2d4e862198b55dbfc33",
     "crates/codegen/xai-grok-pager/src/views/welcome/top_bar.rs": "4238cce2eaf69459d978a639958f97c78e979755413403ad6fe1a9f438f3e250"
   }

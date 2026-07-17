@@ -327,6 +327,10 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             vec![]
         }
         TaskResult::ExternalSessionCatalogRequested => vec![],
+        TaskResult::ExternalSessionCatalogFailed => {
+            app.mark_external_session_catalog_failed();
+            vec![]
+        }
         TaskResult::SessionListFailed { error, seq, query } => {
             handle_session_list_failed(app, error, seq, query)
         }

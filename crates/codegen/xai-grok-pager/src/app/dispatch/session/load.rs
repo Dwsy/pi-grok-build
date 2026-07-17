@@ -1193,9 +1193,16 @@ pub(in crate::app::dispatch) fn handle_deep_search_results(
     }
     vec![]
 }
+/// Open the session picker.
+///
+/// For external hosts (Pi), this is the sole resume path — including welcome
+/// Ctrl+S / "Resume session", in-session Ctrl+S (which still dispatches
+/// [`Action::FetchSessionList`]), and `/resume`. Grok's session-store list is
+/// never used for external agents.
 pub(in crate::app::dispatch) fn dispatch_show_session_picker(app: &mut AppView) -> Vec<Effect> {
     use crate::views::modal::ActiveModal;
     let external_agent = app.external_agent;
+    let has_agent = matches!(app.active_view, crate::app::app_view::ActiveView::Agent(_));
     with_active_agent(app, |agent| {
         agent.active_modal = Some(ActiveModal::SessionPicker {
             state: crate::views::picker::PickerState::default(),
@@ -1217,10 +1224,40 @@ pub(in crate::app::dispatch) fn dispatch_show_session_picker(app: &mut AppView) 
         });
     });
     if external_agent {
-        dispatch_refresh_external_session_catalog(app)
+        if has_agent {
+            dispatch_refresh_external_session_catalog(app)
+        } else {
+            // Welcome screen: no agent modal yet — drive the native welcome
+            // picker with the same Pi catalog `/resume` uses.
+            dispatch_refresh_external_session_catalog_welcome(app)
+        }
     } else {
         dispatch_fetch_session_list(app)
     }
+}
+
+/// Populate the welcome-screen session picker from the external (Pi) catalog.
+/// Used when Resume is opened on Welcome before any agent session exists.
+fn dispatch_refresh_external_session_catalog_welcome(app: &mut AppView) -> Vec<Effect> {
+    if !app.external_agent {
+        return vec![];
+    }
+    app.session_picker_detail_generation += 1;
+    app.session_picker_loading = true;
+    app.session_picker_entries = None;
+    app.session_picker_state.selected = 0;
+    app.session_picker_state.query.clear();
+    app.session_picker_state.query_cursor = 0;
+    app.session_picker_state.search_active = false;
+    app.session_picker_state.expanded.clear();
+    app.session_picker_content_results = None;
+    app.session_picker_content_loading = false;
+    app.session_picker_entries_query = None;
+    app.session_picker_source_filter = crate::views::session_picker::SourceFilter::External;
+    vec![Effect::FetchExternalSessionCatalog {
+        cwd: app.cwd.clone(),
+        all: false,
+    }]
 }
 
 pub(in crate::app::dispatch) fn dispatch_refresh_external_session_catalog(
@@ -1230,8 +1267,12 @@ pub(in crate::app::dispatch) fn dispatch_refresh_external_session_catalog(
     if !app.external_agent {
         return vec![];
     }
+    // Welcome has no agent modal: refresh the welcome picker instead.
+    if !matches!(app.active_view, crate::app::app_view::ActiveView::Agent(_)) {
+        return dispatch_refresh_external_session_catalog_welcome(app);
+    }
     let Some(agent) = get_active_agent_mut(app) else {
-        return vec![];
+        return dispatch_refresh_external_session_catalog_welcome(app);
     };
     let Some(ActiveModal::SessionPicker {
         entries,

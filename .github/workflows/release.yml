@@ -57,8 +57,21 @@ jobs:
           $protoc = (Get-Command protoc).Source
           "PROTOC=$protoc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          ref="${GITHUB_REF_NAME:-0.0.0-dev}"
+          ver="${ref#v}"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+          echo "Resolved GROK_VERSION=${ver}"
+
       - name: Build release binary
         shell: bash
+        env:
+          # Lockstep the binary's reported version with the GitHub release tag
+          # so the in-app update check can compare semver correctly.
+          GROK_VERSION: ${{ steps.version.outputs.version }}
         run: |
           cargo build \
             --profile release-dist \

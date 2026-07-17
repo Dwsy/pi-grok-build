@@ -206,6 +206,15 @@ pub(super) fn dispatch_open_dashboard(app: &mut AppView) -> Vec<Effect> {
     log_dashboard_opened(app);
     if !app.leader_mode {
         app.dashboard_sessions_loading = true;
+        // Grok local idle sessions use `x.ai/session/list`. External hosts
+        // (Pi) own their session store: request `pi/session/list` and project
+        // the async `pi/ui/session_catalog` into `dashboard_local_sessions`.
+        if app.external_agent {
+            return vec![Effect::FetchExternalSessionCatalog {
+                cwd: app.cwd.clone(),
+                all: false,
+            }];
+        }
         return vec![Effect::FetchDashboardSessions];
     }
     vec![]

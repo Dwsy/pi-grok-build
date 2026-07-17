@@ -70,15 +70,35 @@ impl UiProfile {
     }
 }
 
+/// Optional welcome/minimal logo art for an external agent hosted by this pager.
+///
+/// Strings are `'static` so the composition binary can point at compile-time
+/// constants / `include_str!` without cloning per frame. The pager's existing
+/// logo renderer still owns painting, shimmer, and layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExternalLogoArt {
+    pub full: &'static str,
+    pub small: &'static str,
+}
+
 /// Narrow configuration surface for an external ACP agent hosted by the Grok
-/// pager. It intentionally contains no rendering policy: rendering remains the
-/// pager's responsibility.
+/// pager. Rendering remains the pager's responsibility; the optional logo is
+/// only brand art fed into the existing welcome/minimal logo renderer.
 #[derive(Debug, Clone)]
 pub struct ExternalUiProfile {
     pub agent_name: String,
     /// Pager-local builtins that remain available beside agent-advertised
     /// commands. Names are normalized without a leading slash.
     pub builtin_commands: Vec<String>,
+    /// Optional welcome/minimal logo art. When set, the composition binary's
+    /// brand replaces Grok's default braille logo via the welcome logo override.
+    pub logo: Option<ExternalLogoArt>,
+    /// Hide the welcome "New worktree" row (and its Ctrl+W shortcut). Pi does
+    /// not use Grok's worktree product flow on the welcome card yet.
+    pub hide_new_worktree: bool,
+    /// When set, the welcome "Changelog" row opens this https URL in the
+    /// system browser instead of Grok's CDN release-notes viewer.
+    pub changelog_url: Option<&'static str>,
 }
 
 impl Default for ExternalUiProfile {
@@ -86,6 +106,9 @@ impl Default for ExternalUiProfile {
         Self {
             agent_name: "External agent".to_string(),
             builtin_commands: Vec::new(),
+            logo: None,
+            hide_new_worktree: false,
+            changelog_url: None,
         }
     }
 }

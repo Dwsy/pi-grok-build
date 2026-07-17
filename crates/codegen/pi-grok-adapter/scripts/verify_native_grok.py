@@ -251,6 +251,7 @@ def main() -> int:
         "crates/codegen/xai-grok-pager/src/app/acp_handler/interactions.rs",
         "crates/codegen/xai-grok-pager/src/app/acp_handler/mod.rs",
         "crates/codegen/xai-grok-pager/src/app/app_view.rs",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/dashboard.rs",
         "crates/codegen/xai-grok-pager/src/app/dispatch/queue.rs",
         "crates/codegen/xai-grok-pager/src/app/dispatch/session/lifecycle.rs",
         "crates/codegen/xai-grok-pager/src/app/dispatch/session/load.rs",
@@ -262,11 +263,18 @@ def main() -> int:
         "crates/codegen/xai-grok-pager/src/app/mod.rs",
         "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs",
         "crates/codegen/xai-grok-pager/src/slash/mod.rs",
+        # Narrow branding seam: process-wide logo override for external hosts
+        # (e.g. grok-pi π art). Layout/shimmer still use the native renderer.
+        "crates/codegen/xai-grok-pager/src/views/welcome/logo.rs",
+        # Welcome menu policy for external hosts: hide New worktree, Changelog URL.
+        "crates/codegen/xai-grok-pager/src/views/welcome/mod.rs",
+        # grok-pi update discovery entry (GitHub releases → npm mirrors).
+        "crates/codegen/xai-grok-update/src/lib.rs",
     }
     check(
         "modified_surface_is_exact_and_semantic",
         allowed_modified == expected_modified,
-        f"exactly {len(expected_modified)} workspace/ACP/state/dispatch/slash seams are declared; no renderer module is mutable"
+        f"exactly {len(expected_modified)} workspace/ACP/state/dispatch/slash/logo seams are declared; no second TUI or broad renderer rewrite"
         if allowed_modified == expected_modified
         else f"declared seam mismatch: {sorted(allowed_modified ^ expected_modified)}",
     )
@@ -310,6 +318,7 @@ def main() -> int:
         "effort",
         "rename",
         "resume",
+        "dashboard",
         "copy",
         "find",
         "transcript",

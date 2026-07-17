@@ -7477,6 +7477,7 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "async-trait",
+ "chrono",
  "indexmap",
  "serde",
  "serde_json",

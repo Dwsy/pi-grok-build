@@ -1699,9 +1699,12 @@ fn render_welcome_done(
     } else {
         0
     };
-    // Changelog is reachable via this menu row (ctrl+l). Show from the first
-    // frame so the menu doesn't shift while the CDN fetch completes.
+    // Changelog is reachable via this menu row. Show from the first frame so
+    // the menu doesn't shift while the CDN fetch completes. External hosts
+    // with a project changelog URL use the same gate (no CDN dependency).
+    let menu_policy = logo::welcome_menu_override();
     let show_changelog_action = p.has_access && !show_picker;
+    let hide_new_worktree = show_changelog_action && menu_policy.is_some_and(|m| m.hide_new_worktree);
 
     let gate_menu;
     let owned_menu;
@@ -1726,7 +1729,10 @@ fn render_welcome_done(
             // so [x] sits at the very end of the row.
             items.push((key_i_with_x, "Import Claude settings"));
         }
-        items.push((key_w, "New worktree"));
+        // External hosts (e.g. grok-pi) may hide Grok's worktree product row.
+        if !hide_new_worktree {
+            items.push((key_w, "New worktree"));
+        }
         items.push((key_s, "Resume session"));
         // "Changelog" above Quit; no shortcut — opened by click (row or block).
         if show_changelog_action {

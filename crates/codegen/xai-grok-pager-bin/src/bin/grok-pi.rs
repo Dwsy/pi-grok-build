@@ -32,6 +32,8 @@ const PI_GROK_NATIVE_COMMANDS: &[&str] = &[
     "effort",
     "rename",
     "resume",
+    // Native multi-session overview; idle rows come from pi/session/list.
+    "dashboard",
     // Native Grok transcript/navigation surfaces over the Pi-backed session.
     "copy",
     "find",
@@ -49,18 +51,33 @@ const PI_GROK_NATIVE_COMMANDS: &[&str] = &[
 ];
 
 use xai_grok_pager::{
-    acp::{AcpConnection, ExternalUiProfile},
+    acp::{AcpConnection, ExternalLogoArt, ExternalUiProfile},
     app::{ExternalRunConfig, PagerArgs, run_external},
 };
+
+/// Block-character π mark for the native Grok welcome / minimal logo surface.
+/// Matches Pi's official setup logo (`SETUP_LOGO_LINES` in coding-agent). Kept
+/// as plain full-block art so it remains legible on terminals that cannot
+/// render Grok's default braille logo. Rows are left-aligned; the welcome logo
+/// renderer pads them to a common width so centered layout does not drift.
+const PI_LOGO: &str = "\
+██████\n\
+██  ██\n\
+████  ██\n\
+██    ██\n\
+";
 
 #[derive(Debug, Parser)]
 #[command(
     name = "grok-pi",
     version,
     about = "Run the Pi agent core in Grok Build's production TUI",
-    after_help = "Pi-compatible aliases:\n  -ns  Alias for --no-skills\n  -nc  Alias for --no-context-files\n  -ne  Alias for --no-extensions\n  -nt  Alias for --no-tools"
+    after_help = "Pi-compatible aliases:\n  -ns  Alias for --no-skills\n  -nc  Alias for --no-context-files\n  -ne  Alias for --no-extensions\n  -nt  Alias for --no-tools\n\nUpdate:\n  grok-pi update            Install latest (GitHub, then npm)\n  grok-pi update --check    Print current vs latest\n  Welcome Ctrl+U            Same install when an update is offered"
 )]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Pi executable. Use `node` with --pi-prefix-arg for a local Pi build.
     #[arg(long, default_value = "pi")]
     pi_bin: String,
@@ -134,6 +151,26 @@ struct Args {
     pi_args: Vec<String>,
 }
 
+#[derive(Debug, clap::Subcommand)]
+enum Command {
+    /// Check for or install grok-pi updates (GitHub releases, then npm mirrors).
+    Update {
+        /// Only report current vs latest; do not install.
+        #[arg(long)]
+        check: bool,
+        /// Machine-readable status (requires `--check`).
+        #[arg(long, requires = "check")]
+        json: bool,
+        /// Reinstall even when already on the latest version.
+        #[arg(long)]
+        force: bool,
+        /// Install a specific version (e.g. `0.0.2` or `v0.0.2`).
+        /// Named `--to` so it does not clash with clap's global `--version`.
+        #[arg(long = "to", value_name = "VERSION")]
+        version: Option<String>,
+    },
+}
+
 fn main() -> Result<()> {
     // Keep the exact production pager process hooks. In particular, Mermaid
     // rendering re-enters this binary with an internal worker argument and
@@ -157,6 +194,24 @@ fn main() -> Result<()> {
         .enable_all()
         .build()
         .context("failed to start the Grok pager Tokio runtime")?;
+    if let Some(Command::Update {
+        check,
+        json,
+        force,
+        version,
+    }) = args.command
+    {
+        return runtime.block_on(async move {
+            xai_grok_update::run_pi_update(xai_grok_update::PiUpdateOptions {
+                check_only: check,
+                force,
+                version,
+                json,
+            })
+            .await?;
+            Ok(())
+        });
+    }
     runtime.block_on(LocalSet::new().run_until(run(args)))
 }
 
@@ -226,6 +281,13 @@ async fn run(mut args: Args) -> Result<()> {
         ExternalUiProfile {
             agent_name: "Pi".to_string(),
             builtin_commands: command_profile.clone(),
+            logo: Some(ExternalLogoArt {
+                full: PI_LOGO,
+                small: PI_LOGO,
+            }),
+            // Grok worktree product flow is not wired for Pi yet.
+            hide_new_worktree: true,
+            changelog_url: Some("https://github.com/Dwsy/pi-grok-build/blob/main/CHANGELOG.MD"),
         },
     );
 
@@ -234,7 +296,9 @@ async fn run(mut args: Args) -> Result<()> {
     pager_args.no_alt_screen = args.no_alt_screen;
     pager_args.minimal = args.minimal;
     pager_args.fullscreen = args.fullscreen;
-    pager_args.no_auto_update = true;
+    // Enable the Pi-specific update check (GitHub releases → npm mirrors).
+    // Set GROK_PI_NO_AUTO_UPDATE=1 or pass through pager no-auto-update if needed.
+    pager_args.no_auto_update = std::env::var_os("GROK_PI_NO_AUTO_UPDATE").is_some();
 
     run_external(ExternalRunConfig {
         args: pager_args,
@@ -242,6 +306,9 @@ async fn run(mut args: Args) -> Result<()> {
         session_id,
         session_title,
         session_cwd: Some(cwd),
+        // Stock Grok lands on Welcome with logo unless --continue/--resume.
+        // Only `-c/--continue` skips Welcome and attaches the Pi session now.
+        resume_existing_session: args.continue_last_session,
     })
     .await
 }

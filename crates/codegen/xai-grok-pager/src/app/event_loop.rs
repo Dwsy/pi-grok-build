@@ -490,19 +490,35 @@ pub(crate) async fn run(
     let ui_profile = connection.ui_profile.clone();
     let external_agent = ui_profile.is_external();
     match &ui_profile {
-        crate::acp::UiProfile::Grok => crate::slash::set_builtin_command_profile(
-            crate::slash::BuiltinCommandProfile::Grok,
-        ),
+        crate::acp::UiProfile::Grok => {
+            crate::slash::set_builtin_command_profile(
+                crate::slash::BuiltinCommandProfile::Grok,
+            );
+            crate::views::welcome::logo::set_logo_override(None);
+            crate::views::welcome::logo::set_welcome_menu_override(None);
+        }
         crate::acp::UiProfile::External(profile) => {
             crate::slash::set_builtin_command_profile(
                 crate::slash::BuiltinCommandProfile::External(
                     profile.builtin_commands.clone(),
                 ),
             );
+            crate::views::welcome::logo::set_logo_override(profile.logo);
+            crate::views::welcome::logo::set_welcome_menu_override(Some(
+                crate::views::welcome::logo::ExternalWelcomeMenu {
+                    hide_new_worktree: profile.hide_new_worktree,
+                    changelog_url: profile.changelog_url,
+                },
+            ));
             crate::unified_log::info(
                 "external agent pager profile enabled",
                 None,
-                Some(serde_json::json!({ "agent": profile.agent_name })),
+                Some(serde_json::json!({
+                    "agent": profile.agent_name,
+                    "logo_override": profile.logo.is_some(),
+                    "hide_new_worktree": profile.hide_new_worktree,
+                    "changelog_url": profile.changelog_url,
+                })),
             );
         }
     }
@@ -1243,13 +1259,14 @@ pub(crate) async fn run(
         None
     };
 
-    // Leader-mode roster poll (FleetView dashboard). Only fires while the
-    // dashboard is open AND we're connected via a leader. Armed to fire
-    // immediately at loop start so an already-open dashboard refreshes
-    // without waiting a full interval.
+    // Dashboard roster poll. Fires only while the dashboard is open:
+    // leader mode → live FleetView roster; Grok non-leader → local
+    // `x.ai/session/list`; external (Pi) → `pi/session/list` catalog.
+    // Armed immediately so an already-open dashboard refreshes without
+    // waiting a full interval. External agents keep the arm so Pi idle
+    // sessions stay projected into the dormant roster.
     const ROSTER_POLL_INTERVAL: Duration = Duration::from_secs(1);
-    let mut roster_poll_at: Option<Instant> =
-        (!external_agent).then(Instant::now);
+    let mut roster_poll_at: Option<Instant> = Some(Instant::now());
 
     // Pre-generate the automatic "return-from-away" recap while the terminal is
     // unfocused, so it's already in the scrollback (instant) when the user
@@ -2022,13 +2039,17 @@ pub(crate) async fn run(
                 roster_poll_at = None;
                 // Only poll while the dashboard is open. When it is not active
                 // we deliberately do NOT re-arm, so the loop isn't woken once
-                // per second forever. In leader mode we poll the live FleetView
-                // roster; outside leader mode we poll the local on-disk
-                // idle-session list so the dashboard still shows idle sessions.
+                // per second forever. Leader → live FleetView; Grok non-leader
+                // → on-disk idle sessions; external (Pi) → session catalog.
                 let dashboard_open = matches!(app.active_view, ActiveView::AgentDashboard);
                 if dashboard_open {
                     let eff = if leader_status_rx.is_some() {
                         Effect::FetchRoster
+                    } else if app.external_agent {
+                        Effect::FetchExternalSessionCatalog {
+                            cwd: app.cwd.clone(),
+                            all: false,
+                        }
                     } else {
                         Effect::FetchDashboardSessions
                     };
@@ -2852,6 +2873,7 @@ async fn drain_and_process(
         let is_resize = matches!(ev, Event::Resize(_, _));
         match app.handle_input_with_paste_provenance(ev, routed.paste_provenance) {
             InputOutcome::Action(action) => {
+                let action = remap_external_session_list_action(app, action);
                 let effs = dispatch::dispatch(action, app);
                 if process_effects(effs, tasks, app, progress_tx) {
                     return true;
@@ -2863,6 +2885,7 @@ async fn drain_and_process(
                 // Dispatch the action (e.g. create session), then re-process
                 // the same event through the now-active view so the input
                 // (character, paste) lands in the session's prompt.
+                let action = remap_external_session_list_action(app, action);
                 let effs = dispatch::dispatch(action, app);
                 if process_effects(effs, tasks, app, progress_tx) {
                     return true;
@@ -2870,6 +2893,7 @@ async fn drain_and_process(
                 if let InputOutcome::Action(follow_up) =
                     app.handle_input_with_paste_provenance(ev, routed.paste_provenance)
                 {
+                    let follow_up = remap_external_session_list_action(app, follow_up);
                     let effs = dispatch::dispatch(follow_up, app);
                     if process_effects(effs, tasks, app, progress_tx) {
                         return true;
@@ -2881,10 +2905,12 @@ async fn drain_and_process(
             InputOutcome::ActionPair(first, second) => {
                 // Dispatch both in order; first must fully resolve
                 // before second (e.g. revert preview then open reset).
+                let first = remap_external_session_list_action(app, first);
                 let effs = dispatch::dispatch(first, app);
                 if process_effects(effs, tasks, app, progress_tx) {
                     return true;
                 }
+                let second = remap_external_session_list_action(app, second);
                 let effs = dispatch::dispatch(second, app);
                 if process_effects(effs, tasks, app, progress_tx) {
                     return true;
@@ -3234,6 +3260,21 @@ fn merge_paste_fragments(events: Vec<Event>) -> Vec<Event> {
     }
 
     result
+}
+
+/// External hosts (Pi) own sessions outside Grok's store. Any code path that
+/// still emits [`Action::FetchSessionList`] (notably in-session Ctrl+S) must
+/// open the same SessionPicker `/resume` uses.
+fn remap_external_session_list_action(
+    app: &AppView,
+    action: super::actions::Action,
+) -> super::actions::Action {
+    match action {
+        super::actions::Action::FetchSessionList if app.external_agent => {
+            super::actions::Action::ShowSessionPicker
+        }
+        other => other,
+    }
 }
 
 /// Spawn effects into the task set. Returns `true` if the app should quit.

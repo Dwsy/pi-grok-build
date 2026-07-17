@@ -1,7 +1,15 @@
-//! Logo component — renders the braille art logo.
+//! Logo component — renders the welcome-screen art logo.
 //!
-//! Hidden entirely on legacy Windows consoles: the U+2800 braille block is
-//! not covered by the ConHost raster fonts and would render as tofu.
+//! Default art is Grok's braille logo. External ACP hosts (e.g. `grok-pi`)
+//! may install a process-wide override via [`set_logo_override`] so the same
+//! shimmer renderer paints their brand without forking the welcome layout.
+//!
+//! Default braille art is hidden entirely on legacy Windows consoles: the
+//! U+2800 braille block is not covered by the ConHost raster fonts and would
+//! render as tofu. An installed override is shown even there — the host is
+//! responsible for supplying displayable glyphs (e.g. block-character art).
+
+use std::sync::{OnceLock, RwLock};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
@@ -9,6 +17,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
+use crate::acp::ExternalLogoArt;
 use crate::render::color::blend_color;
 use crate::theme::Theme;
 
@@ -20,24 +29,92 @@ const SMALL_LOGO_MIN_HEIGHT: u16 = 22;
 /// Height at or above which the full logo is shown.
 const FULL_LOGO_MIN_HEIGHT: u16 = 26;
 
-fn pick_logo(window_height: u16) -> Option<&'static str> {
-    pick_logo_for(window_height, logo_hidden())
+fn logo_override_cell() -> &'static RwLock<Option<ExternalLogoArt>> {
+    static CELL: OnceLock<RwLock<Option<ExternalLogoArt>>> = OnceLock::new();
+    CELL.get_or_init(|| RwLock::new(None))
 }
 
-/// Pure tier selection so tests can drive the legacy-console flag directly.
-fn pick_logo_for(window_height: u16, hidden: bool) -> Option<&'static str> {
-    if hidden || window_height < SMALL_LOGO_MIN_HEIGHT {
+/// Install or clear the process-wide logo override.
+///
+/// Mirrors [`crate::slash::set_builtin_command_profile`]: set once before the
+/// welcome screen renders so every logo call site (stacked welcome, hero box,
+/// minimal compact card) picks up the same art without threading renderer
+/// policy through the component tree.
+pub fn set_logo_override(logo: Option<ExternalLogoArt>) {
+    *logo_override_cell()
+        .write()
+        .expect("logo override lock poisoned") = logo;
+}
+
+fn logo_override() -> Option<ExternalLogoArt> {
+    *logo_override_cell()
+        .read()
+        .expect("logo override lock poisoned")
+}
+
+/// Welcome-menu policy for an external host (e.g. `grok-pi`).
+///
+/// Kept beside the logo override so composition binaries can brand the
+/// welcome card without forking the menu renderer: hide Grok product rows,
+/// and redirect Changelog to a project URL.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExternalWelcomeMenu {
+    pub hide_new_worktree: bool,
+    pub changelog_url: Option<&'static str>,
+}
+
+fn welcome_menu_cell() -> &'static RwLock<Option<ExternalWelcomeMenu>> {
+    static CELL: OnceLock<RwLock<Option<ExternalWelcomeMenu>>> = OnceLock::new();
+    CELL.get_or_init(|| RwLock::new(None))
+}
+
+/// Install or clear process-wide welcome menu policy for external hosts.
+pub fn set_welcome_menu_override(menu: Option<ExternalWelcomeMenu>) {
+    *welcome_menu_cell()
+        .write()
+        .expect("welcome menu override lock poisoned") = menu;
+}
+
+/// Current welcome menu override, if any.
+pub fn welcome_menu_override() -> Option<ExternalWelcomeMenu> {
+    *welcome_menu_cell()
+        .read()
+        .expect("welcome menu override lock poisoned")
+}
+
+fn pick_logo(window_height: u16) -> Option<&'static str> {
+    pick_logo_for(window_height, logo_hidden(), logo_override())
+}
+
+/// Pure tier selection so tests can drive the legacy-console flag and override
+/// art directly without racing the process-wide cell.
+fn pick_logo_for(
+    window_height: u16,
+    hidden: bool,
+    override_art: Option<ExternalLogoArt>,
+) -> Option<&'static str> {
+    let (full, small) = match override_art {
+        Some(art) => (art.full, art.small),
+        None => {
+            if hidden {
+                return None;
+            }
+            (LOGO, LOGO_SMALL)
+        }
+    };
+    if window_height < SMALL_LOGO_MIN_HEIGHT {
         None
     } else if window_height < FULL_LOGO_MIN_HEIGHT {
-        Some(LOGO_SMALL)
+        Some(small)
     } else {
-        Some(LOGO)
+        Some(full)
     }
 }
 
-/// The braille art has no ASCII stand-in; see the module doc.
+/// Default braille art has no legacy-safe stand-in; see the module doc.
+/// Overrides are never auto-hidden.
 fn logo_hidden() -> bool {
-    crate::glyphs::is_legacy_windows_console()
+    logo_override().is_none() && crate::glyphs::is_legacy_windows_console()
 }
 
 fn non_empty_lines(logo: &str) -> impl Iterator<Item = &str> {
@@ -110,12 +187,16 @@ fn shine_opacity(diag: f32, secs: f32) -> f32 {
 fn render_into(area: Rect, buf: &mut Buffer, theme: &Theme, logo: &str) {
     let lines: Vec<&str> = non_empty_lines(logo).collect();
     let rows = lines.len().max(1) as f32;
-    let cols = lines
+    // Pad every row to the same visual width so per-line `Alignment::Center`
+    // keeps the glyph columns locked together. Uneven art (e.g. Pi's block π)
+    // otherwise drifts row-by-row when shorter lines are centered independently.
+    let max_width = lines
         .iter()
-        .map(|l| l.chars().count())
+        .map(|l| unicode_width::UnicodeWidthStr::width(*l))
         .max()
         .unwrap_or(1)
-        .max(1) as f32;
+        .max(1);
+    let cols = max_width as f32;
     let secs = anim_phase_secs();
 
     // Blend each glyph from the resting gray toward the bright text color by its
@@ -131,7 +212,8 @@ fn render_into(area: Rect, buf: &mut Buffer, theme: &Theme, logo: &str) {
             let mut spans: Vec<Span> = Vec::new();
             let mut run = String::new();
             let mut run_color: Option<Color> = None;
-            for (col, ch) in line.chars().enumerate() {
+            let mut col = 0usize;
+            for ch in line.chars() {
                 // Sweep along the bottom-left → top-right diagonal: the
                 // coordinate grows as col increases and row decreases.
                 let diag = (col as f32 + (rows - 1.0 - row as f32)) / (cols + rows);
@@ -146,6 +228,22 @@ fn render_into(area: Rect, buf: &mut Buffer, theme: &Theme, logo: &str) {
                     run_color = Some(color);
                 }
                 run.push(ch);
+                col += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            }
+            // Trailing pad uses resting gray so shorter rows stay left-aligned
+            // within the centered block without inventing extra shine samples.
+            let pad = max_width.saturating_sub(unicode_width::UnicodeWidthStr::width(*line));
+            if pad > 0 {
+                if run_color != Some(base) {
+                    if let Some(prev) = run_color {
+                        spans.push(Span::styled(
+                            std::mem::take(&mut run),
+                            Style::default().fg(prev),
+                        ));
+                    }
+                    run_color = Some(base);
+                }
+                run.push_str(&" ".repeat(pad));
             }
             if let Some(prev) = run_color {
                 spans.push(Span::styled(run, Style::default().fg(prev)));
@@ -175,42 +273,70 @@ pub fn render_logo(area: Rect, buf: &mut Buffer, theme: &Theme, window_height: u
 /// independent of the height-based [`pick_logo`] tiers used by the stacked
 /// layout. When [`logo_hidden`], they report 0 and render nothing.
 pub fn full_logo_line_count() -> u16 {
-    full_logo_line_count_for(logo_hidden())
+    full_logo_line_count_for(logo_hidden(), logo_override())
 }
 
-fn full_logo_line_count_for(hidden: bool) -> u16 {
-    if hidden { 0 } else { count_lines(LOGO) }
+fn full_logo_line_count_for(hidden: bool, override_art: Option<ExternalLogoArt>) -> u16 {
+    match override_art {
+        Some(art) => count_lines(art.full),
+        None if hidden => 0,
+        None => count_lines(LOGO),
+    }
 }
 
 pub fn full_logo_visual_width() -> u16 {
-    full_logo_visual_width_for(logo_hidden())
+    full_logo_visual_width_for(logo_hidden(), logo_override())
 }
 
-fn full_logo_visual_width_for(hidden: bool) -> u16 {
-    if hidden { 0 } else { visual_width(LOGO) }
+fn full_logo_visual_width_for(hidden: bool, override_art: Option<ExternalLogoArt>) -> u16 {
+    match override_art {
+        Some(art) => visual_width(art.full),
+        None if hidden => 0,
+        None => visual_width(LOGO),
+    }
 }
 
 pub fn render_full_logo(area: Rect, buf: &mut Buffer, theme: &Theme) {
-    if !logo_hidden() {
-        render_into(area, buf, theme, LOGO);
+    if let Some(logo) = full_logo_art(logo_hidden(), logo_override()) {
+        render_into(area, buf, theme, logo);
+    }
+}
+
+fn full_logo_art(hidden: bool, override_art: Option<ExternalLogoArt>) -> Option<&'static str> {
+    match override_art {
+        Some(art) => Some(art.full),
+        None if hidden => None,
+        None => Some(LOGO),
     }
 }
 
 /// Line count of the small logo used in minimal's committed welcome card
-/// (0 on a legacy Windows console, where the braille art is suppressed).
+/// (0 on a legacy Windows console, where the default braille art is suppressed).
 pub fn compact_logo_line_count() -> u16 {
-    if logo_hidden() {
-        0
-    } else {
-        count_lines(LOGO_SMALL)
+    compact_logo_line_count_for(logo_hidden(), logo_override())
+}
+
+fn compact_logo_line_count_for(hidden: bool, override_art: Option<ExternalLogoArt>) -> u16 {
+    match override_art {
+        Some(art) => count_lines(art.small),
+        None if hidden => 0,
+        None => count_lines(LOGO_SMALL),
     }
 }
 
-/// Render the small braille logo (centered) into `area` for minimal's welcome
-/// card. No-op when the logo is hidden.
+/// Render the small logo (centered) into `area` for minimal's welcome card.
+/// No-op when the logo is hidden.
 pub fn render_compact_logo(area: Rect, buf: &mut Buffer, theme: &Theme) {
-    if !logo_hidden() {
-        render_into(area, buf, theme, LOGO_SMALL);
+    if let Some(logo) = compact_logo_art(logo_hidden(), logo_override()) {
+        render_into(area, buf, theme, logo);
+    }
+}
+
+fn compact_logo_art(hidden: bool, override_art: Option<ExternalLogoArt>) -> Option<&'static str> {
+    match override_art {
+        Some(art) => Some(art.small),
+        None if hidden => None,
+        None => Some(LOGO_SMALL),
     }
 }
 
@@ -220,16 +346,16 @@ mod tests {
 
     #[test]
     fn logo_sizes_by_height() {
-        assert!(pick_logo_for(SMALL_LOGO_MIN_HEIGHT - 1, false).is_none());
+        assert!(pick_logo_for(SMALL_LOGO_MIN_HEIGHT - 1, false, None).is_none());
         assert_eq!(
-            pick_logo_for(SMALL_LOGO_MIN_HEIGHT, false),
+            pick_logo_for(SMALL_LOGO_MIN_HEIGHT, false, None),
             Some(LOGO_SMALL)
         );
         assert_eq!(
-            pick_logo_for(FULL_LOGO_MIN_HEIGHT - 1, false),
+            pick_logo_for(FULL_LOGO_MIN_HEIGHT - 1, false, None),
             Some(LOGO_SMALL)
         );
-        assert_eq!(pick_logo_for(FULL_LOGO_MIN_HEIGHT, false), Some(LOGO));
+        assert_eq!(pick_logo_for(FULL_LOGO_MIN_HEIGHT, false, None), Some(LOGO));
     }
 
     // The braille art has no legacy-safe stand-in, so every height tier must
@@ -237,7 +363,7 @@ mod tests {
     #[test]
     fn logo_hidden_on_legacy_console_at_every_height() {
         for h in [0, SMALL_LOGO_MIN_HEIGHT, FULL_LOGO_MIN_HEIGHT, u16::MAX] {
-            assert!(pick_logo_for(h, true).is_none(), "height {h}");
+            assert!(pick_logo_for(h, true, None).is_none(), "height {h}");
         }
     }
 
@@ -245,16 +371,16 @@ mod tests {
     fn hero_box_always_uses_full_logo() {
         // The box renders the full logo regardless of height (it's laid out
         // beside the menu), and it's the large variant — never the small one.
-        assert_eq!(full_logo_line_count_for(false), count_lines(LOGO));
-        assert_eq!(full_logo_visual_width_for(false), visual_width(LOGO));
-        assert!(full_logo_line_count_for(false) > count_lines(LOGO_SMALL));
-        assert!(full_logo_visual_width_for(false) > visual_width(LOGO_SMALL));
+        assert_eq!(full_logo_line_count_for(false, None), count_lines(LOGO));
+        assert_eq!(full_logo_visual_width_for(false, None), visual_width(LOGO));
+        assert!(full_logo_line_count_for(false, None) > count_lines(LOGO_SMALL));
+        assert!(full_logo_visual_width_for(false, None) > visual_width(LOGO_SMALL));
     }
 
     #[test]
     fn full_logo_helpers_collapse_when_hidden() {
-        assert_eq!(full_logo_line_count_for(true), 0);
-        assert_eq!(full_logo_visual_width_for(true), 0);
+        assert_eq!(full_logo_line_count_for(true, None), 0);
+        assert_eq!(full_logo_visual_width_for(true, None), 0);
     }
 
     #[test]
@@ -314,5 +440,55 @@ mod tests {
         // glyph falls back to at most the gentle pulse — never full bright.
         let op = shine_opacity(0.5, 6.0); // secs % 4.0 = 2.0 → past SWEEP_FRAC, in the rest phase
         assert!(op < 0.2, "resting opacity {op} should stay dim");
+    }
+
+    #[test]
+    fn logo_override_replaces_art_and_survives_legacy_hide() {
+        const FULL: &str = "████\n██  ██";
+        const SMALL: &str = "██";
+        let art = Some(ExternalLogoArt {
+            full: FULL,
+            small: SMALL,
+        });
+
+        // Height tiers still apply, but the art comes from the override and the
+        // legacy-console hide flag is ignored for host-supplied glyphs.
+        assert_eq!(
+            pick_logo_for(FULL_LOGO_MIN_HEIGHT, true, art),
+            Some(FULL),
+            "override must ignore the legacy-console hide flag"
+        );
+        assert_eq!(
+            pick_logo_for(SMALL_LOGO_MIN_HEIGHT, true, art),
+            Some(SMALL)
+        );
+        assert!(pick_logo_for(SMALL_LOGO_MIN_HEIGHT - 1, true, art).is_none());
+
+        assert_eq!(full_logo_line_count_for(true, art), count_lines(FULL));
+        assert_eq!(full_logo_visual_width_for(true, art), visual_width(FULL));
+        assert_eq!(compact_logo_line_count_for(true, art), count_lines(SMALL));
+        assert_eq!(full_logo_art(true, art), Some(FULL));
+        assert_eq!(compact_logo_art(true, art), Some(SMALL));
+    }
+
+    #[test]
+    fn set_logo_override_round_trips() {
+        // Process-wide cell; always restore so sibling tests see the default.
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                set_logo_override(None);
+            }
+        }
+        let _reset = Reset;
+
+        let art = ExternalLogoArt {
+            full: "A",
+            small: "B",
+        };
+        set_logo_override(Some(art));
+        assert_eq!(logo_override(), Some(art));
+        set_logo_override(None);
+        assert_eq!(logo_override(), None);
     }
 }

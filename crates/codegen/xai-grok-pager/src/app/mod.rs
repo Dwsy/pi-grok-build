@@ -382,6 +382,10 @@ pub struct ExternalRunConfig {
     pub session_id: String,
     pub session_title: Option<String>,
     pub session_cwd: Option<std::path::PathBuf>,
+    /// When true, skip Welcome and load `session_id` immediately (e.g.
+    /// `grok-pi --continue`). Default false lands on the native Welcome
+    /// screen so brand logo / menu match stock Grok Build.
+    pub resume_existing_session: bool,
 }
 
 /// Run the native Grok pager against an external ACP backend.
@@ -397,6 +401,7 @@ pub async fn run_external(config: ExternalRunConfig) -> anyhow::Result<()> {
         session_id,
         session_title,
         session_cwd,
+        resume_existing_session,
     } = config;
 
     xai_tty_utils::redirect_native_stderr();
@@ -469,16 +474,36 @@ pub async fn run_external(config: ExternalRunConfig) -> anyhow::Result<()> {
         fork_session: false,
         ..args
     };
-    let materialized = session_startup::MaterializedStartup::Resume {
-        session_id,
-        original_cwd: session_cwd.clone(),
-        title: session_title,
+    // Default: Welcome (logo + menu), same as stock `grok` without --resume.
+    // Only explicit continue/resume composition opts into loading the backend
+    // session immediately.
+    let materialized = if resume_existing_session {
+        session_startup::MaterializedStartup::Resume {
+            session_id,
+            original_cwd: session_cwd.clone(),
+            title: session_title.clone(),
+        }
+    } else {
+        session_startup::MaterializedStartup::NewAuto
     };
     let term_state = event_loop::TerminalState {
         is_control_mode,
         screen_mode,
         relaunched_into_minimal,
         initial_theme: crate::theme::cache::current_kind(),
+    };
+    // Background update check for grok-pi: GitHub Releases JSON first, then
+    // npm registry mirrors. Disabled when the composition binary sets
+    // `--no-auto-update` (stock Grok CLI parity).
+    let bg_update_rx = if args.no_auto_update {
+        None
+    } else {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let result = xai_grok_update::check_pi_update_background().await;
+            let _ = tx.send(result);
+        });
+        Some(rx)
     };
     let cancel = connection.cancel.clone();
     let result = event_loop::run(
@@ -490,7 +515,7 @@ pub async fn run_external(config: ExternalRunConfig) -> anyhow::Result<()> {
         None,
         term_state,
         materialized,
-        None,
+        bg_update_rx,
     )
     .await;
 
@@ -498,6 +523,22 @@ pub async fn run_external(config: ExternalRunConfig) -> anyhow::Result<()> {
     let _ = restore_terminal(terminal, writer_thread, screen_mode);
     cancel.cancel();
     xai_tty_utils::global_process_scope().kill_all();
+    // Ctrl+U on Welcome (pending update) → quit, then run the real installer.
+    if let Ok(run_result) = &result
+        && run_result.quit_for_update
+    {
+        match xai_grok_update::install_pi_update(None).await {
+            Ok(ver) => {
+                eprintln!("Updated to grok-pi v{ver}. Restart grok-pi to use the new binary.");
+            }
+            Err(e) => {
+                eprintln!("Update failed: {e:#}");
+                eprintln!(
+                    "Manual install:\n  curl -fsSL https://github.com/Dwsy/pi-grok-build/releases/latest/download/install.sh | sh"
+                );
+            }
+        }
+    }
     result.map(|_| ())
 }
 

@@ -699,10 +699,13 @@ pub(crate) fn execute(
                     .into(),
                 );
                 let result: Result<acp::ExtResponse, _> = acp_send(request, &tx).await;
-                if let Err(error) = result {
-                    tracing::warn!(%error, "failed to request external session catalog");
+                match result {
+                    Ok(_) => TaskResult::ExternalSessionCatalogRequested,
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to request external session catalog");
+                        TaskResult::ExternalSessionCatalogFailed
+                    }
                 }
-                TaskResult::ExternalSessionCatalogRequested
             });
         }
         Effect::FetchSessionList { query, seq } => {
