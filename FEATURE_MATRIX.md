@@ -35,9 +35,11 @@
 | Text stream | 适配 | `message_update` → AgentMessageChunk |
 | Thinking/reasoning stream | 适配 | `message_update` → AgentThoughtChunk |
 | Tool start/update/end | 适配 | ACP ToolCall/ToolCallUpdate |
+| Pi 子代理 | 原生+适配 | 内置 `pi-grok-subagents` extension 拥有 Pi child `AgentSession`；版本化 bridge 投影到原生 `SubagentBlock`、Tasks Pane、child `AgentView` 与 `x.ai/subagent/cancel`。模型驱动的手工端到端验收待执行。 |
 | Prompt completion | 适配 | 以 Pi `agent_settled` 为完成屏障，不错误使用 `agent_end` |
 | Retry | 适配 | Grok native sticky status/toast |
 | Compaction | 适配 | `/compact [instructions]` → Pi `compact` |
+| Session recap (`/recap` + auto away) | 适配 | initialize `meta.sessionRecap`；`x.ai/recap` → 注入 extension `__pi_grok_recap`（`complete` 侧调用，不写会话历史）→ custom `pi-grok-recap/v1` → `SessionRecap`；F2：`session_recap` 开关 + `recap_model`；正文语言取进程 locale |
 | Queue pane / count | 适配 | Pi `queue_update` 全文数组 → `x.ai/queue/changed`（稳定 id + 出队）+ status；`/queue` 面板镜像 Pi steering/follow-up。Pi RPC 无 clear/remove/edit，对应操作 rebroadcast + toast |
 | Context bar used tokens | 适配 | Pi `contextUsage` / message usage → ACP `_meta.totalTokens` → 右上角 bar |
 | Context click / `/context` | 适配 | Grok `x.ai/session/info` → Pi `get_session_stats` + `get_messages` 估算 breakdown → 原生 `ContextInfoBlock` |

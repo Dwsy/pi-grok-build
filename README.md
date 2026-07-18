@@ -36,6 +36,7 @@ These rules define the integration and should hold for every future change:
 | Input and commands | Native `PromptWidget`, multiline/Vim support, native slash dropdown, Grok command registry with dynamic Pi command catalog |
 | Pi runtime | Pi JSONL RPC process, streaming messages/thoughts, tools, Bash, retry, compaction, model and effort selection, session history |
 | Extension UI | Native toast, sticky/persistent banners, terminal title, editor text, and `QuestionView` for select/confirm/input/editor |
+| Pi subagents | Bundled lifecycle-only Pi extension owns child `AgentSession` instances; the adapter projects their bridge events into Grok's existing SubagentBlock, Tasks Pane, child AgentView, and cancel flow |
 | Session flow | Native `/new`, `/rename`, `/compact`, model/effort controls; Pi remains the persistence owner |
 
 For field-level coverage and intentional omissions, see the [feature matrix](FEATURE_MATRIX.md).
@@ -83,6 +84,7 @@ grok-pi --pi-bin pi --pi-cwd /path/to/project -- --no-session
 │   ├── pi-grok-adapter/                     Headless Pi JSONL RPC ↔ ACP bridge
 │   └── xai-grok-pager-bin/src/bin/
 │       └── grok-pi.rs                       Composition entry point
+├── extensions/pi-grok-subagents/             Bundled Pi child-session extension
 ├── pi-main/                                 Bundled, unmodified Pi source
 ├── docs/                                    Architecture, issues, and change records
 ├── build.sh                                 Builds Pi and grok-pi
@@ -102,6 +104,8 @@ grok-pi --pi-bin pi --pi-cwd /path/to/project -- --no-session
 | Pi process and JSONL correlation | `crates/codegen/pi-grok-adapter/src/pi_rpc.rs` |
 | Pi data parsing and models | `crates/codegen/pi-grok-adapter/src/model.rs` |
 | ACP agent, event, and UI mappings | `crates/codegen/pi-grok-adapter/src/pi_adapter.rs` |
+| Pi subagent bridge projection | `crates/codegen/pi-grok-adapter/src/subagent_projection.rs` |
+| Pi child-session lifecycle extension | `extensions/pi-grok-subagents/index.ts` |
 | Grok composition entry point | `crates/codegen/xai-grok-pager-bin/src/bin/grok-pi.rs` |
 
 ## Requirements
@@ -196,7 +200,7 @@ Interactive responses retain Pi's required `{value}`, `{confirmed}`, or `{cancel
 
 ### Intentional boundaries
 
-The adapter does not fabricate functionality that Pi RPC does not expose or that requires Grok product services. In particular, it does not provide raw terminal hooks, arbitrary extension component factories, custom Pi header/footer/editor components, synchronous editor-text reads, Pi TUI theme objects, Grok cloud sessions, login, usage, plugins, voice, or subagents.
+The adapter does not fabricate functionality that Pi RPC does not expose or that requires Grok product services. In particular, it does not provide raw terminal hooks, arbitrary extension component factories, custom Pi header/footer/editor components, synchronous editor-text reads, Pi TUI theme objects, or Grok cloud sessions, login, usage, plugins, or voice. Pi child sessions are implemented through the bundled Pi extension and rendered only by Grok's existing subagent surfaces.
 
 ## Verification
 
@@ -214,7 +218,8 @@ For a complete native-runtime acceptance, also build and manually verify:
 - Pi dynamic commands appear without duplicate builtins;
 - Extension UI uses toast/banner/`QuestionView`, not fallback transcript text;
 - model and effort controls update Pi;
-- follow-up, steer, Bash, new session, rename, compaction, history replay, and terminal restoration work as expected.
+- follow-up, steer, Bash, new session, rename, compaction, history replay, and terminal restoration work as expected;
+- foreground/background subagents appear in the native Subagents group, stream into their child view, finish/fail/cancel correctly, and replay after resume.
 
 The checked-in [verification record](VERIFICATION.md) distinguishes completed static/protocol checks from toolchain-dependent runtime checks. Do not treat a static pass as proof of a successful production build or PTY run.
 

@@ -9,6 +9,20 @@
 
 尚不能宣称**全部**验证全绿：`verify.sh` 的 Rust 语法阶段依赖未声明的 Python 包 `tree_sitter` / `tree_sitter_rust`，当前环境因缺少该依赖停止；两条 Pager focused lib test 还会在既有跨 crate `#[cfg(test)]` helper 配置上失败（与 Pi adapter 逻辑无关）。尚未新增 `grok-pi` 的 PTY 端到端 smoke test。
 
+## 2026-07-18 子代理适配增量
+
+已新增内置 `pi-grok-subagents` extension：它用官方 Pi extension API 创建、追踪、取消并持久化 child `AgentSession`，通过 `pi-grok-subagent/v1` custom-message bridge 交给 adapter。adapter 仅验证/去重并投影到 Pager 已消费的 `x.ai/session/update` 和带 child session ID 的 ACP `SessionNotification`；Pager 本体继续复用原有 SubagentBlock、Tasks Pane、child AgentView 与取消 UI。
+
+| 验证层 | 结果 | 说明 |
+|---|---:|---|
+| Pi custom-message bridge probe | PASS | RPC JSONL `message_start`/`message_end` 均保留 `customType`、`display:false` 与结构化 `details`。 |
+| Tempfile extension load | PASS | 将 extension 复制到独立 tempfile 后以 `pi --mode rpc --extension <temp>.ts` 加载，隐藏 cancel command 出现在 command catalog。 |
+| Adapter unit tests | PASS | `cargo test -p pi-grok-adapter`：53 项通过。 |
+| `grok-pi` binary unit tests | PASS | `cargo test -p xai-grok-pager-bin --bin grok-pi`：7 项通过。 |
+| `grok-pi` check | PASS | `cargo check -p xai-grok-pager-bin --bin grok-pi` 成功；仅既有 `PiModel.reasoning` dead-code warning。 |
+| Pager child-route lib test | BLOCKED | 聚焦测试编译被既有无关 Pager test 配置错误阻断：缺 `set_voice_mode_enabled_for_test`、layout 参数漂移、`ActiveModal: Debug`、`AppView` 初始化字段漂移。 |
+| 带真实模型的原生 TUI E2E | PENDING | 尚未手工验证 spawn/progress/child view/finish/cancel/resume/replay；不得将静态通过视为运行时验收。 |
+
 ## 已执行结果
 
 | 验证层 | 结果 | 说明 |

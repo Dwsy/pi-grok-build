@@ -35,23 +35,23 @@
     },
     "uploaded_grok_tree_is_byte_identical_outside_declared_seams": {
       "passed": false,
-      "detail": "missing=[]; mismatched=['.gitignore', 'README.md', 'crates/build/xai-proto-build/src/lib.rs', 'crates/codegen/xai-grok-pager/README.md', 'crates/codegen/xai-grok-pager/docs/custom-hooks.md', 'crates/codegen/xai-grok-pager/docs/hooks-and-plugins.md', 'crates/codegen/xai-grok-pager/docs/user-guide/03-keyboard-shortcuts.md', 'crates/codegen/xai-grok-pager/docs/user-guide/07-mcp-servers.md', 'crates/codegen/xai-grok-pager/docs/user-guide/09-plugins.md', 'crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md']; unexpected additions=['.github/workflows/release.yml', 'AGENTS.md', 'FEATURE_MATRIX.md', 'NATIVE_GROK_TUI_ALIGNMENT.md', 'README.zh-CN.md', 'VERIFICATION.md', 'build.sh', 'crates/codegen/xai-grok-pager-render/assets/pi-themes/dark.json', 'crates/codegen/xai-grok-pager-render/assets/pi-themes/light.json', 'crates/codegen/xai-grok-pager-render/src/theme/pi/color.rs']"
+      "detail": "missing=['crates/codegen/xai-grok-pager/src/views/settings_modal.rs', 'crates/codegen/xai-grok-shell/tests/signed_managed_config.rs', 'crates/codegen/xai-grok-shell/tests/signed_managed_config/common.rs', 'crates/codegen/xai-grok-shell/tests/signed_managed_config_extended.rs']; mismatched=['.gitignore', 'README.md', 'crates/build/xai-proto-build/src/lib.rs', 'crates/codegen/xai-crash-handler/src/handler.rs', 'crates/codegen/xai-crash-handler/src/lib.rs', 'crates/codegen/xai-fast-worktree/src/api.rs', 'crates/codegen/xai-fast-worktree/src/discovery.rs', 'crates/codegen/xai-grok-agent/src/plugins/git_install.rs', 'crates/codegen/xai-grok-agent/src/plugins/install_registry.rs', 'crates/codegen/xai-grok-agent/src/plugins/local_refresh.rs']; unexpected additions=['.github/workflows/release.yml', 'AGENTS.md', 'CHANGELOG.MD', 'FEATURE_MATRIX.md', 'NATIVE_GROK_TUI_ALIGNMENT.md', 'README.zh-CN.md', 'SOURCE_REV', 'VERIFICATION.md', 'build.sh', 'crates/codegen/xai-grok-config/src/managed_cache/claim_tests.rs']"
     },
     "native_renderer_input_markdown_hashes_match": {
       "passed": false,
-      "detail": "renderer mismatches: ['crates/codegen/xai-grok-pager/src/app/agent_view/mod.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/notices.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/prompt.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/queue.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/render.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/session.rs', 'crates/codegen/xai-grok-pager/src/slash/commands/model.rs', 'crates/codegen/xai-grok-pager/src/slash/commands/theme.rs', 'crates/codegen/xai-grok-pager/src/slash/matcher.rs', 'crates/codegen/xai-grok-pager/src/views/agent.rs', 'crates/codegen/xai-grok-pager/src/views/agent_status.rs', 'crates/codegen/xai-grok-pager/src/views/dashboard/state.rs', 'crates/codegen/xai-grok-pager/src/views/session_picker.rs']"
+      "detail": "renderer mismatches: ['crates/codegen/xai-grok-pager-minimal/Cargo.toml', 'crates/codegen/xai-grok-pager-minimal/src/auth.rs', 'crates/codegen/xai-grok-pager-minimal/src/live.rs', 'crates/codegen/xai-grok-pager-minimal/src/overlay.rs', 'crates/codegen/xai-grok-pager-minimal/src/panel.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/interactions.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/links.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/media.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/mod.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/modals.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/notices.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/panes.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/paste.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/prompt.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/queue.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/render.rs', 'crates/codegen/xai-grok-pager/src/app/agent_view/session.rs', 'crates/codegen/xai-grok-pager/src/minimal/api.rs', 'crates/codegen/xai-grok-pager/src/scrollback/blocks/tool/edit.rs', 'crates/codegen/xai-grok-pager/src/scrollback/blocks/tool/read.rs']"
     },
     "modified_surface_is_exact_and_semantic": {
       "passed": true,
-      "detail": "exactly 21 workspace/ACP/state/dispatch/slash/logo seams are declared; no second TUI or broad renderer rewrite"
+      "detail": "exactly 27 workspace/ACP/state/dispatch/slash/logo seams are declared; no second TUI or broad renderer rewrite"
     },
     "no_fallback_or_old_custom_tui": {
       "passed": true,
       "detail": "no fallback acknowledgement, old pi-grok-tui crate, or custom renderer remains"
     },
     "slash_surface_uses_grok_native_commands_and_pi_catalog": {
-      "passed": true,
-      "detail": "retained 21 existing Grok UI or ACP-backed commands; no adapter-specific slash UI",
+      "passed": false,
+      "detail": "builtins=['exit', 'help', 'new', 'compact', 'model', 'effort', 'rename', 'resume', 'tree', 'dashboard', 'copy', 'find', 'transcript', 'export', 'expand', 'queue', 'multiline', 'compact-mode', 'vim-mode', 'theme', 'timestamps', 'toggle-mouse-reporting']; forbidden local commands=['tree']",
       "evidence": [
         "exit",
         "help",
@@ -61,6 +61,7 @@
         "effort",
         "rename",
         "resume",
+        "tree",
         "dashboard",
         "copy",
         "find",
