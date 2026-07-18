@@ -665,6 +665,10 @@ pub fn current_value_for(
                 ui.fork_secondary_model.clone()
             }
         })),
+        // session_recap: None → on (default).
+        "session_recap" => Some(SettingValue::Bool(ui.session_recap.unwrap_or(true))),
+        // recap_model: empty = use active session model.
+        "recap_model" => Some(SettingValue::String(ui.recap_model.clone())),
 
         _ => None,
     }
@@ -1098,6 +1102,23 @@ mod tests {
                         xai_grok_shell::models::default_model(),
                         "UiConfig::default().fork_secondary_model must equal \
                          models::default_model() — drift here breaks the empty-fold contract",
+                    );
+                }
+                ("session_recap", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default,
+                        ui.session_recap.unwrap_or(true),
+                        "session_recap default drifts from UiConfig::default()",
+                    );
+                }
+                ("recap_model", SettingKind::DynamicEnum { default, .. }) => {
+                    assert_eq!(
+                        *default, "",
+                        "recap_model registry default must be empty string (session model)",
+                    );
+                    assert!(
+                        ui.recap_model.is_empty(),
+                        "UiConfig::default().recap_model must be empty",
                     );
                 }
 

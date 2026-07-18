@@ -242,7 +242,7 @@ impl WorktreeMode {
 use super::PagerTerminal;
 use super::actions::Action;
 use super::agent::AgentId;
-use super::agent_view::{AgentView, McpInitProgress};
+use super::agent_view::{AgentView, McpInitProgress, PromptInputMode};
 use super::bundle::BundleState;
 /// Which view is currently displayed.
 ///
@@ -555,6 +555,8 @@ impl PendingAction {
 /// Cap for the `GROK_ESC_DOUBLE_PRESS_MS` override; the pty_e2e suite sets
 /// exactly this value.
 pub const ESC_DOUBLE_PRESS_TEST_MS: u64 = 60_000;
+/// Pi interactive mode uses a fixed 500ms interval for double Escape.
+const PI_DOUBLE_ESC_TTL: Duration = Duration::from_millis(500);
 /// Idle-Esc double-press confirm window, `GROK_ESC_DOUBLE_PRESS_MS`-overridable
 /// (read once, bounded). Test seam: a loaded pty_e2e shard's render round-trip
 /// between the two presses can outlast the 800ms default and expire the arm.
@@ -2702,13 +2704,40 @@ impl AppView {
                     return outcome;
                 }
                 let prompt_paging = !overlay_active && !self.screen_mode.is_minimal();
+                let pi_double_esc = self.external_agent
+                    && key_event
+                        .is_some_and(|key| key.code == KeyCode::Esc && key.modifiers.is_empty())
+                    && self.agents.get(&id).is_some_and(|agent| {
+                        agent.session.state.is_idle()
+                            && agent.prompt_input_mode == PromptInputMode::Normal
+                            && agent.prompt.images.is_empty()
+                            && agent.is_empty_focused_prompt()
+                    });
                 match self.agents.get_mut(&id) {
                     Some(agent) => {
-                        let outcome = if prompt_paging {
+                        let mut outcome = if prompt_paging {
                             agent.handle_input_with_prompt_paging(ev, &self.registry)
                         } else {
                             agent.handle_input(ev, &self.registry)
                         };
+                        if pi_double_esc
+                            && matches!(
+                                &outcome,
+                                InputOutcome::Changed
+                                    | InputOutcome::ArmPending {
+                                        action: Action::RewindShowPicker,
+                                        ..
+                                    }
+                            )
+                            && let Some(key) = key_event
+                        {
+                            outcome = InputOutcome::ArmPending {
+                                action: Action::ShowSessionTree,
+                                shortcut: KeyShortcut::from(*key),
+                                label: None,
+                                ttl: PI_DOUBLE_ESC_TTL,
+                            };
+                        }
                         if let Event::Key(key) = ev {
                             agent.record_input(key, &outcome);
                         }
@@ -8012,6 +8041,55 @@ pub(crate) mod tests {
         assert!(matches!(
             outcome,
             InputOutcome::Action(Action::RewindShowPicker)
+        ));
+        assert!(app.pending_action.is_none());
+    }
+    #[test]
+    fn external_idle_empty_double_esc_opens_session_tree() {
+        let mut app = test_app_with_agent();
+        let id = super::super::agent::AgentId(0);
+        app.external_agent = true;
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.active_pane = crate::views::agent::ActivePane::Prompt;
+        agent
+            .scrollback
+            .push_block(crate::scrollback::block::RenderBlock::user_prompt(
+                "earlier",
+            ));
+
+        let outcome = app.handle_input(&key_event(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(outcome, InputOutcome::Changed));
+        let pending = app.pending_action.as_ref().expect("arm session tree");
+        assert!(pending.label.is_none());
+        assert!(matches!(pending.action, Action::ShowSessionTree));
+
+        let outcome = app.handle_input(&key_event(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(
+            outcome,
+            InputOutcome::Action(Action::ShowSessionTree)
+        ));
+        assert!(app.pending_action.is_none());
+    }
+    #[test]
+    fn external_idle_empty_without_messages_double_esc_opens_session_tree() {
+        let mut app = test_app_with_agent();
+        let id = super::super::agent::AgentId(0);
+        app.external_agent = true;
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.active_pane = crate::views::agent::ActivePane::Prompt;
+        assert!(agent.scrollback.is_empty());
+
+        let outcome = app.handle_input(&key_event(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(outcome, InputOutcome::Changed));
+        assert!(matches!(
+            app.pending_action.as_ref().expect("arm session tree").action,
+            Action::ShowSessionTree
+        ));
+
+        let outcome = app.handle_input(&key_event(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(
+            outcome,
+            InputOutcome::Action(Action::ShowSessionTree)
         ));
         assert!(app.pending_action.is_none());
     }

@@ -10,6 +10,15 @@ pub struct UiConfig {
     /// Model ID to use for the secondary agent when forking.
     /// Defaults to the main default model (from default_models.json).
     pub fork_secondary_model: String,
+    /// Optional model for display-only session recap (`/recap` + auto away recap).
+    /// Empty string = use the active session model. Written by F2 settings.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub recap_model: String,
+    /// Auto session-recap when returning from away. `None` = on (default).
+    /// Manual `/recap` still follows agent capability (`sessionRecap`); this only
+    /// gates the automatic return-from-away path. Written by F2 settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_recap: Option<bool>,
     /// YOLO mode. Read by `util::config`, declared here for `serde_ignored`.
     #[serde(default)]
     pub yolo: bool,
@@ -235,6 +244,8 @@ impl Default for UiConfig {
             max_thoughts_width: DEFAULT_MAX_THOUGHTS_WIDTH,
             theme: None,
             fork_secondary_model: xai_grok_models::default_model().to_string(),
+            recap_model: String::new(),
+            session_recap: None,
             yolo: false,
             ui_theme: None,
             compact_mode: false,

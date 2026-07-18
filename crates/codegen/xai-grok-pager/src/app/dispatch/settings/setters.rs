@@ -1901,6 +1901,92 @@ pub(in crate::app::dispatch) fn clear_fork_secondary_model(app: &mut AppView) ->
     }]
 }
 
+/// State-only mutation for `recap_model`.
+pub(super) fn set_recap_model_inner(app: &mut AppView, value: String) {
+    app.current_ui.recap_model = value;
+}
+
+fn save_recap_model_toast(value: &str) -> String {
+    format!("\u{2713} Recap model: {value}")
+}
+
+/// Outer dispatcher for `Action::SetRecapModel`.
+pub(in crate::app::dispatch) fn set_recap_model(
+    app: &mut AppView,
+    new_id: acp::ModelId,
+) -> Vec<Effect> {
+    let ActiveView::Agent(aid) = app.active_view else {
+        return vec![];
+    };
+    let (new_display, available_has_new) = {
+        let Some(agent) = app.agents.get(&aid) else {
+            return vec![];
+        };
+        let display = agent.session.models.display_name_for(&new_id);
+        let has = agent.session.models.available.contains_key(&new_id);
+        (display, has)
+    };
+    if !available_has_new {
+        return vec![];
+    }
+    let new_id_str = new_id.0.to_string();
+    let prev_id_str = app.current_ui.recap_model.clone();
+    if prev_id_str == new_id_str {
+        return vec![];
+    }
+    set_recap_model_inner(app, new_id_str.clone());
+    refresh_open_settings_modals(app);
+    app.show_toast(&save_recap_model_toast(&new_display));
+    vec![Effect::PersistSetting {
+        key: "recap_model",
+        value: crate::settings::SettingValue::String(new_id_str),
+        rollback_value: crate::settings::SettingValue::String(prev_id_str),
+    }]
+}
+
+/// Outer dispatcher for `Action::ClearRecapModel`.
+pub(in crate::app::dispatch) fn clear_recap_model(app: &mut AppView) -> Vec<Effect> {
+    let prev_id_str = app.current_ui.recap_model.clone();
+    if prev_id_str.is_empty() {
+        app.show_toast("\u{2713} Recap model: already using session model");
+        return vec![];
+    }
+    set_recap_model_inner(app, String::new());
+    refresh_open_settings_modals(app);
+    app.show_toast("\u{2713} Recap model: cleared");
+    vec![Effect::PersistSetting {
+        key: "recap_model",
+        value: crate::settings::SettingValue::String(String::new()),
+        rollback_value: crate::settings::SettingValue::String(prev_id_str),
+    }]
+}
+
+/// State-only mutation for auto session-recap toggle.
+pub(super) fn set_session_recap_inner(app: &mut AppView, enabled: bool) {
+    app.current_ui.session_recap = Some(enabled);
+    app.notification_service.set_session_recap(enabled);
+}
+
+/// Outer dispatcher for `Action::SetSessionRecap`.
+pub(in crate::app::dispatch) fn set_session_recap(app: &mut AppView, enabled: bool) -> Vec<Effect> {
+    let prev = app.current_ui.session_recap.unwrap_or(true);
+    if prev == enabled {
+        return vec![];
+    }
+    set_session_recap_inner(app, enabled);
+    refresh_open_settings_modals(app);
+    app.show_toast(if enabled {
+        "\u{2713} Session recap: on"
+    } else {
+        "\u{2713} Session recap: off"
+    });
+    vec![Effect::PersistSetting {
+        key: "session_recap",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(prev),
+    }]
+}
+
 // `web_search_model`, `session_summary_model`, and
 // `default_reasoning_effort` setters were removed alongside their
 // registry entries. Mirror fields and TOML schema stay for compat.

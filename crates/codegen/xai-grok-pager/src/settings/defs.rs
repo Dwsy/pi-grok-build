@@ -1527,5 +1527,50 @@ pub fn default_settings() -> Vec<SettingMeta> {
             restart_required: false,
             hidden_in_minimal: false,
         },
+        // Session recap (auto away-recap + /recap model override).
+        // Auto toggle lives on `[ui].session_recap` (mirrors notification opt-in).
+        SettingMeta {
+            key: "session_recap",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Session recap",
+            description: "Show an automatic \"where was I\" recap when you return after being away. \
+Manual /recap still works when the agent advertises sessionRecap.",
+            keywords: &[
+                "recap",
+                "session",
+                "summary",
+                "away",
+                "return",
+                "auto",
+            ],
+            kind: SettingKind::Bool {
+                default: ui_default.session_recap.unwrap_or(true),
+            },
+            restart_required: false,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "recap_model",
+            category: SettingCategory::Models,
+            owner: SettingOwner::Shell,
+            label: "Recap model",
+            description: "Model used for session recap (/recap and auto away-recap). \
+Pick `(no override)` to use the active session model.",
+            keywords: &[
+                "recap",
+                "model",
+                "summary",
+                "session",
+                "models",
+            ],
+            kind: SettingKind::DynamicEnum {
+                default: "",
+                source: DynamicEnumSource::ActiveModelCatalog,
+                supports_preview: false,
+            },
+            restart_required: false,
+            hidden_in_minimal: false,
+        },
     ]
 }

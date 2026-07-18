@@ -6,6 +6,7 @@ use super::setters::{
     set_compact_mode, set_compact_mode_inner, set_contextual_hint_inner, set_default_model_inner,
     set_default_selected_permission_inner, set_display_refresh_auto_cadence_inner,
     set_fork_secondary_model_inner, set_group_tool_verbs_inner, set_hunk_tracker_mode_inner,
+    set_recap_model_inner, set_session_recap_inner,
     set_invert_scroll_inner, set_keep_text_selection_inner, set_max_thoughts_width_inner,
     set_multiline_mode, set_prompt_suggestions_inner, set_remember_tool_approvals_inner,
     set_render_mermaid_inner, set_respect_manual_folds_inner, set_screen_mode_inner,
@@ -713,6 +714,7 @@ pub(in crate::app::dispatch) fn action_for_reset(
             crate::appearance::RenderMermaid::from_canonical(s).map(Action::SetRenderMermaid)
         }
         ("vim_mode", SettingValue::Bool(b)) => Some(Action::SetVimMode(*b)),
+        ("session_recap", SettingValue::Bool(b)) => Some(Action::SetSessionRecap(*b)),
         ("remember_tool_approvals", SettingValue::Bool(b)) => {
             Some(Action::SetRememberToolApprovals(*b))
         }
@@ -844,6 +846,19 @@ pub(in crate::app::dispatch) fn action_for_reset(
                     target: "settings",
                     value = %s,
                     "action_for_reset(fork_secondary_model) received non-empty default — \
+                     registry/dispatch skew (default should be empty string)",
+                );
+                None
+            }
+        }
+        ("recap_model", SettingValue::String(s)) => {
+            if s.is_empty() {
+                Some(Action::ClearRecapModel)
+            } else {
+                tracing::error!(
+                    target: "settings",
+                    value = %s,
+                    "action_for_reset(recap_model) received non-empty default — \
                      registry/dispatch skew (default should be empty string)",
                 );
                 None
@@ -1122,6 +1137,12 @@ pub(in crate::app::dispatch) fn apply_setting_rollback(
                 s.clone()
             };
             set_fork_secondary_model_inner(app, restored);
+        }
+        ("recap_model", SettingValue::String(s)) => {
+            set_recap_model_inner(app, s.clone());
+        }
+        ("session_recap", SettingValue::Bool(b)) => {
+            set_session_recap_inner(app, *b);
         }
 
         _ => {

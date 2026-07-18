@@ -71,6 +71,11 @@ impl NotificationService {
         &self.config
     }
 
+    /// Live-update the auto session-recap toggle (F2 settings).
+    pub fn set_session_recap(&mut self, enabled: bool) {
+        self.config.session_recap = enabled;
+    }
+
     pub fn protocol(&self) -> protocol::NotificationProtocol {
         self.protocol
     }

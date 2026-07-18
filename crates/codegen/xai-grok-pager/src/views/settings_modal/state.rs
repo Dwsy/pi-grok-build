@@ -678,6 +678,7 @@ pub(super) fn action_for_bool(key: SettingKey, new: bool) -> Option<Action> {
         "contextual_hints.ssh_wrap" => Some(Action::SetContextualHintSshWrap(new)),
         "multiline_mode" => Some(Action::SetMultilineMode(new)),
         "vim_mode" => Some(Action::SetVimMode(new)),
+        "session_recap" => Some(Action::SetSessionRecap(new)),
         "remember_tool_approvals" => Some(Action::SetRememberToolApprovals(new)),
         "toolset.ask_user_question.timeout_enabled" => {
             Some(Action::SetAskUserQuestionTimeoutEnabled(new))
@@ -796,6 +797,15 @@ pub(super) fn action_for_string(
                 snapshot
                     .resolve_model_name(&value)
                     .map(Action::SetForkSecondaryModel)
+            }
+        }
+        "recap_model" => {
+            if value.is_empty() {
+                Some(Action::ClearRecapModel)
+            } else {
+                snapshot
+                    .resolve_model_name(&value)
+                    .map(Action::SetRecapModel)
             }
         }
 

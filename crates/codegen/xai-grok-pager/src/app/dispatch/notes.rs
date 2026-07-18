@@ -407,7 +407,20 @@ pub(super) fn dispatch_send_recap(app: &mut AppView, auto: bool) -> Vec<Effect> 
             .note_auto_recap_attempt();
     }
 
-    vec![Effect::SendRecap { session_id, auto }]
+    let model = {
+        let raw = app.current_ui.recap_model.trim();
+        if raw.is_empty() {
+            None
+        } else {
+            Some(raw.to_string())
+        }
+    };
+
+    vec![Effect::SendRecap {
+        session_id,
+        auto,
+        model,
+    }]
 }
 
 // TaskResult handlers.

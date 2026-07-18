@@ -1120,6 +1120,22 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "recap_model" => {
+            let SettingValue::String(s) = value else {
+                return Err(kind_mismatch("recap_model", "String", &value));
+            };
+            xai_grok_shell::util::config::set_recap_model(s)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "session_recap" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("session_recap", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_session_recap(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
         other => Err(format!("unknown setting key for persist: `{other}`")),
     }
 }

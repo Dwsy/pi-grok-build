@@ -825,10 +825,13 @@ pub(crate) async fn run(
         };
 
     // Load notification config from [ui.notifications] in config.toml.
+    // Prefer explicit `[ui].session_recap` when set (F2 settings).
     if let Some(ref raw) = effective_config {
-        app.notification_service = crate::notifications::NotificationService::new(
-            crate::notifications::load_notification_config(raw),
-        );
+        let mut notif = crate::notifications::load_notification_config(raw);
+        if let Some(enabled) = app.current_ui.session_recap {
+            notif.session_recap = enabled;
+        }
+        app.notification_service = crate::notifications::NotificationService::new(notif);
         if let Some(table) = raw.as_table() {
             // Voice inherits the same resolved endpoints base as chat
             // (config > GROK_XAI_API_BASE_URL env > default).
@@ -1280,8 +1283,8 @@ pub(crate) async fn run(
     // heavy lifting (the model call) only fires once per away period via
     // `should_pregenerate_away_recap`.
     const RECAP_POLL_INTERVAL: Duration = Duration::from_secs(20);
-    let mut recap_poll_at: Option<Instant> = (!external_agent)
-        .then(|| Instant::now() + RECAP_POLL_INTERVAL);
+    // grok-pi (external agent) also supports recap via injected Pi extension.
+    let mut recap_poll_at: Option<Instant> = Some(Instant::now() + RECAP_POLL_INTERVAL);
 
     // Seed the folder-trust verdict BEFORE the first render and before any
     // session is created (no repo-local MCP/LSP/hooks/plugins have loaded yet).

@@ -3571,17 +3571,24 @@ pub(crate) fn execute(
                     }
                 });
         }
-        Effect::SendRecap { session_id, auto } => {
+        Effect::SendRecap {
+            session_id,
+            auto,
+            model,
+        } => {
             let tx = acp_tx.clone();
             tasks
                 .spawn(async move {
+                    let mut params = serde_json::json!({
+                        "sessionId": session_id.0.to_string(),
+                        "auto": auto,
+                    });
+                    if let Some(model) = model.filter(|m| !m.trim().is_empty()) {
+                        params["model"] = serde_json::Value::String(model);
+                    }
                     let request = acp::ExtRequest::new(
                         "x.ai/recap",
-                        serde_json::value::to_raw_value(
-                                &serde_json::json!(
-                                    { "sessionId" : session_id.0.to_string(), "auto" : auto, }
-                                ),
-                            )
+                        serde_json::value::to_raw_value(&params)
                             .expect("serialize recap params")
                             .into(),
                     );

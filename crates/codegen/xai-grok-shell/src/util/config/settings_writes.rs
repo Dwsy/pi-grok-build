@@ -130,6 +130,31 @@ pub async fn set_fork_secondary_model(value: String) -> Result<()> {
     .await
 }
 
+/// Persist `[ui].recap_model` via `update_config`.
+///
+/// Empty string clears the override (use active session model).
+pub async fn set_recap_model(value: String) -> Result<()> {
+    if value.len() > MAX_DEFAULT_MODEL_LEN {
+        anyhow::bail!(
+            "recap_model name too long ({} > {} bytes)",
+            value.len(),
+            MAX_DEFAULT_MODEL_LEN
+        );
+    }
+    update_config(|cfg| {
+        cfg.ui.recap_model = value;
+    })
+    .await
+}
+
+/// Persist `[ui].session_recap` (auto return-from-away recap toggle).
+pub async fn set_session_recap(value: bool) -> Result<()> {
+    update_config(|cfg| {
+        cfg.ui.session_recap = Some(value);
+    })
+    .await
+}
+
 /// Bounds for [`set_max_thoughts_width`]. Mirrored from the pager's
 /// registry consts; a CI test pins the agreement.
 const MAX_THOUGHTS_WIDTH_SHELL_MIN: i64 = 40;

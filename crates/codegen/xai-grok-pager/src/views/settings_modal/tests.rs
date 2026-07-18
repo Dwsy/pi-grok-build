@@ -435,6 +435,16 @@ fn every_dynamic_enum_setting_has_action_for_string_arm() {
                      SetForkSecondaryModel(_), got {nonempty_action:?}",
                 );
             }
+            "recap_model" => {
+                assert!(
+                    matches!(empty_action, Some(Action::ClearRecapModel)),
+                    "recap_model empty canonical must produce ClearRecapModel, got {empty_action:?}",
+                );
+                assert!(
+                    matches!(nonempty_action, Some(Action::SetRecapModel(_))),
+                    "recap_model non-empty canonical must produce SetRecapModel(_), got {nonempty_action:?}",
+                );
+            }
             other => panic!(
                 "Unknown DynamicEnum key `{other}` — add a discriminating arm in \
                  every_dynamic_enum_setting_has_action_for_string_arm so future \
@@ -674,6 +684,9 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             // `web_search_model`, and `session_summary_model` are
             // not exposed in the modal.
             "fork_secondary_model",
+            "recap_model",
+            // Agent category: auto session-recap toggle.
+            "session_recap",
             // `auto_compact_threshold_percent` (Session category) is
             // not exposed in the modal.
             // Advanced category.

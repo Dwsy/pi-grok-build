@@ -639,6 +639,13 @@ pub enum Action {
     /// Clear the persisted fork-secondary model — restores to built-in
     /// default. Active agent keeps its value; next fork uses the default.
     ClearForkSecondaryModel,
+    /// Commit the recap model override. Empty-clear via ClearRecapModel.
+    /// Persisted to `[ui].recap_model`.
+    SetRecapModel(acp::ModelId),
+    /// Clear recap model override (use active session model).
+    ClearRecapModel,
+    /// Commit auto session-recap toggle (`[ui].session_recap`).
+    SetSessionRecap(bool),
     /// Commit the `show_tips` preference. Persisted to `[cli].show_tips`.
     /// Restart-required — tips are resolved once at startup.
     SetShowTips(bool),
@@ -1978,6 +1985,8 @@ pub enum Effect {
     SendRecap {
         session_id: acp::SessionId,
         auto: bool,
+        /// Optional model override (`provider/id` or bare id). Empty = session model.
+        model: Option<String>,
     },
     /// Send a mid-turn interjection via x.ai/interject ext method.
     SendInterject {

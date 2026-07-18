@@ -1780,13 +1780,23 @@ impl AgentView {
                     "theme" | "t" => "Pick theme",
                     _ => "Pick option",
                 };
+                // Model list rows are Pi-style `id [provider]` only. Metadata for
+                // the hovered/selected model is rendered in a bottom detail pane
+                // (pi-model-selector-x), not as a right-column label.
+                let is_model_list = matches!(command.as_str(), "model" | "m")
+                    && args_query.is_empty();
+                let empty_right = "";
                 let picker_entries: Vec<PickerEntry> = items
                     .iter()
                     .enumerate()
                     .map(|(i, item)| {
                         PickerEntry::Row(PickerRow {
                             label: &item.display,
-                            right_label: &item.description,
+                            right_label: if is_model_list {
+                                empty_right
+                            } else {
+                                &item.description
+                            },
                             selected: state.hovered == Some(i)
                                 || (state.hovered.is_none() && i == state.selected),
                             expanded: false,
@@ -1812,10 +1822,17 @@ impl AgentView {
                     tabs: None,
                     shortcuts: &picker_shortcuts,
                     sizing: ModalSizing {
-                        width_pct: 0.50,
-                        max_width: 80,
+                        width_pct: if is_model_list { 0.55 } else { 0.50 },
+                        max_width: if is_model_list { 88 } else { 80 },
                         min_width: 44,
-                        v_margin: if is_model_picker { 8 } else { 4 },
+                        // Leave room for the bottom detail pane on the model list.
+                        v_margin: if is_model_list {
+                            4
+                        } else if is_model_picker {
+                            8
+                        } else {
+                            4
+                        },
                         h_pad: 2,
                         v_pad: 1,
                         footer_lines: 2,
@@ -1825,9 +1842,16 @@ impl AgentView {
                 };
                 if let Some(mca) = mw::render_modal_window(buf, area, window, &modal_config, &theme)
                 {
+                    let detail_lines = if is_model_list {
+                        selected_model_detail_lines(items, state, &self.session.models)
+                    } else {
+                        Vec::new()
+                    };
+                    let (list_area, detail_area) =
+                        split_model_picker_content(mca.content, detail_lines.len());
                     picker::render_picker_in_modal(
                         buf,
-                        mca.content,
+                        list_area,
                         mca.inner_x,
                         mca.inner_width,
                         &theme,
@@ -1836,6 +1860,9 @@ impl AgentView {
                         &[],
                         false,
                     );
+                    if let Some(detail_area) = detail_area {
+                        render_model_picker_detail(buf, detail_area, &detail_lines, &theme);
+                    }
                 }
             } else if let modal::ActiveModal::SessionTree { state, window } = active_modal {
                 use crate::views::session_tree::render_session_tree;
@@ -2658,6 +2685,88 @@ impl AgentView {
         }
     }
 
+}
+
+/// Split the model-list content area into list + bottom detail pane.
+fn split_model_picker_content(content: Rect, detail_line_count: usize) -> (Rect, Option<Rect>) {
+    if detail_line_count == 0 || content.height < 6 {
+        return (content, None);
+    }
+    // Separator row + detail lines (capped so the list keeps breathing room).
+    let detail_h = (detail_line_count as u16).saturating_add(1).min(5);
+    let max_detail = content.height.saturating_sub(4);
+    let detail_h = detail_h.min(max_detail);
+    if detail_h < 2 {
+        return (content, None);
+    }
+    let list = Rect {
+        height: content.height.saturating_sub(detail_h),
+        ..content
+    };
+    let detail = Rect {
+        y: content.y + list.height,
+        height: detail_h,
+        ..content
+    };
+    (list, Some(detail))
+}
+
+fn selected_model_detail_lines(
+    items: &[crate::slash::command::ArgItem],
+    state: &crate::views::picker::PickerState,
+    models: &crate::acp::model_state::ModelState,
+) -> Vec<String> {
+    use crate::slash::commands::model::{model_picker_detail_lines, resolve_model_for_arg_item};
+
+    let idx = state.hovered.unwrap_or(state.selected);
+    let Some(item) = items.get(idx) else {
+        return Vec::new();
+    };
+    let Some(id) = resolve_model_for_arg_item(models, item) else {
+        return Vec::new();
+    };
+    let Some(info) = models.available.get(&id) else {
+        return Vec::new();
+    };
+    model_picker_detail_lines(info)
+}
+
+fn render_model_picker_detail(
+    buf: &mut Buffer,
+    area: Rect,
+    lines: &[String],
+    theme: &Theme,
+) {
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line as TuiLine, Span};
+    use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+
+    if area.width == 0 || area.height == 0 || lines.is_empty() {
+        return;
+    }
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(theme.selection_border));
+    let inner = block.inner(area);
+    block.render(area, buf);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let mut tui_lines = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let style = if i == 0 {
+            Style::default()
+                .fg(theme.accent_user)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.text_secondary)
+        };
+        tui_lines.push(TuiLine::from(Span::styled(format!("  {line}"), style)));
+    }
+    Paragraph::new(tui_lines)
+        .wrap(Wrap { trim: false })
+        .render(inner, buf);
 }
 
 #[cfg(test)]
