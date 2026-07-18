@@ -5,7 +5,8 @@ use std::ops::Range;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 
 use crate::theme::Theme;
 
@@ -129,6 +130,76 @@ impl TimelineRail {
             .then(|| (row - self.ticks_y) as usize)
             .filter(|relative| *relative < self.window.len())
             .map(|relative| TimelineHit::Tick(self.window.start + relative))
+    }
+}
+
+pub fn render_tick_hover_popup(
+    buf: &mut Buffer,
+    rail: &TimelineRail,
+    scrollback_area: Rect,
+    turn_idx: usize,
+    preview: &str,
+    theme: &Theme,
+) {
+    if !rail.window.contains(&turn_idx) {
+        return;
+    }
+    let max_text = ((scrollback_area.width / 2).clamp(16, 32)) as usize;
+    let mut lines = Vec::new();
+    let mut rest = preview.trim();
+    while !rest.is_empty() && lines.len() < 2 {
+        if lines.len() == 1 {
+            lines.push(crate::render::line_utils::truncate_str(rest, max_text));
+            break;
+        }
+        let end = crate::render::line_utils::byte_offset_at_width(rest, max_text);
+        lines.push(rest[..end].to_string());
+        rest = rest[end..].trim_start();
+    }
+    if lines.is_empty() {
+        return;
+    }
+    let text_width = lines
+        .iter()
+        .map(|line| unicode_width::UnicodeWidthStr::width(line.as_str()))
+        .max()
+        .unwrap_or_default() as u16;
+    let card_height = lines.len() as u16 + 2;
+    if card_height > scrollback_area.height {
+        return;
+    }
+    let tick_y = rail.ticks_y + (turn_idx - rail.window.start) as u16;
+    let card_area = Rect::new(
+        rail.rect
+            .x
+            .saturating_sub(text_width + 5)
+            .max(scrollback_area.x),
+        tick_y
+            .saturating_sub(card_height / 2)
+            .max(scrollback_area.y)
+            .min((scrollback_area.y + scrollback_area.height).saturating_sub(card_height)),
+        text_width + 4,
+        card_height,
+    );
+    let background = theme.bg_base;
+    Clear.render(card_area, buf);
+    buf.set_style(card_area, Style::default().bg(background));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.gray).bg(background));
+    let inner = block.inner(card_area);
+    block.render(card_area, buf);
+    for (index, line) in lines.into_iter().enumerate() {
+        buf.set_line(
+            inner.x + 1,
+            inner.y + index as u16,
+            &Line::from(Span::styled(
+                line,
+                Style::default().fg(theme.text_primary).bg(background),
+            )),
+            text_width,
+        );
     }
 }
 

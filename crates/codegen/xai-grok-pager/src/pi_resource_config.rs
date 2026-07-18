@@ -438,9 +438,7 @@ fn auto_resource_paths(
         .flat_map(|dir| match kind {
             PiResourceType::Extensions => auto_extension_paths(&dir),
             PiResourceType::Skills => discover_resource_path(&dir, kind),
-            PiResourceType::Prompts | PiResourceType::Themes => {
-                direct_resource_paths(&dir, kind)
-            }
+            PiResourceType::Prompts | PiResourceType::Themes => direct_resource_paths(&dir, kind),
         })
         .collect()
 }
@@ -1175,8 +1173,11 @@ mod tests {
         let package = extensions.join("example");
         fs::create_dir_all(package.join("src")).expect("package source directory");
         fs::write(package.join("index.ts"), "export default () => {}; ").expect("entry");
-        fs::write(package.join("src/internal.ts"), "export const internal = true;")
-            .expect("nested source");
+        fs::write(
+            package.join("src/internal.ts"),
+            "export const internal = true;",
+        )
+        .expect("nested source");
 
         assert_eq!(
             auto_extension_paths(&extensions),

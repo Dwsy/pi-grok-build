@@ -184,19 +184,12 @@ impl XaiProtoBuilder {
                 .map(|(_, rest)| rest)
                 .or_else(|| {
                     let target = desc_path.to_str()?;
-                    first_line
-                        .strip_prefix(&format!("{target}:"))
-                        .or_else(|| {
-                            let alt = target.replace('\\', "/");
-                            first_line
-                                .strip_prefix(&format!("{alt}:"))
-                                .or_else(|| {
-                                    first_line.strip_prefix(&format!(
-                                        "{}:",
-                                        alt.replace('/', "\\")
-                                    ))
-                                })
+                    first_line.strip_prefix(&format!("{target}:")).or_else(|| {
+                        let alt = target.replace('\\', "/");
+                        first_line.strip_prefix(&format!("{alt}:")).or_else(|| {
+                            first_line.strip_prefix(&format!("{}:", alt.replace('/', "\\")))
                         })
+                    })
                 })
                 .with_context(|| {
                     format!("protoc dependency output missing target prefix: {output:?}")

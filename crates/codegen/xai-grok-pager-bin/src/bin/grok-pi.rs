@@ -8,6 +8,8 @@
 mod bash_extension;
 #[path = "grok_pi/cli.rs"]
 mod cli;
+#[path = "grok_pi/context_extension.rs"]
+mod context_extension;
 #[path = "grok_pi/recap_extension.rs"]
 mod recap_extension;
 #[path = "grok_pi/remote_tui_extension.rs"]
@@ -27,12 +29,13 @@ use tokio::task::LocalSet;
 use tokio_util::sync::CancellationToken;
 use xai_acp_lib::acp_channels;
 use xai_grok_pager::{
-    acp::{AcpConnection, ExternalLogoArt, ExternalUiProfile},
+    acp::{AcpConnection, ExternalLogoArt, ExternalUiProfile, ExternalWelcomeBrand},
     app::{ExternalRunConfig, PagerArgs, run_external},
 };
 
 use bash_extension::write_bash_extension;
 use cli::{Args, Command, normalize_compound_short_flags, pi_args_with_startup_flags};
+use context_extension::write_context_extension;
 use recap_extension::write_recap_extension;
 use remote_tui_extension::write_remote_tui_extension;
 use session_paths::pi_session_dir;
@@ -95,6 +98,7 @@ const PI_LOGO: &str = "\
 /// Product version for `grok-pi --version` (release tag / git describe).
 /// Not the upstream workspace crate version (`0.1.220-alpha.*`).
 const GROK_PI_VERSION: &str = env!("GROK_PI_VERSION");
+const PI_WELCOME_SUBTITLE: &str = "Pi agent core in Grok Build's native terminal UI";
 
 fn main() -> Result<()> {
     // Keep the exact production pager process hooks. In particular, Mermaid
@@ -127,12 +131,15 @@ fn main() -> Result<()> {
     }) = args.command
     {
         return runtime.block_on(async move {
-            xai_grok_update::run_pi_update(xai_grok_update::PiUpdateOptions {
-                check_only: check,
-                force,
-                version,
-                json,
-            })
+            xai_grok_update::run_pi_update(
+                GROK_PI_VERSION,
+                xai_grok_update::PiUpdateOptions {
+                    check_only: check,
+                    force,
+                    version,
+                    json,
+                },
+            )
             .await?;
             Ok(())
         });
@@ -167,6 +174,8 @@ async fn run(mut args: Args) -> Result<()> {
     let subagent_extension =
         write_subagent_extension().context("failed to create Pi subagent extension")?;
     let recap_extension = write_recap_extension().context("failed to create Pi recap extension")?;
+    let context_extension =
+        write_context_extension().context("failed to create Pi context breakdown extension")?;
     // Experimental Remote TUI — default ON. Disable with PI_GROK_REMOTE_TUI=0.
     let remote_tui_enabled = env_flag_default_on("PI_GROK_REMOTE_TUI");
     let remote_tui_extension = if remote_tui_enabled {
@@ -186,8 +195,16 @@ async fn run(mut args: Args) -> Result<()> {
         subagent_extension.path().to_string_lossy().into_owned(),
         "--extension".to_string(),
         recap_extension.path().to_string_lossy().into_owned(),
+        "--extension".to_string(),
+        context_extension
+            .source_path()
+            .to_string_lossy()
+            .into_owned(),
     ]);
-    if let Some(path) = bash_extension.as_ref().map(|extension| extension.source_path()) {
+    if let Some(path) = bash_extension
+        .as_ref()
+        .map(|extension| extension.source_path())
+    {
         pi_args.extend([
             "--extension".to_string(),
             path.to_string_lossy().into_owned(),
@@ -203,6 +220,13 @@ async fn run(mut args: Args) -> Result<()> {
     let mut env = vec![
         ("PI_GROK".to_string(), "1".to_string()),
         ("PI_GROK_SUBAGENTS".to_string(), "1".to_string()),
+        (
+            "PI_GROK_CONTEXT_BREAKDOWN".to_string(),
+            context_extension
+                .breakdown_path()
+                .to_string_lossy()
+                .into_owned(),
+        ),
     ];
     if let Some(extension) = bash_extension.as_ref() {
         env.push(("PI_GROK_BASH".to_string(), "1".to_string()));
@@ -234,11 +258,13 @@ async fn run(mut args: Args) -> Result<()> {
     let bash_control_meta = bash_extension
         .as_ref()
         .map(|extension| extension.control_meta_path().to_path_buf());
+    let context_breakdown = context_extension.breakdown_path().to_path_buf();
     // Hold the NamedTempFiles so the extension paths remain valid.
     let _navigate_tree_extension = navigate_tree_extension;
     let _bash_extension = bash_extension;
     let _subagent_extension = subagent_extension;
     let _recap_extension = recap_extension;
+    let _context_extension = context_extension;
     let _remote_tui_extension = remote_tui_extension;
     let bootstrap = PiBootstrap::load(&process.rpc)
         .await
@@ -259,6 +285,7 @@ async fn run(mut args: Args) -> Result<()> {
         bootstrap,
         pi_session_dir,
         bash_control_meta,
+        Some(context_breakdown),
     ));
 
     let event_adapter = adapter.clone();
@@ -295,6 +322,11 @@ async fn run(mut args: Args) -> Result<()> {
                 full: PI_LOGO,
                 small: PI_LOGO,
             }),
+            welcome_brand: Some(ExternalWelcomeBrand {
+                title: "grok-pi",
+                subtitle: PI_WELCOME_SUBTITLE,
+                version: GROK_PI_VERSION,
+            }),
             // Grok worktree product flow is not wired for Pi yet.
             hide_new_worktree: true,
             changelog_url: Some("https://github.com/Dwsy/grok-pi/blob/main/CHANGELOG.MD"),
@@ -320,6 +352,7 @@ async fn run(mut args: Args) -> Result<()> {
         // Stock Grok lands on Welcome with logo unless --continue/--resume.
         // Only `-c/--continue` skips Welcome and attaches the Pi session now.
         resume_existing_session: args.continue_last_session,
+        product_version: GROK_PI_VERSION.to_string(),
     })
     .await
 }
@@ -376,7 +409,10 @@ mod env_flag_tests {
             unsafe {
                 std::env::set_var("PI_GROK_TEST_FLAG_DEFAULT_ON", value);
             }
-            assert!(!env_flag_default_on("PI_GROK_TEST_FLAG_DEFAULT_ON"), "{value}");
+            assert!(
+                !env_flag_default_on("PI_GROK_TEST_FLAG_DEFAULT_ON"),
+                "{value}"
+            );
         }
         unsafe {
             std::env::set_var("PI_GROK_TEST_FLAG_DEFAULT_ON", "1");

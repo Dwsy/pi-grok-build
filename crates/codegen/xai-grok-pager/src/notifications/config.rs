@@ -14,10 +14,9 @@ pub struct NotificationConfig {
     /// session recap (`sessionRecap` on ACP initialize / remote settings). Manual
     /// `/recap` is gated by the shell flag alone, not this toggle.
     pub session_recap: bool,
-    /// Minimum seconds the terminal must be unfocused ("stepped away") before
-    /// the client requests an automatic recap. A short debounce against quick
-    /// tab blips; the authoritative timing ("≥3 min since the last completed
-    /// turn") is enforced agent-side.
+    /// Optional focus-loss debounce before the client requests an automatic
+    /// recap. The default is zero: eligibility is based on the completed-turn
+    /// age, while current terminal focus is only a boolean gate.
     pub session_recap_threshold_secs: u64,
     pub title: TitleConfig,
     pub hooks: Vec<NotificationHook>,
@@ -34,9 +33,9 @@ impl Default for NotificationConfig {
                 NotificationEventKind::ApprovalRequired,
             ],
             sleep_prevention: true,
-            progress_bar: true,
+            progress_bar: false,
             session_recap: true,
-            session_recap_threshold_secs: 30,
+            session_recap_threshold_secs: 0,
             title: TitleConfig::default(),
             hooks: Vec::new(),
         }
@@ -163,7 +162,7 @@ events = [\"turn_complete\", \"approval_required\"]
 # Prevent display sleep during agent turns (macOS/Linux).
 sleep_prevention = true
 # Show a progress indicator in the terminal tab (OSC 9;4).
-progress_bar = true
+progress_bar = false
 # Show an automatic \"where was I\" session recap when you return after being away.
 # Shell session_recap is on by default; disable via [features] session_recap or
 # GROK_SESSION_RECAP=0. Manual /recap uses only the shell flag.
@@ -241,9 +240,9 @@ mod tests {
             ]
         );
         assert!(parsed.sleep_prevention);
-        assert!(parsed.progress_bar);
+        assert!(!parsed.progress_bar);
         assert!(parsed.session_recap);
-        assert_eq!(parsed.session_recap_threshold_secs, 30);
+        assert_eq!(parsed.session_recap_threshold_secs, 0);
         assert!(parsed.title.enabled);
         assert!(parsed.hooks.is_empty());
     }
@@ -261,7 +260,7 @@ mod tests {
         // Rest should be defaults
         assert_eq!(parsed.condition, NotificationCondition::Unfocused);
         assert!(parsed.sleep_prevention);
-        assert!(parsed.progress_bar);
+        assert!(!parsed.progress_bar);
     }
 
     #[test]

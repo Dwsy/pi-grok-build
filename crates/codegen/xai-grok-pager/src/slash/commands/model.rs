@@ -45,7 +45,7 @@ impl SlashCommand for ModelCommand {
     }
 
     fn args_required(&self) -> bool {
-        true
+        false
     }
 
     fn arg_placeholder(&self) -> Option<&str> {
@@ -67,7 +67,7 @@ impl SlashCommand for ModelCommand {
     fn run(&self, ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
         let trimmed = args.trim();
         if trimmed.is_empty() {
-            return CommandResult::Error("Usage: /model <name> [effort]".into());
+            return CommandResult::Action(Action::OpenModelPicker);
         }
 
         // Prefer an exact full-string catalog match first. Model display names
@@ -189,6 +189,14 @@ fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
             // not as a right-column list label.
             description: String::new(),
         });
+    }
+    if let Some(current_id) = current_id {
+        if let Some(current_index) = items
+            .iter()
+            .position(|item| resolve_model_for_arg_item(models, item).as_ref() == Some(current_id))
+        {
+            items.swap(0, current_index);
+        }
     }
     items
 }
@@ -536,12 +544,23 @@ mod tests {
     }
 
     #[test]
+    fn bare_model_opens_picker() {
+        let models = ModelState::default();
+        let mut ctx = dummy_exec_ctx(&models);
+        assert!(matches!(
+            ModelCommand.run(&mut ctx, ""),
+            CommandResult::Action(Action::OpenModelPicker)
+        ));
+    }
+
+    #[test]
     fn empty_query_returns_one_row_per_logical_model() {
         let mut state = ModelState::default();
         let (rid, rinfo) = model_with_reasoning("reasoning-x", "Reasoning X");
         let (pid, pinfo) = plain_model("grok-4.5", "Grok 4.5");
         state.available.insert(rid, rinfo);
-        state.available.insert(pid, pinfo);
+        state.available.insert(pid.clone(), pinfo);
+        state.current = Some(pid);
 
         let cmd = ModelCommand;
         let ctx = AppCtx {
@@ -552,6 +571,7 @@ mod tests {
         };
         let items = cmd.suggest_args(&ctx, "").unwrap();
         assert_eq!(items.len(), 2, "model phase: one row per logical model");
+        assert!(items[0].display.contains("(current)"));
 
         // Reasoning model has trailing space in insert_text -- this is the
         // signal the prompt widget reads to keep the dropdown open after

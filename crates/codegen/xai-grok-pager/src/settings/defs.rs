@@ -1558,16 +1558,22 @@ pub fn default_settings() -> Vec<SettingMeta> {
             label: "Session recap",
             description: "Show an automatic \"where was I\" recap when you return after being away. \
 Manual /recap still works when the agent advertises sessionRecap.",
-            keywords: &[
-                "recap",
-                "session",
-                "summary",
-                "away",
-                "return",
-                "auto",
-            ],
+            keywords: &["recap", "session", "summary", "away", "return", "auto"],
             kind: SettingKind::Bool {
                 default: ui_default.session_recap.unwrap_or(true),
+            },
+            restart_required: false,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "progress_bar",
+            category: SettingCategory::Appearance,
+            owner: SettingOwner::Shell,
+            label: "Terminal tab progress",
+            description: "Show OSC 9;4 progress indicators in the terminal tab bar.",
+            keywords: &["progress", "terminal", "tab", "osc", "9;4", "indicator"],
+            kind: SettingKind::Bool {
+                default: ui_default.progress_bar.unwrap_or(false),
             },
             restart_required: false,
             hidden_in_minimal: false,
@@ -1577,15 +1583,9 @@ Manual /recap still works when the agent advertises sessionRecap.",
             category: SettingCategory::Models,
             owner: SettingOwner::Shell,
             label: "Recap model",
-            description: "Model used for session recap (/recap and auto away-recap). \
-Pick `(no override)` to use the active session model.",
-            keywords: &[
-                "recap",
-                "model",
-                "summary",
-                "session",
-                "models",
-            ],
+            description: "Model used exclusively for session recap (/recap and auto away-recap). \
+Choose a model to enable recap; `(no override)` disables recap generation.",
+            keywords: &["recap", "model", "summary", "session", "models"],
             kind: SettingKind::DynamicEnum {
                 default: "",
                 source: DynamicEnumSource::ActiveModelCatalog,

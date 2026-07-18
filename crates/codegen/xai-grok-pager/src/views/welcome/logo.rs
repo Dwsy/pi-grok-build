@@ -63,6 +63,13 @@ pub struct ExternalWelcomeMenu {
     pub changelog_url: Option<&'static str>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExternalWelcomeBrand {
+    pub title: &'static str,
+    pub subtitle: &'static str,
+    pub version: &'static str,
+}
+
 fn welcome_menu_cell() -> &'static RwLock<Option<ExternalWelcomeMenu>> {
     static CELL: OnceLock<RwLock<Option<ExternalWelcomeMenu>>> = OnceLock::new();
     CELL.get_or_init(|| RwLock::new(None))
@@ -80,6 +87,23 @@ pub fn welcome_menu_override() -> Option<ExternalWelcomeMenu> {
     *welcome_menu_cell()
         .read()
         .expect("welcome menu override lock poisoned")
+}
+
+fn welcome_brand_cell() -> &'static RwLock<Option<ExternalWelcomeBrand>> {
+    static CELL: OnceLock<RwLock<Option<ExternalWelcomeBrand>>> = OnceLock::new();
+    CELL.get_or_init(|| RwLock::new(None))
+}
+
+pub fn set_welcome_brand_override(brand: Option<ExternalWelcomeBrand>) {
+    *welcome_brand_cell()
+        .write()
+        .expect("welcome brand override lock poisoned") = brand;
+}
+
+pub fn welcome_brand_override() -> Option<ExternalWelcomeBrand> {
+    *welcome_brand_cell()
+        .read()
+        .expect("welcome brand override lock poisoned")
 }
 
 fn pick_logo(window_height: u16) -> Option<&'static str> {
@@ -487,5 +511,26 @@ mod tests {
         assert_eq!(logo_override(), Some(art));
         set_logo_override(None);
         assert_eq!(logo_override(), None);
+    }
+
+    #[test]
+    fn welcome_brand_override_round_trips() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                set_welcome_brand_override(None);
+            }
+        }
+        let _reset = Reset;
+
+        let brand = ExternalWelcomeBrand {
+            title: "grok-pi",
+            subtitle: "Pi agent core",
+            version: "0.0.5",
+        };
+        set_welcome_brand_override(Some(brand));
+        assert_eq!(welcome_brand_override(), Some(brand));
+        set_welcome_brand_override(None);
+        assert_eq!(welcome_brand_override(), None);
     }
 }

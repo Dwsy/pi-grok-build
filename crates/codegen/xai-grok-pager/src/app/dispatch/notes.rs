@@ -407,19 +407,21 @@ pub(super) fn dispatch_send_recap(app: &mut AppView, auto: bool) -> Vec<Effect> 
             .note_auto_recap_attempt();
     }
 
-    let model = {
-        let raw = app.current_ui.recap_model.trim();
-        if raw.is_empty() {
-            None
-        } else {
-            Some(raw.to_string())
+    let model = app.current_ui.recap_model.trim();
+    if model.is_empty() {
+        if !auto {
+            if let Some(pending_id) = agent.pending_recap_entry.take() {
+                agent.scrollback.remove_entry(pending_id);
+            }
+            agent.show_toast("Choose a recap model in F2 settings");
         }
-    };
+        return vec![];
+    }
 
     vec![Effect::SendRecap {
         session_id,
         auto,
-        model,
+        model: Some(model.to_string()),
     }]
 }
 

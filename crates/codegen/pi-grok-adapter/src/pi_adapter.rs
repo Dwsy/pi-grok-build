@@ -5,18 +5,19 @@ use crate::{
     },
     context_projection::{
         build_session_info_response, context_tokens_from_stats, context_tokens_from_usage,
-        entries_to_messages_value,
+        entries_to_messages_value, parse_context_breakdown,
     },
     model::{
         PiCommand, PiHistoryItem, PiModel, PiSessionSwitch, PiSessionTree, PiState, PiToolContent,
-        extract_delta, json_text, parse_commands, parse_messages, parse_models, parse_session_switch,
-        parse_session_tree, parse_state, scan_local_sessions, scan_local_sessions_for_cwd, string,
+        extract_delta, json_text, parse_commands, parse_messages, parse_models,
+        parse_session_switch, parse_session_tree, parse_state, scan_local_sessions,
+        scan_local_sessions_for_cwd, string,
     },
+    pi_rpc::PiRpc,
     prompt_bridge::{
         direct_bash_command, format_bash_result, prompt_response, prompt_streaming_behavior,
         prompt_to_pi, queue_lane_for_behavior,
     },
-    pi_rpc::PiRpc,
     queue_bridge::{QueueLane, QueueMirror, queue_changed_params, string_list},
     recap_bridge::{parse_recap_message, session_recap_notification},
     subagent_projection::{BridgeOperation, bridge_parent_session_id, parse_bridge_message},
@@ -206,6 +207,8 @@ pub struct PiAgent {
     client_tx: mpsc::UnboundedSender<AcpClientMessage>,
     state: Rc<RefCell<AdapterState>>,
     bash_control_meta: Option<PathBuf>,
+    /// Process-unique JSON path written by `__pi_context_breakdown`.
+    context_breakdown: Option<PathBuf>,
 }
 
 impl PiAgent {
@@ -215,6 +218,7 @@ impl PiAgent {
         bootstrap: PiBootstrap,
         session_dir: PathBuf,
         bash_control_meta: Option<PathBuf>,
+        context_breakdown: Option<PathBuf>,
     ) -> Self {
         let acp_session_id = bootstrap.state.session_id.clone();
         let model_map = bootstrap
@@ -227,6 +231,7 @@ impl PiAgent {
             rpc,
             client_tx,
             bash_control_meta,
+            context_breakdown,
             state: Rc::new(RefCell::new(AdapterState {
                 bootstrap,
                 acp_session_id,
@@ -440,7 +445,8 @@ impl PiAgent {
             args.push_str(" --instructions ");
             args.push_str(instructions);
         }
-        self.run_bridge_command(NAVIGATE_TREE_COMMAND, &args).await?;
+        self.run_bridge_command(NAVIGATE_TREE_COMMAND, &args)
+            .await?;
 
         // Leaf moved inside the same session file. Refresh adapter state only;
         // the pager issues session/load to clear scrollback and re-replay.
@@ -510,10 +516,8 @@ impl PiAgent {
         replay: bool,
         event_id: &str,
     ) {
-        let mut notification = acp::SessionNotification::new(
-            acp::SessionId::new(session_id.to_string()),
-            update,
-        );
+        let mut notification =
+            acp::SessionNotification::new(acp::SessionId::new(session_id.to_string()), update);
         let mut meta = acp::Meta::new();
         if replay {
             meta.insert("isReplay".into(), Value::Bool(true));
@@ -525,7 +529,12 @@ impl PiAgent {
         }
     }
 
-    fn accept_subagent_bridge_sequence(&self, subagent_id: &str, sequence: u64, replay: bool) -> bool {
+    fn accept_subagent_bridge_sequence(
+        &self,
+        subagent_id: &str,
+        sequence: u64,
+        replay: bool,
+    ) -> bool {
         let mut state = self.state.borrow_mut();
         let previous = state.subagent_bridge_sequences.get(subagent_id).copied();
         if !replay && previous.is_some_and(|last| sequence <= last) {
@@ -725,7 +734,7 @@ impl PiAgent {
     /// Build Grok-native `x.ai/session/info` from Pi session stats.
     ///
     /// Mirrors the intent of the pi-context extension (`getContextUsage` +
-    /// message-length estimate) but returns the ACP envelope that the pager's
+    /// system/tool estimates) but returns the ACP envelope that the pager's
     /// `ContextInfoBlock` already knows how to render — no second UI.
     async fn handle_session_info(&self) -> Result<acp::ExtResponse, acp::Error> {
         let stats = self
@@ -736,8 +745,12 @@ impl PiAgent {
         // Best-effort breakdown. Prefer live messages; fall back to branch entries
         // (session file shape) so empty/failed get_messages still yields a bar.
         let messages = match self.rpc.request(json!({ "type": "get_messages" })).await {
-            Ok(value) if value.get("messages").and_then(Value::as_array).is_some_and(|m| !m.is_empty())
-                || value.as_array().is_some_and(|m| !m.is_empty()) =>
+            Ok(value)
+                if value
+                    .get("messages")
+                    .and_then(Value::as_array)
+                    .is_some_and(|m| !m.is_empty())
+                    || value.as_array().is_some_and(|m| !m.is_empty()) =>
             {
                 Some(value)
             }
@@ -748,6 +761,7 @@ impl PiAgent {
                 .ok()
                 .map(entries_to_messages_value),
         };
+        let breakdown = self.fetch_context_breakdown().await;
         let (session_id, model, cached_tokens) = {
             let state = self.state.borrow();
             (
@@ -766,6 +780,7 @@ impl PiAgent {
             &cwd,
             model.as_ref(),
             cached_tokens,
+            breakdown.as_ref(),
         );
         if let Some(used) = response
             .get("context")
@@ -776,6 +791,34 @@ impl PiAgent {
             self.note_context_tokens(used);
         }
         ext_response(response).map_err(acp_internal)
+    }
+
+    /// Best-effort system/tool/agents breakdown via the injected bridge extension.
+    ///
+    /// Failure is non-fatal: projection falls back to system/tools = 0.
+    async fn fetch_context_breakdown(
+        &self,
+    ) -> Option<crate::context_projection::ContextBreakdownRaw> {
+        let path = self.context_breakdown.as_ref()?;
+        if let Err(error) = self.run_bridge_command(CONTEXT_BREAKDOWN_COMMAND, "").await {
+            tracing::debug!(?error, "context breakdown bridge failed");
+            return None;
+        }
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) if !bytes.is_empty() => bytes,
+            Ok(_) => return None,
+            Err(error) => {
+                tracing::debug!(?error, path = %path.display(), "context breakdown file missing");
+                return None;
+            }
+        };
+        match serde_json::from_slice::<Value>(&bytes) {
+            Ok(value) => Some(parse_context_breakdown(&value)),
+            Err(error) => {
+                tracing::debug!(?error, "context breakdown JSON invalid");
+                None
+            }
+        }
     }
 
     async fn send_status(&self, key: &str, text: Option<&str>) {
@@ -790,13 +833,10 @@ impl PiAgent {
     async fn publish_queue_snapshot(&self) {
         let (session_id, snapshot) = {
             let state = self.state.borrow();
-            (
-                state.acp_session_id.clone(),
-                state.queue_mirror.snapshot(),
-            )
+            (state.acp_session_id.clone(), state.queue_mirror.snapshot())
         };
-        let steering_text = (snapshot.steering_count > 0)
-            .then(|| format!("{} steering", snapshot.steering_count));
+        let steering_text =
+            (snapshot.steering_count > 0).then(|| format!("{} steering", snapshot.steering_count));
         let follow_up_text = (snapshot.follow_up_count > 0)
             .then(|| format!("{} follow-up", snapshot.follow_up_count));
         self.send_status("steering", steering_text.as_deref()).await;
@@ -814,9 +854,7 @@ impl PiAgent {
         let follow_up = string_list(event.get("followUp"));
         {
             let mut state = self.state.borrow_mut();
-            state
-                .queue_mirror
-                .apply_queue_update(&steering, &follow_up);
+            state.queue_mirror.apply_queue_update(&steering, &follow_up);
         }
         self.publish_queue_snapshot().await;
     }
@@ -1109,10 +1147,7 @@ impl PiAgent {
         };
         // Prefer the assistant message's own usage for a low-latency bar update;
         // agent_settled still revalidates via get_session_stats.
-        if let Some(tokens) = message
-            .get("usage")
-            .and_then(context_tokens_from_usage)
-        {
+        if let Some(tokens) = message.get("usage").and_then(context_tokens_from_usage) {
             self.note_context_tokens(tokens);
         }
         let terminal_error = string(message, &["errorMessage", "error_message"])
@@ -1250,11 +1285,7 @@ impl PiAgent {
                 let exit_code = result.get("exitCode").and_then(Value::as_i64);
                 let failed = cancelled || exit_code.is_some_and(|code| code != 0);
                 let output = format_bash_result(&result);
-                let raw_output = bash_tool_output(
-                    &command,
-                    &result,
-                    failed && !cancelled,
-                );
+                let raw_output = bash_tool_output(&command, &result, failed && !cancelled);
                 self.send_update(acp::SessionUpdate::ToolCallUpdate(
                     acp::ToolCallUpdate::new(
                         acp::ToolCallId::new(call_id),
@@ -1652,9 +1683,7 @@ impl acp::Agent for PiAgent {
     ) -> Result<acp::InitializeResponse, acp::Error> {
         // Advertise session recap so Pager enables /recap + auto away-recap.
         // Actual generation is handled by the injected Pi extension bridge.
-        let meta = json!({ "sessionRecap": true })
-            .as_object()
-            .cloned();
+        let meta = json!({ "sessionRecap": true }).as_object().cloned();
         Ok(acp::InitializeResponse::new(acp::ProtocolVersion::V1)
             .agent_capabilities(
                 acp::AgentCapabilities::new()
@@ -1810,11 +1839,9 @@ impl acp::Agent for PiAgent {
             if let Some(lane) = streaming_behavior.and_then(queue_lane_for_behavior)
                 && let Some(client_id) = client_prompt_id.as_deref()
             {
-                state.queue_mirror.reserve(
-                    client_id.to_string(),
-                    message.clone(),
-                    lane,
-                );
+                state
+                    .queue_mirror
+                    .reserve(client_id.to_string(), message.clone(), lane);
             }
             state.active_prompts.push(ActivePrompt {
                 id: prompt_id,
@@ -1945,7 +1972,8 @@ impl acp::Agent for PiAgent {
         match arguments.method.as_ref() {
             "x.ai/interject" => self.handle_steer_message(arguments.params.get()).await,
             "x.ai/terminal/background" => {
-                self.handle_bash_background_request(arguments.params.get()).await
+                self.handle_bash_background_request(arguments.params.get())
+                    .await
             }
             "x.ai/recap" => self.handle_recap_request(arguments.params.get()).await,
             "x.ai/compact_conversation" => {
@@ -2009,8 +2037,7 @@ impl acp::Agent for PiAgent {
                     .get("summarize")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                let custom_instructions =
-                    string(&params, &["customInstructions", "instructions"]);
+                let custom_instructions = string(&params, &["customInstructions", "instructions"]);
                 let data = self
                     .navigate_session_tree(entry_id, summarize, custom_instructions)
                     .await?;
@@ -2058,7 +2085,8 @@ impl acp::Agent for PiAgent {
             // get_session_stats (+ message estimate) into native ContextInfo.
             "x.ai/session/info" => self.handle_session_info().await,
             "x.ai/subagent/cancel" => {
-                let params: Value = serde_json::from_str(arguments.params.get()).map_err(acp_internal)?;
+                let params: Value =
+                    serde_json::from_str(arguments.params.get()).map_err(acp_internal)?;
                 let subagent_id = string(&params, &["subagentId", "subagent_id"])
                     .map(str::trim)
                     .filter(|id| !id.is_empty())
@@ -2082,7 +2110,8 @@ impl acp::Agent for PiAgent {
     async fn ext_notification(&self, arguments: acp::ExtNotification) -> Result<(), acp::Error> {
         match arguments.method.as_ref() {
             "pi/extension_command" => {
-                let params: Value = serde_json::from_str(arguments.params.get()).unwrap_or_default();
+                let params: Value =
+                    serde_json::from_str(arguments.params.get()).unwrap_or_default();
                 let command = string(&params, &["command"])
                     .map(str::trim)
                     .filter(|command| command.starts_with('/'));
@@ -2178,13 +2207,11 @@ impl PiAgent {
             .map(str::trim)
             .filter(|id| !id.is_empty())
             .ok_or_else(|| acp::Error::invalid_params().data("terminalId is required"))?;
-        let control_meta = self
-            .bash_control_meta
-            .as_deref()
-            .ok_or_else(|| acp::Error::invalid_params().data("Pi Bash background control is disabled"))?;
+        let control_meta = self.bash_control_meta.as_deref().ok_or_else(|| {
+            acp::Error::invalid_params().data("Pi Bash background control is disabled")
+        })?;
         append_bash_background_control(control_meta, tool_call_id).map_err(acp_internal)?;
-        ext_response(json!({ "accepted": true, "terminalId": tool_call_id }))
-            .map_err(acp_internal)
+        ext_response(json!({ "accepted": true, "terminalId": tool_call_id })).map_err(acp_internal)
     }
 
     /// Fire-and-forget session recap via injected `__pi_grok_recap` extension.
@@ -2447,25 +2474,63 @@ const NAVIGATE_TREE_COMMAND: &str = "__pi_navigate_tree";
 const LABEL_TREE_COMMAND: &str = "__pi_tree_label";
 const SUBAGENT_CANCEL_COMMAND: &str = "__pi_grok_subagent_cancel";
 const RECAP_COMMAND: &str = "__pi_grok_recap";
+const CONTEXT_BREAKDOWN_COMMAND: &str = "__pi_context_breakdown";
 
 fn is_bridge_command(name: &str) -> bool {
     name.eq_ignore_ascii_case(NAVIGATE_TREE_COMMAND)
         || name.eq_ignore_ascii_case(LABEL_TREE_COMMAND)
         || name.eq_ignore_ascii_case(SUBAGENT_CANCEL_COMMAND)
         || name.eq_ignore_ascii_case(RECAP_COMMAND)
+        || name.eq_ignore_ascii_case(CONTEXT_BREAKDOWN_COMMAND)
 }
 
-/// Process locale for recap body language. Prefers LC_ALL → LC_MESSAGES → LANG.
+/// Operating-system language for recap output.
+///
+/// On macOS, `AppleLanguages` is the authoritative Language & Region order;
+/// terminal locale variables can remain `C` or differ from the UI language.
+/// Other platforms (and macOS fallback) use the standard locale variables.
 fn system_language_tag() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    if let Ok(output) = std::process::Command::new("defaults")
+        .args(["read", "-g", "AppleLanguages"])
+        .output()
+        && output.status.success()
+        && let Some(language) = first_apple_language(&String::from_utf8_lossy(&output.stdout))
+    {
+        return Some(language);
+    }
+
     for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Ok(value) = std::env::var(key) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() && trimmed != "C" && trimmed != "POSIX" {
-                return Some(trimmed.to_string());
-            }
+        if let Ok(value) = std::env::var(key)
+            && let Some(language) = normalize_language_tag(&value)
+        {
+            return Some(language);
         }
     }
     None
+}
+
+fn first_apple_language(value: &str) -> Option<String> {
+    value
+        .split(|character: char| {
+            character == '(' || character == ')' || character == ',' || character.is_whitespace()
+        })
+        .find_map(normalize_language_tag)
+}
+
+fn normalize_language_tag(value: &str) -> Option<String> {
+    let tag = value
+        .trim()
+        .trim_matches(|character| character == '"' || character == '\'')
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .replace('_', "-");
+    if tag.is_empty() || tag.eq_ignore_ascii_case("C") || tag.eq_ignore_ascii_case("POSIX") {
+        None
+    } else {
+        Some(tag)
+    }
 }
 
 fn command_catalog(commands: &[PiCommand]) -> Vec<acp::AvailableCommand> {
@@ -2776,10 +2841,16 @@ mod tests {
         });
         let mut pending = PendingSubagentBridge::default();
         pending.begin("session-next").expect("begin transition");
-        assert!(pending.defer_if_targeted(&replay).expect("defer target replay"));
-        assert!(!pending
-            .defer_if_targeted(&other_session)
-            .expect("leave unrelated event live"));
+        assert!(
+            pending
+                .defer_if_targeted(&replay)
+                .expect("defer target replay")
+        );
+        assert!(
+            !pending
+                .defer_if_targeted(&other_session)
+                .expect("leave unrelated event live")
+        );
         assert_eq!(
             pending
                 .commit_if_target("session-next")
@@ -2787,10 +2858,12 @@ mod tests {
                 .len(),
             1
         );
-        assert!(pending
-            .commit_if_target("session-next")
-            .expect("no transition")
-            .is_empty());
+        assert!(
+            pending
+                .commit_if_target("session-next")
+                .expect("no transition")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2804,7 +2877,11 @@ mod tests {
         });
         let mut pending = PendingSubagentBridge::default();
         pending.begin("session-next").expect("begin transition");
-        assert!(pending.defer_if_targeted(&replay).expect("defer target replay"));
+        assert!(
+            pending
+                .defer_if_targeted(&replay)
+                .expect("defer target replay")
+        );
         pending.abandon("session-next");
         assert!(pending.events.is_empty());
         assert!(pending.target_session_id.is_none());
@@ -2878,7 +2955,10 @@ mod tests {
         let info = available.get(&id).expect("catalog entry");
         assert_eq!(info.name, "Claude Haiku 4.5");
         let description = info.description.as_deref().unwrap_or("");
-        assert!(!description.contains("[anthropic]"), "provider stays on left: {description}");
+        assert!(
+            !description.contains("[anthropic]"),
+            "provider stays on left: {description}"
+        );
         assert!(description.contains("ctx 200k"), "{description}");
         assert!(description.contains("out 64k"), "{description}");
         assert!(description.contains("api anth"), "{description}");
@@ -2886,10 +2966,22 @@ mod tests {
         assert!(description.contains("⚡"), "{description}");
         assert!(description.contains("$1 / $5"), "{description}");
         let meta = info.meta.as_ref().expect("meta");
-        assert_eq!(meta.get("provider").and_then(|v| v.as_str()), Some("anthropic"));
-        assert_eq!(meta.get("modelId").and_then(|v| v.as_str()), Some("claude-haiku-4-5"));
-        assert_eq!(meta.get("api").and_then(|v| v.as_str()), Some("anthropic-messages"));
-        assert_eq!(meta.get("totalContextTokens").and_then(|v| v.as_u64()), Some(200_000));
+        assert_eq!(
+            meta.get("provider").and_then(|v| v.as_str()),
+            Some("anthropic")
+        );
+        assert_eq!(
+            meta.get("modelId").and_then(|v| v.as_str()),
+            Some("claude-haiku-4-5")
+        );
+        assert_eq!(
+            meta.get("api").and_then(|v| v.as_str()),
+            Some("anthropic-messages")
+        );
+        assert_eq!(
+            meta.get("totalContextTokens").and_then(|v| v.as_u64()),
+            Some(200_000)
+        );
         assert_eq!(meta.get("maxTokens").and_then(|v| v.as_u64()), Some(64_000));
     }
 
@@ -2979,6 +3071,23 @@ mod tests {
             "pi-extension-ui:dialog-7"
         );
         assert_eq!(extension_tool_call_id(&json!(17)), "pi-extension-ui:17");
+    }
+
+    #[test]
+    fn normalizes_system_language_tags() {
+        assert_eq!(normalize_language_tag("zh_CN.UTF-8"), Some("zh-CN".into()));
+        assert_eq!(normalize_language_tag("\"en-US\""), Some("en-US".into()));
+        assert_eq!(normalize_language_tag("C"), None);
+        assert_eq!(normalize_language_tag("POSIX"), None);
+    }
+
+    #[test]
+    fn parses_first_macos_preferred_language() {
+        assert_eq!(
+            first_apple_language("(\n    \"zh-Hans-CN\",\n    \"en-CN\"\n)"),
+            Some("zh-Hans-CN".into())
+        );
+        assert_eq!(first_apple_language("(\n)"), None);
     }
 
     #[test]

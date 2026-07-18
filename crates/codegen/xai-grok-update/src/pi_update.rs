@@ -11,7 +11,6 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 
 use crate::auto_update::UpdateAvailable;
-use crate::version::get_installed_grok_version;
 
 /// GitHub Releases "latest" API for this project's published binaries.
 pub const PI_GH_RELEASES_LATEST_URL: &str =
@@ -67,7 +66,7 @@ fn http_client() -> Result<reqwest::Client> {
 
 /// Background check: `Some(UpdateAvailable)` when remote is newer than the
 /// running binary; `None` when current or on any hard failure.
-pub async fn check_pi_update_background() -> Option<UpdateAvailable> {
+pub async fn check_pi_update_background(current: String) -> Option<UpdateAvailable> {
     let latest = match fetch_pi_latest_version().await {
         Ok(v) => v,
         Err(e) => {
@@ -75,7 +74,6 @@ pub async fn check_pi_update_background() -> Option<UpdateAvailable> {
             return None;
         }
     };
-    let current = get_installed_grok_version();
     if is_remote_newer(&latest, &current) {
         Some(UpdateAvailable {
             latest_version: latest,
@@ -115,8 +113,7 @@ pub struct PiUpdateOptions {
 ///
 /// Returns the installed version when an install ran; `None` for check-only
 /// or when already up to date without `--force`.
-pub async fn run_pi_update(opts: PiUpdateOptions) -> Result<Option<String>> {
-    let current = get_installed_grok_version();
+pub async fn run_pi_update(current: &str, opts: PiUpdateOptions) -> Result<Option<String>> {
     let target = match opts.version.as_deref() {
         Some(v) => normalize_version(v)?,
         None => fetch_pi_latest_version().await?,
@@ -164,13 +161,16 @@ fn print_pi_update_status(current: &str, latest: &str, json: bool) -> Result<()>
 /// Install a specific version (or latest when `version` is `None`).
 /// Used by Welcome **Ctrl+U** after quit-for-update — always installs
 /// (force) because the UI already decided an update is desired.
-pub async fn install_pi_update(version: Option<&str>) -> Result<String> {
-    let installed = run_pi_update(PiUpdateOptions {
-        check_only: false,
-        force: true,
-        version: version.map(str::to_owned),
-        json: false,
-    })
+pub async fn install_pi_update(current: &str, version: Option<&str>) -> Result<String> {
+    let installed = run_pi_update(
+        current,
+        PiUpdateOptions {
+            check_only: false,
+            force: true,
+            version: version.map(str::to_owned),
+            json: false,
+        },
+    )
     .await?;
     installed.ok_or_else(|| anyhow!("install produced no version"))
 }
@@ -192,15 +192,13 @@ async fn install_pi_unix_sh(tag: &str) -> Result<()> {
     // The installer script is identical across tags; pin the binary via env.
     let script_url = "https://github.com/Dwsy/grok-pi/releases/latest/download/install.sh";
     let mut cmd = tokio::process::Command::new("sh");
-    cmd.arg("-c")
-        .arg(format!("curl -fsSL {script_url} | GROK_PI_VERSION={tag} sh"));
+    cmd.arg("-c").arg(format!(
+        "curl -fsSL {script_url} | GROK_PI_VERSION={tag} sh"
+    ));
     cmd.env("GROK_PI_VERSION", tag);
     cmd.stdin(std::process::Stdio::null());
     xai_grok_tools::util::detach_command(&mut cmd);
-    let status = cmd
-        .status()
-        .await
-        .context("spawn install.sh via curl|sh")?;
+    let status = cmd.status().await.context("spawn install.sh via curl|sh")?;
     if !status.success() {
         anyhow::bail!("install.sh exited with {status}");
     }

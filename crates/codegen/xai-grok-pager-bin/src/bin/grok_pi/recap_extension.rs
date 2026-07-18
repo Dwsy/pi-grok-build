@@ -31,6 +31,16 @@ mod tests {
         assert!(source.contains("pi-grok-recap/v1"));
         assert!(source.contains("from \"@earendil-works/pi-ai/compat\""));
         assert!(source.contains("entry.type === \"message\" && entry.message"));
+        assert!(source.contains("AUTO_MIN_TURNS = 3"));
+        assert!(source.contains("AUTO_MIN_IDLE_MS = 3 * 60 * 1000"));
+        assert!(source.contains("MAX_RECAP_CONTEXT_CHARS = 12_000"));
+        assert!(source.contains("lastSuccessfulRecapTurnCount"));
+        assert!(source.contains("if (!modelRef || !modelRef.trim()) return undefined"));
+        assert!(source.contains("{ messages: [userMessage] }"));
+        assert!(source.contains("response.errorMessage || \"model error\""));
+        assert!(source.contains("operating-system language"));
+        assert!(source.contains("Do not switch to English"));
+        assert!(!source.contains("serializeConversation"));
         assert!(file.path().extension().and_then(|e| e.to_str()) == Some("ts"));
     }
 }

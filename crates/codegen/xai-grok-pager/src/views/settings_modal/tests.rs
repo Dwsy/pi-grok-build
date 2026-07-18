@@ -682,6 +682,8 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             "collapsed_edit_blocks",
             // SHELL-owned display_refresh_auto_cadence (Appearance).
             "display_refresh_auto_cadence",
+            // OSC 9;4 terminal-tab progress indicators (Appearance).
+            "progress_bar",
             // Mouse — scroll + drag selection. The scroll
             // classification/lines/direction knobs follow scroll_speed.
             "scroll_speed",
@@ -708,6 +710,10 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             "toolset.ask_user_question.timeout_enabled",
             // PAGER-owned plan_mode (Agent category).
             "plan_mode",
+            // Pi resource configuration group (Agent category).
+            "pi_config",
+            // Agent category: auto session-recap toggle.
+            "session_recap",
             // SHELL-owned coding_data_sharing (Privacy category).
             "coding_data_sharing",
             // SHELL-owned default_model (Models category).
@@ -717,8 +723,6 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             // not exposed in the modal.
             "fork_secondary_model",
             "recap_model",
-            // Agent category: auto session-recap toggle.
-            "session_recap",
             // `auto_compact_threshold_percent` (Session category) is
             // not exposed in the modal.
             // Advanced category.

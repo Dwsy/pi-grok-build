@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
-use super::load::{load_from_path, load_theme_palette_from_str, LoadError};
+use super::load::{LoadError, load_from_path, load_theme_palette_from_str};
 use super::map::map_pi_theme;
 use crate::theme::Theme;
 
@@ -230,10 +230,7 @@ pub fn load_palette(id: &str) -> Result<(String, Theme), LoadError> {
             return Ok((theme_id(&name), *palette));
         }
         // Registered with path but palette missing (should not happen) — reload.
-        guard
-            .by_name
-            .get(&name)
-            .and_then(|meta| meta.path.clone())
+        guard.by_name.get(&name).and_then(|meta| meta.path.clone())
     };
     if let Some(path) = path_to_reload {
         let (n, palette) = super::load::load_theme_palette(&path)?;

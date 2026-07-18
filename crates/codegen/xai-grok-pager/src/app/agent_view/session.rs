@@ -259,6 +259,7 @@ impl AgentView {
             pending_inline_resubmit: None,
             timeline_rail: None,
             timeline_hover: None,
+            timeline_hover_preview: None,
             session_agent_name: None,
             subagent_sessions: HashMap::new(),
             subagent_views: HashMap::new(),

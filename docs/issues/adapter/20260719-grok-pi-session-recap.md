@@ -3,7 +3,7 @@ id: "2026-07-19-grok-pi-session-recap"
 title: "grok-pi 支持 session recap（F2 开关/模型 + 系统语言）"
 status: "completed"
 created: "2026-07-19"
-updated: "2026-07-19"
+updated: "2026-07-18"
 category: "adapter"
 tags: ["workhub", "recap", "settings", "extension"]
 ---
@@ -12,7 +12,7 @@ tags: ["workhub", "recap", "settings", "extension"]
 
 ## Goal
 
-让 `grok-pi` 具备与原生 Grok 一致的 `/recap` + 自动 return-from-away recap，并在 F2 设置中可开关、可选模型；recap 正文使用当前系统语言。
+让 `grok-pi` 具备可预测、低成本且不重复的 `/recap` + 自动 return-from-away recap：只使用 F2 配置的 recap model，正文使用操作系统首选语言，并严格限制输入上下文。
 
 ## 边界
 
@@ -27,16 +27,27 @@ tags: ["workhub", "recap", "settings", "extension"]
 |---|---|
 | composition | 注入 `__pi_grok_recap` extension（`complete` + `sendMessage` custom） |
 | adapter | `initialize.meta.sessionRecap=true`；`x.ai/recap` → bridge command；custom `pi-grok-recap/v1` → `SessionRecap` / `SessionRecapUnavailable` |
-| pager | F2：`session_recap` 开关 + `recap_model`；`SendRecap` 带 model；external 也启用 recap poll |
-| 语言 | adapter 读 `LANG`/`LC_ALL`，写入 instruction「用该语言输出」 |
+| pager | F2：`session_recap` 开关 + 必填 `recap_model`；失焦期间 poll 预生成；未配置时 auto 静默跳过、manual 明确提示 |
+| extension gate | auto 仅在 ≥3 user turns、最后完成 turn ≥3 分钟、且上次成功 recap 后出现新 user turn时生成；manual 只要求有 user turn |
+| 输入预算 | 仅保留最新 compaction summary + 最近有效 turns 的紧凑文本，按字符上限截断；不发送整段历史/思考/完整工具结果 |
+| 语言 | macOS 优先读 `AppleLanguages`，再回退 locale 环境变量；instruction 强制使用系统语言 |
 
 ## 验收
 
 - [x] `/recap` 路径：`Action::SendRecap` → `x.ai/recap` → `__pi_grok_recap` → `SessionRecap`
-- [x] F2：`session_recap` 开关（auto）+ `recap_model`（空 = 会话模型）
-- [x] 输出语言：adapter 读 `LC_ALL`/`LC_MESSAGES`/`LANG` 写入 instruction
-- [x] `cargo test -p pi-grok-adapter` PASS（62）
+- [x] F2：`session_recap` 开关（auto）+ `recap_model`（必须显式配置，不回退会话模型）
+- [x] auto gate：≥3 turn + 距最后完成 turn ≥3 分钟 + 当前失焦
+- [x] 后台生成：失焦期间预生成，回焦只展示已经生成的 recap
+- [x] 去重：成功 recap 后没有新 user turn时不再自动生成
+- [x] manual `/recap`：有 user turn即可随时生成
+- [x] 输入预算：不发送完整会话，限制最近会话切片
+- [x] 输出语言：macOS `AppleLanguages` 优先，locale 环境变量回退
+- [x] `cargo test -p pi-grok-adapter system_language` / `preferred_language` PASS
+- [x] `cargo test -p xai-grok-pager --lib app::dispatch::tests::notes --no-default-features` PASS（9）
+- [x] `cargo test -p xai-grok-pager --lib notifications::focus --no-default-features` PASS（17）
+- [x] `cargo test -p xai-grok-pager --lib notifications::config --no-default-features` PASS（10）
 - [x] `cargo check -p xai-grok-pager-bin --bin grok-pi` PASS
+- [x] `cargo build -p xai-grok-pager-bin --bin grok-pi` PASS
 - [x] `cargo test -p xai-grok-pager-bin --bin grok-pi recap_extension` PASS
 - [x] 修复 external 路径 `session_recap_available` 默认 false 导致 `/recap` 隐藏
 - [ ] 手测：冷启动可见 `/recap`、F2 关 auto、换模型、中文 locale

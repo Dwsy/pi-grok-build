@@ -871,6 +871,11 @@ pub(in crate::app::dispatch) fn handle_session_created(
             )));
         }
         agent.bind_session_id(session_id);
+        // External agents do not emit Grok's MCP lifecycle notifications.
+        // A successful ACP session response is their readiness boundary.
+        if app.external_agent {
+            agent.mcp_init_progress = None;
+        }
         if let Some(m) = new_models {
             app.models = Some(m).into();
             agent.session.models = app.models.clone();

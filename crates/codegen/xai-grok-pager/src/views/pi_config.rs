@@ -26,12 +26,36 @@ use crate::views::modal_window::{
 
 const TABS: [&str; 2] = ["Global", "Project"];
 const SHORTCUTS: [Shortcut<'static>; 6] = [
-    Shortcut { label: "↑/↓ navigate", clickable: false, id: 0 },
-    Shortcut { label: "←/→ fold", clickable: false, id: 0 },
-    Shortcut { label: "Space toggle", clickable: false, id: 0 },
-    Shortcut { label: "/ search", clickable: false, id: 0 },
-    Shortcut { label: "Tab scope", clickable: false, id: 0 },
-    Shortcut { label: "Esc close", clickable: false, id: 0 },
+    Shortcut {
+        label: "↑/↓ navigate",
+        clickable: false,
+        id: 0,
+    },
+    Shortcut {
+        label: "←/→ fold",
+        clickable: false,
+        id: 0,
+    },
+    Shortcut {
+        label: "Space toggle",
+        clickable: false,
+        id: 0,
+    },
+    Shortcut {
+        label: "/ search",
+        clickable: false,
+        id: 0,
+    },
+    Shortcut {
+        label: "Tab scope",
+        clickable: false,
+        id: 0,
+    },
+    Shortcut {
+        label: "Esc close",
+        clickable: false,
+        id: 0,
+    },
 ];
 
 #[derive(Clone)]
@@ -42,7 +66,10 @@ enum PiConfigRow {
         resource_count: usize,
         preview: PiResource,
     },
-    ResourceType { label: String, preview: PiResource },
+    ResourceType {
+        label: String,
+        preview: PiResource,
+    },
     Resource(PiResource),
 }
 
@@ -53,7 +80,9 @@ impl PiConfigRow {
 
     fn preview_resource(&self) -> &PiResource {
         match self {
-            Self::Source { preview, .. } | Self::ResourceType { preview, .. } | Self::Resource(preview) => preview,
+            Self::Source { preview, .. }
+            | Self::ResourceType { preview, .. }
+            | Self::Resource(preview) => preview,
         }
     }
 }
@@ -241,7 +270,11 @@ impl PiConfigModalState {
                 let was_selected = self.selected == index;
                 self.selected = index;
                 self.ensure_visible();
-                if self.visible_rows().get(index).is_some_and(PiConfigRow::is_source) {
+                if self
+                    .visible_rows()
+                    .get(index)
+                    .is_some_and(PiConfigRow::is_source)
+                {
                     self.toggle_selected_source();
                 } else if was_selected {
                     self.toggle_selected_resource();
@@ -297,7 +330,10 @@ impl PiConfigModalState {
         let mut rows = Vec::new();
         for (id, (label, mut resources)) in groups {
             resources.sort_by_cached_key(|resource| {
-                (resource.resource_type, resource.display_name().to_lowercase())
+                (
+                    resource.resource_type,
+                    resource.display_name().to_lowercase(),
+                )
             });
             let preview = resources[0].clone();
             let resource_count = resources.len();
@@ -406,7 +442,9 @@ impl PiConfigModalState {
             return;
         };
         let result = match self.scope {
-            PiResourceScope::User => self.catalog.set_global_enabled(&resource, !resource.enabled),
+            PiResourceScope::User => self
+                .catalog
+                .set_global_enabled(&resource, !resource.enabled),
             PiResourceScope::Project => self.catalog.set_project_override(
                 &resource,
                 next_override(resource.project_override, resource.inherited_enabled),
@@ -457,7 +495,9 @@ impl PiConfigModalState {
     }
 
     fn clamp_selected(&mut self) {
-        self.selected = self.selected.min(self.visible_rows().len().saturating_sub(1));
+        self.selected = self
+            .selected
+            .min(self.visible_rows().len().saturating_sub(1));
     }
 
     fn ensure_visible(&mut self) {
@@ -502,7 +542,11 @@ impl PiConfigModalState {
             self.preview = PackagePreview::default();
             return;
         };
-        let key = format!("{}:{}", resource.base_dir.display(), resource.path.display());
+        let key = format!(
+            "{}:{}",
+            resource.base_dir.display(),
+            resource.path.display()
+        );
         if self.preview.key == key {
             return;
         }
@@ -678,7 +722,12 @@ pub fn render_pi_config_modal(
     }
 }
 
-fn render_resource_tree(buf: &mut Buffer, area: Rect, state: &mut PiConfigModalState, theme: &Theme) {
+fn render_resource_tree(
+    buf: &mut Buffer,
+    area: Rect,
+    state: &mut PiConfigModalState,
+    theme: &Theme,
+) {
     let x = area.x;
     let width = area.width as usize;
     let mut y = area.y;
@@ -708,10 +757,24 @@ fn render_resource_tree(buf: &mut Buffer, area: Rect, state: &mut PiConfigModalS
     );
     state.search_rect = Some(Rect::new(x, y, area.width, 1));
     y = y.saturating_add(1);
-    write_line(buf, x, y, width, scope_description, Style::default().fg(theme.gray_dim));
+    write_line(
+        buf,
+        x,
+        y,
+        width,
+        scope_description,
+        Style::default().fg(theme.gray_dim),
+    );
     y = y.saturating_add(1);
     if let Some(notice) = &state.notice {
-        write_line(buf, x, y, width, notice, Style::default().fg(theme.fuzzy_accent));
+        write_line(
+            buf,
+            x,
+            y,
+            width,
+            notice,
+            Style::default().fg(theme.fuzzy_accent),
+        );
         y = y.saturating_add(1);
     }
 
@@ -725,7 +788,14 @@ fn render_resource_tree(buf: &mut Buffer, area: Rect, state: &mut PiConfigModalS
 
     let rows = state.visible_rows();
     if rows.is_empty() {
-        write_line(buf, x, y, width, "No Pi resources match this scope or search.", Style::default().fg(theme.gray_dim));
+        write_line(
+            buf,
+            x,
+            y,
+            width,
+            "No Pi resources match this scope or search.",
+            Style::default().fg(theme.gray_dim),
+        );
     } else {
         let start = state.scroll.min(rows.len().saturating_sub(1));
         let end = (start + state.list_viewport).min(rows.len());
@@ -733,17 +803,34 @@ fn render_resource_tree(buf: &mut Buffer, area: Rect, state: &mut PiConfigModalS
             let index = start + offset;
             let selected = index == state.selected;
             let style = if selected {
-                Style::default().fg(theme.fuzzy_accent).bg(theme.bg_visual).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(theme.fuzzy_accent)
+                    .bg(theme.bg_visual)
+                    .add_modifier(Modifier::BOLD)
             } else if row.is_source() {
-                Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(theme.text_primary)
+                    .add_modifier(Modifier::BOLD)
             } else if matches!(row, PiConfigRow::ResourceType { .. }) {
-                Style::default().fg(theme.gray_dim).add_modifier(Modifier::ITALIC)
+                Style::default()
+                    .fg(theme.gray_dim)
+                    .add_modifier(Modifier::ITALIC)
             } else {
                 Style::default().fg(theme.gray_bright)
             };
             let text = match row {
-                PiConfigRow::Source { id, label, resource_count, .. } => {
-                    let fold = if state.folded_sources.contains(id) && state.search_query.is_empty() { "▸" } else { "▾" };
+                PiConfigRow::Source {
+                    id,
+                    label,
+                    resource_count,
+                    ..
+                } => {
+                    let fold = if state.folded_sources.contains(id) && state.search_query.is_empty()
+                    {
+                        "▸"
+                    } else {
+                        "▾"
+                    };
                     format!("{fold} {label} · {resource_count}")
                 }
                 PiConfigRow::ResourceType { label, .. } => format!("  {label}"),
@@ -764,12 +851,32 @@ fn render_resource_tree(buf: &mut Buffer, area: Rect, state: &mut PiConfigModalS
         |row| match row {
             PiConfigRow::Source { label, .. } => format!("{label} · Space/Enter toggles"),
             PiConfigRow::ResourceType { label, .. } => format!("{label} resources"),
-            PiConfigRow::Resource(resource) => format!("{} · {}", resource.path.display(), resource.scope.label()),
+            PiConfigRow::Resource(resource) => {
+                format!("{} · {}", resource.path.display(), resource.scope.label())
+            }
         },
     );
-    write_line(buf, x, detail_y, width, &detail, Style::default().fg(theme.gray_dim));
-    let hint = if state.search_active { "Enter finish · Esc clear" } else { "click select · wheel scroll" };
-    write_line(buf, x, help_y, width, &format!("({position}/{count}) {hint}"), Style::default().fg(theme.gray_dim));
+    write_line(
+        buf,
+        x,
+        detail_y,
+        width,
+        &detail,
+        Style::default().fg(theme.gray_dim),
+    );
+    let hint = if state.search_active {
+        "Enter finish · Esc clear"
+    } else {
+        "click select · wheel scroll"
+    };
+    write_line(
+        buf,
+        x,
+        help_y,
+        width,
+        &format!("({position}/{count}) {hint}"),
+        Style::default().fg(theme.gray_dim),
+    );
 }
 
 fn render_package_preview(buf: &mut Buffer, area: Rect, state: &PiConfigModalState, theme: &Theme) {
@@ -783,27 +890,72 @@ fn render_package_preview(buf: &mut Buffer, area: Rect, state: &PiConfigModalSta
     let x = area.x.saturating_add(2);
     let width = area.width.saturating_sub(2) as usize;
     let mut y = area.y;
-    write_line(buf, x, y, width, "Package preview", Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD));
+    write_line(
+        buf,
+        x,
+        y,
+        width,
+        "Package preview",
+        Style::default()
+            .fg(theme.text_primary)
+            .add_modifier(Modifier::BOLD),
+    );
     y = y.saturating_add(1);
-    write_line(buf, x, y, width, &preview.title, Style::default().fg(theme.fuzzy_accent));
+    write_line(
+        buf,
+        x,
+        y,
+        width,
+        &preview.title,
+        Style::default().fg(theme.fuzzy_accent),
+    );
     y = y.saturating_add(2);
-    write_line(buf, x, y, width, "package.json", Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD));
+    write_line(
+        buf,
+        x,
+        y,
+        width,
+        "package.json",
+        Style::default()
+            .fg(theme.text_primary)
+            .add_modifier(Modifier::BOLD),
+    );
     y = y.saturating_add(1);
     for line in &preview.manifest {
         if y >= area.y.saturating_add(area.height) {
             return;
         }
-        write_line(buf, x, y, width, line, Style::default().fg(theme.gray_bright));
+        write_line(
+            buf,
+            x,
+            y,
+            width,
+            line,
+            Style::default().fg(theme.gray_bright),
+        );
         y = y.saturating_add(1);
     }
     y = y.saturating_add(1);
     if y >= area.y.saturating_add(area.height) {
         return;
     }
-    write_line(buf, x, y, width, "README", Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD));
+    write_line(
+        buf,
+        x,
+        y,
+        width,
+        "README",
+        Style::default()
+            .fg(theme.text_primary)
+            .add_modifier(Modifier::BOLD),
+    );
     y = y.saturating_add(1);
     let markdown = MarkdownContent::new_with_table_width(&preview.readme, Some(width));
-    for line in markdown.pre_wrap_lines().into_iter().skip(state.preview_scroll) {
+    for line in markdown
+        .pre_wrap_lines()
+        .into_iter()
+        .skip(state.preview_scroll)
+    {
         if y >= area.y.saturating_add(area.height) {
             return;
         }
@@ -831,7 +983,7 @@ fn write_line(buf: &mut Buffer, x: u16, y: u16, width: usize, text: &str, style:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pi_resource_config::{PiResourceType, PiResourceOrigin};
+    use crate::pi_resource_config::{PiResourceOrigin, PiResourceType};
 
     fn resource(name: &str, source: &str) -> PiResource {
         PiResource {
@@ -851,7 +1003,10 @@ mod tests {
         let mut state = PiConfigModalState {
             window: ModalWindowState::new(),
             catalog: PiResourceCatalog {
-                resources: vec![resource("extensions/alpha.ts", "auto"), resource("extensions/beta.ts", "auto")],
+                resources: vec![
+                    resource("extensions/alpha.ts", "auto"),
+                    resource("extensions/beta.ts", "auto"),
+                ],
                 project_trusted: true,
                 agent_dir: PathBuf::from("/tmp/pi"),
                 cwd: PathBuf::from("/tmp/project"),
@@ -877,10 +1032,22 @@ mod tests {
 
     #[test]
     fn project_cycle_preserves_pi_inherit_semantics() {
-        assert_eq!(next_override(PiProjectOverride::Inherit, true), PiProjectOverride::Unload);
-        assert_eq!(next_override(PiProjectOverride::Unload, true), PiProjectOverride::Load);
-        assert_eq!(next_override(PiProjectOverride::Load, true), PiProjectOverride::Inherit);
-        assert_eq!(next_override(PiProjectOverride::Inherit, false), PiProjectOverride::Load);
+        assert_eq!(
+            next_override(PiProjectOverride::Inherit, true),
+            PiProjectOverride::Unload
+        );
+        assert_eq!(
+            next_override(PiProjectOverride::Unload, true),
+            PiProjectOverride::Load
+        );
+        assert_eq!(
+            next_override(PiProjectOverride::Load, true),
+            PiProjectOverride::Inherit
+        );
+        assert_eq!(
+            next_override(PiProjectOverride::Inherit, false),
+            PiProjectOverride::Load
+        );
     }
 
     #[test]
@@ -893,7 +1060,10 @@ mod tests {
 
     #[test]
     fn automatic_resource_names_keep_the_relative_path() {
-        assert_eq!(resource("extensions/alpha.ts", "auto").display_name(), "extensions/alpha.ts");
+        assert_eq!(
+            resource("extensions/alpha.ts", "auto").display_name(),
+            "extensions/alpha.ts"
+        );
     }
 
     #[test]
@@ -919,7 +1089,11 @@ mod tests {
     #[test]
     fn preview_reads_manifest_and_readme() {
         let temp = tempfile::tempdir().expect("temp directory");
-        fs::write(temp.path().join("package.json"), r#"{"name":"demo","version":"1.0.0"}"#).expect("manifest");
+        fs::write(
+            temp.path().join("package.json"),
+            r#"{"name":"demo","version":"1.0.0"}"#,
+        )
+        .expect("manifest");
         fs::write(temp.path().join("README.md"), "# Demo\n\nUseful package\n").expect("readme");
         let mut resource = resource("index.ts", "npm:demo");
         resource.origin = PiResourceOrigin::Package;

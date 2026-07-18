@@ -64,14 +64,14 @@ jobs:
           ref="${GITHUB_REF_NAME:-0.0.0-dev}"
           ver="${ref#v}"
           echo "version=${ver}" >> "$GITHUB_OUTPUT"
-          echo "Resolved GROK_VERSION=${ver}"
+          echo "Resolved GROK_PI_VERSION=${ver}"
 
       - name: Build release binary
         shell: bash
         env:
-          # Lockstep the binary's reported version with the GitHub release tag
-          # so the in-app update check can compare semver correctly.
-          GROK_VERSION: ${{ steps.version.outputs.version }}
+          # Keep the grok-pi product version independent from Grok's
+          # release-only GROK_VERSION stamp.
+          GROK_PI_VERSION: ${{ steps.version.outputs.version }}
         run: |
           cargo build \
             --profile release-dist \

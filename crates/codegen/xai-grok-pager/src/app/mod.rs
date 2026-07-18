@@ -408,6 +408,8 @@ pub struct ExternalRunConfig {
     /// `grok-pi --continue`). Default false lands on the native Welcome
     /// screen so brand logo / menu match stock Grok Build.
     pub resume_existing_session: bool,
+    /// Product version of the external host, used only for its update checks.
+    pub product_version: String,
 }
 
 /// Run the native Grok pager against an external ACP backend.
@@ -424,6 +426,7 @@ pub async fn run_external(config: ExternalRunConfig) -> anyhow::Result<()> {
         session_title,
         session_cwd,
         resume_existing_session,
+        product_version,
     } = config;
 
     xai_tty_utils::redirect_native_stderr();
@@ -514,15 +517,15 @@ pub async fn run_external(config: ExternalRunConfig) -> anyhow::Result<()> {
         relaunched_into_minimal,
         initial_theme: crate::theme::cache::current_kind(),
     };
-    // Background update check for grok-pi: GitHub Releases JSON first, then
-    // npm registry mirrors. Disabled when the composition binary sets
-    // `--no-auto-update` (stock Grok CLI parity).
+    // Background update check for grok-pi. The external product supplies its
+    // own release version so Grok's workspace version cannot affect it.
     let bg_update_rx = if args.no_auto_update {
         None
     } else {
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let update_version = product_version.clone();
         tokio::spawn(async move {
-            let result = xai_grok_update::check_pi_update_background().await;
+            let result = xai_grok_update::check_pi_update_background(update_version).await;
             let _ = tx.send(result);
         });
         Some(rx)
@@ -549,7 +552,7 @@ pub async fn run_external(config: ExternalRunConfig) -> anyhow::Result<()> {
     if let Ok(run_result) = &result
         && run_result.quit_for_update
     {
-        match xai_grok_update::install_pi_update(None).await {
+        match xai_grok_update::install_pi_update(&product_version, None).await {
             Ok(ver) => {
                 eprintln!("Updated to grok-pi v{ver}. Restart grok-pi to use the new binary.");
             }

@@ -940,6 +940,7 @@ impl AgentView {
                 self.hovered_prompt = new_prompt_hover;
                 if new_timeline_hover != self.timeline_hover {
                     self.timeline_hover = new_timeline_hover;
+                    self.sync_timeline_hover_preview();
                     changed = true;
                 }
                 changed |= self

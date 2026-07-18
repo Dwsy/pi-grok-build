@@ -464,21 +464,25 @@ pub(super) fn render_version_badge(
             ));
         }
         VersionBadgeMode::HeroInline => {
+            let (title, version) = hero_inline_brand();
             spans.push(Span::styled(
-                "Grok Build Beta  ",
+                format!("{title}  "),
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::styled(
-                xai_grok_version::VERSION,
-                Style::default().fg(theme.gray),
-            ));
+            spans.push(Span::styled(version, Style::default().fg(theme.gray)));
         }
     }
 
     let version_line = Line::from(spans).alignment(align);
     Paragraph::new(version_line).render(version_area, buf);
+}
+
+fn hero_inline_brand() -> (&'static str, &'static str) {
+    logo::welcome_brand_override().map_or(("Grok Build Beta", xai_grok_version::VERSION), |brand| {
+        (brand.title, brand.version)
+    })
 }
 
 /// Render the prompt box and version line (shared across welcome states).
@@ -3115,6 +3119,24 @@ mod tests {
         assert!(layout.hero_logo.height > 0);
         assert!(layout.hero_menu.height > 0);
         assert_eq!(layout.hero_version.height, 1);
+    }
+
+    #[test]
+    fn hero_inline_brand_uses_external_override() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                logo::set_welcome_brand_override(None);
+            }
+        }
+        let _reset = Reset;
+        logo::set_welcome_brand_override(Some(logo::ExternalWelcomeBrand {
+            title: "grok-pi",
+            subtitle: "Pi agent core",
+            version: "0.0.5",
+        }));
+
+        assert_eq!(hero_inline_brand(), ("grok-pi", "0.0.5"));
     }
 
     #[test]

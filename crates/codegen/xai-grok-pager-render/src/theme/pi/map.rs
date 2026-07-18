@@ -3,7 +3,8 @@
 use ratatui::style::{Color, Modifier};
 
 use super::color::{
-    blend, color_to_rgb, or_fallback, relative_luminance, resolve_color, shift_luminance, ColorError,
+    ColorError, blend, color_to_rgb, or_fallback, relative_luminance, resolve_color,
+    shift_luminance,
 };
 use super::schema::{ColorValue, PiThemeJson};
 use crate::theme::Theme;
@@ -84,7 +85,12 @@ pub fn map_pi_theme(doc: &PiThemeJson) -> Result<Theme, MapError> {
     let gray_dim = or_fallback(dim, Color::Rgb(0x66, 0x66, 0x66));
     let gray_bright = blend(muted, text_primary, 0.45);
 
-    let bg_base = derive_canvas(export_page_bg, user_message_bg, tool_pending_bg, selected_bg);
+    let bg_base = derive_canvas(
+        export_page_bg,
+        user_message_bg,
+        tool_pending_bg,
+        selected_bg,
+    );
     let dark = is_dark_rgb(bg_base);
     let elev = if dark { 10 } else { -10 };
     let elev2 = if dark { 18 } else { -18 };
@@ -150,7 +156,10 @@ pub fn map_pi_theme(doc: &PiThemeJson) -> Result<Theme, MapError> {
         scrollbar_bg: bg_dark,
         scrollbar_fg: bg_highlight,
 
-        diff_delete_bg: or_fallback(tool_error_bg, shift_luminance(error, if dark { -80 } else { 80 })),
+        diff_delete_bg: or_fallback(
+            tool_error_bg,
+            shift_luminance(error, if dark { -80 } else { 80 }),
+        ),
         diff_delete_fg: diff_removed,
         diff_insert_bg: or_fallback(
             tool_success_bg,

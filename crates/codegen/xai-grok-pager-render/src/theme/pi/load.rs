@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use super::map::{map_pi_theme, MapError};
+use super::map::{MapError, map_pi_theme};
 use super::schema::PiThemeJson;
 use crate::theme::Theme;
 
@@ -38,7 +38,8 @@ pub fn load_from_str(json: &str) -> Result<PiThemeJson, LoadError> {
 
 /// Load a Pi theme JSON file from disk.
 pub fn load_from_path(path: &Path) -> Result<PiThemeJson, LoadError> {
-    let text = std::fs::read_to_string(path).map_err(|e| LoadError::Io(format!("{}: {e}", path.display())))?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| LoadError::Io(format!("{}: {e}", path.display())))?;
     load_from_str(&text)
 }
 

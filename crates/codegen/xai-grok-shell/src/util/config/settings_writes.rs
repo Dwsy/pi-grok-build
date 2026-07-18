@@ -155,6 +155,14 @@ pub async fn set_session_recap(value: bool) -> Result<()> {
     .await
 }
 
+/// Persist `[ui].progress_bar` (OSC 9;4 terminal-tab progress indicators).
+pub async fn set_progress_bar(value: bool) -> Result<()> {
+    update_config(|cfg| {
+        cfg.ui.progress_bar = Some(value);
+    })
+    .await
+}
+
 /// Bounds for [`set_max_thoughts_width`]. Mirrored from the pager's
 /// registry consts; a CI test pins the agreement.
 const MAX_THOUGHTS_WIDTH_SHELL_MIN: i64 = 40;

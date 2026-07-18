@@ -81,6 +81,14 @@ pub struct ExternalLogoArt {
     pub small: &'static str,
 }
 
+/// Welcome copy supplied by an external ACP host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExternalWelcomeBrand {
+    pub title: &'static str,
+    pub subtitle: &'static str,
+    pub version: &'static str,
+}
+
 /// Narrow configuration surface for an external ACP agent hosted by the Grok
 /// pager. Rendering remains the pager's responsibility; the optional logo is
 /// only brand art fed into the existing welcome/minimal logo renderer.
@@ -93,6 +101,8 @@ pub struct ExternalUiProfile {
     /// Optional welcome/minimal logo art. When set, the composition binary's
     /// brand replaces Grok's default braille logo via the welcome logo override.
     pub logo: Option<ExternalLogoArt>,
+    /// Optional title, subtitle, and version for the native welcome surface.
+    pub welcome_brand: Option<ExternalWelcomeBrand>,
     /// Hide the welcome "New worktree" row (and its Ctrl+W shortcut). Pi does
     /// not use Grok's worktree product flow on the welcome card yet.
     pub hide_new_worktree: bool,
@@ -107,6 +117,7 @@ impl Default for ExternalUiProfile {
             agent_name: "External agent".to_string(),
             builtin_commands: Vec::new(),
             logo: None,
+            welcome_brand: None,
             hide_new_worktree: false,
             changelog_url: None,
         }

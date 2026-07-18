@@ -11,11 +11,13 @@ mod map;
 mod registry;
 mod schema;
 
-pub use load::{load_from_path, load_from_str, load_theme_palette, load_theme_palette_from_str, LoadError};
-pub use map::{map_pi_theme, MapError};
+pub use load::{
+    LoadError, load_from_path, load_from_str, load_theme_palette, load_theme_palette_from_str,
+};
+pub use map::{MapError, map_pi_theme};
 pub use registry::{
-    apply_pi_theme, ensure_builtins, init_discovery, is_pi_theme_id, list_themes, load_palette,
-    parse_pi_theme_id, reset_for_test, reset_registry, theme_id, DiscoveryReport, PiThemeMeta,
-    PI_THEME_PREFIX,
+    DiscoveryReport, PI_THEME_PREFIX, PiThemeMeta, apply_pi_theme, ensure_builtins, init_discovery,
+    is_pi_theme_id, list_themes, load_palette, parse_pi_theme_id, reset_for_test, reset_registry,
+    theme_id,
 };
 pub use schema::{ColorValue, PiThemeColors, PiThemeJson};

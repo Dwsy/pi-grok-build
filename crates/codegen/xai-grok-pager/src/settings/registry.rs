@@ -667,7 +667,9 @@ pub fn current_value_for(
         })),
         // session_recap: None → on (default).
         "session_recap" => Some(SettingValue::Bool(ui.session_recap.unwrap_or(true))),
-        // recap_model: empty = use active session model.
+        // progress_bar: None → off (default).
+        "progress_bar" => Some(SettingValue::Bool(ui.progress_bar.unwrap_or(false))),
+        // recap_model: empty = recap generation disabled.
         "recap_model" => Some(SettingValue::String(ui.recap_model.clone())),
 
         _ => None,
@@ -1104,6 +1106,14 @@ mod tests {
                          models::default_model() — drift here breaks the empty-fold contract",
                     );
                 }
+                ("progress_bar", SettingKind::Bool { default }) => {
+                    assert!(!default, "progress_bar registry default must be off");
+                    assert_eq!(
+                        *default,
+                        ui.progress_bar.unwrap_or(false),
+                        "progress_bar default drifts from UiConfig::default()",
+                    );
+                }
                 ("session_recap", SettingKind::Bool { default }) => {
                     assert_eq!(
                         *default,
@@ -1114,7 +1124,7 @@ mod tests {
                 ("recap_model", SettingKind::DynamicEnum { default, .. }) => {
                     assert_eq!(
                         *default, "",
-                        "recap_model registry default must be empty string (session model)",
+                        "recap_model registry default must be empty string (disabled)",
                     );
                     assert!(
                         ui.recap_model.is_empty(),

@@ -443,7 +443,7 @@ condition = "unfocused"   # unfocused|always|never
 idle_threshold_secs = 3   # seconds unfocused before a notification fires
 events = ["turn_complete", "approval_required"]
 sleep_prevention = true   # prevent display sleep during agent turns
-progress_bar = true       # show tab progress bar (OSC 9;4)
+progress_bar = false      # show tab progress bar (OSC 9;4)
 
 [ui.notifications.title]
 enabled = true
@@ -457,7 +457,7 @@ items = ["action-required", "spinner", "activity", "session-name", "grok"]
 | `idle_threshold_secs` | integer | `3` | Minimum seconds the terminal must be unfocused before a notification fires. |
 | `events` | array | `["turn_complete", "approval_required"]` | Events that trigger notifications. Options: `turn_complete`, `approval_required`, `session_ready`, `task_complete`, `agent_error`. |
 | `sleep_prevention` | bool | `true` | Keep the display awake while the agent is working (macOS/Linux). |
-| `progress_bar` | bool | `true` | Show a progress indicator in the terminal tab (OSC 9;4). |
+| `progress_bar` | bool | `false` | Show a progress indicator in the terminal tab (OSC 9;4). Also available in F2 settings. |
 | `title.enabled` | bool | `true` | Set the terminal title to reflect agent state. |
 | `title.items` | array | (see above) | Items shown in the title bar. Options: `action-required`, `spinner`, `activity`, `session-name`, `cwd`, `model`, `turn-timer`, `grok`. |
 

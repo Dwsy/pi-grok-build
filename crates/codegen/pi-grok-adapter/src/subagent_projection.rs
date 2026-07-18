@@ -1,6 +1,6 @@
 use agent_client_protocol as acp;
-use anyhow::{bail, Result};
-use serde_json::{json, Value};
+use anyhow::{Result, bail};
+use serde_json::{Value, json};
 
 const BRIDGE_TYPE: &str = "pi-grok-subagent/v1";
 
@@ -361,10 +361,12 @@ mod tests {
         let projection = parse_bridge_message(&event, "parent-1")
             .unwrap()
             .expect("bridge event");
-        let [BridgeOperation::ChildUpdate {
-            child_session_id,
-            update,
-        }] = projection.operations.as_slice()
+        let [
+            BridgeOperation::ChildUpdate {
+                child_session_id,
+                update,
+            },
+        ] = projection.operations.as_slice()
         else {
             panic!("expected one child update");
         };

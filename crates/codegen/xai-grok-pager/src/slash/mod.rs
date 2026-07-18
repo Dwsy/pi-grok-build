@@ -1456,9 +1456,9 @@ mod tests {
     #[test]
     fn required_arg_command_blocks_without_args() {
         let reg = test_registry();
-        // /model has takes_args=true, args_required=true.
-        assert!(!is_command_complete("/model", &reg));
-        assert!(!is_command_complete("/model ", &reg));
+        // /model has takes_args=true, args_required=false: bare invocation opens the picker.
+        assert!(is_command_complete("/model", &reg));
+        assert!(is_command_complete("/model ", &reg));
         assert!(is_command_complete("/model grok-4", &reg));
     }
 

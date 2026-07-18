@@ -68,8 +68,7 @@ use super::session::load::{
     dispatch_pick_content_session_in_worktree, dispatch_pick_session,
     dispatch_pick_session_in_worktree, dispatch_refresh_external_session_catalog,
     dispatch_session_picker_closed, dispatch_show_session_picker, dispatch_trigger_deep_search,
-    session_picker_entry_matches,
-    session_picker_external_filter_active,
+    session_picker_entry_matches, session_picker_external_filter_active,
 };
 use super::session::modal::dispatch_rename_session;
 use super::session::tree::{
@@ -85,17 +84,17 @@ use super::settings::setters::{
     set_contextual_hint_undo, set_contextual_hint_word_select, set_default_model,
     set_default_selected_permission, set_display_refresh_auto_cadence, set_fork_secondary_model,
     set_group_tool_verbs, set_hunk_tracker_mode, set_invert_scroll, set_keep_text_selection,
-    set_max_thoughts_width, set_multiline_mode, set_prompt_suggestions, set_recap_model,
-    set_remember_tool_approvals, set_render_mermaid, set_respect_manual_folds, set_screen_mode,
-    set_scroll_lines, set_scroll_mode, set_scroll_speed, set_session_recap,
+    set_max_thoughts_width, set_multiline_mode, set_progress_bar, set_prompt_suggestions,
+    set_recap_model, set_remember_tool_approvals, set_render_mermaid, set_respect_manual_folds,
+    set_screen_mode, set_scroll_lines, set_scroll_mode, set_scroll_speed, set_session_recap,
     set_show_thinking_blocks, set_show_tips, set_simple_mode, set_theme, set_timeline,
     set_timestamps, set_vim_mode, set_voice_capture_mode, set_voice_stt_language,
 };
 use super::settings::ui::{
     dispatch_confirm_reset_setting, dispatch_open_command_palette, dispatch_open_howto_guides,
-    dispatch_open_pi_config, dispatch_open_reset_confirm, dispatch_open_settings,
-    dispatch_toggle_compact_mode, dispatch_toggle_mouse_capture, dispatch_toggle_multiline,
-    dispatch_toggle_timestamps, dispatch_toggle_vim_mode,
+    dispatch_open_model_picker, dispatch_open_pi_config, dispatch_open_reset_confirm,
+    dispatch_open_settings, dispatch_toggle_compact_mode, dispatch_toggle_mouse_capture,
+    dispatch_toggle_multiline, dispatch_toggle_timestamps, dispatch_toggle_vim_mode,
 };
 use super::status::{
     dispatch_copy_session_id, dispatch_open_gboom, dispatch_share_session,
@@ -1006,7 +1005,9 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::ClearForkSecondaryModel => clear_fork_secondary_model(app),
         Action::SetRecapModel(v) => set_recap_model(app, v),
         Action::ClearRecapModel => clear_recap_model(app),
+        Action::OpenModelPicker => dispatch_open_model_picker(app),
         Action::SetSessionRecap(v) => set_session_recap(app, v),
+        Action::SetProgressBar(v) => set_progress_bar(app, v),
         Action::SetMaxThoughtsWidth(v) => set_max_thoughts_width(app, v),
         Action::SetShowTips(v) => set_show_tips(app, v),
         Action::SetAutoUpdate(v) => set_auto_update(app, v),

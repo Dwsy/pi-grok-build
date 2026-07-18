@@ -76,6 +76,18 @@ impl NotificationService {
         self.config.session_recap = enabled;
     }
 
+    /// Live-update OSC 9;4 progress indicators (F2 settings).
+    pub fn set_progress_bar(&mut self, enabled: bool) -> Option<String> {
+        self.config.progress_bar = enabled;
+        if enabled {
+            None
+        } else {
+            let mut buf = String::new();
+            self.clear_progress_into(&mut buf);
+            (!buf.is_empty()).then_some(buf)
+        }
+    }
+
     pub fn protocol(&self) -> protocol::NotificationProtocol {
         self.protocol
     }

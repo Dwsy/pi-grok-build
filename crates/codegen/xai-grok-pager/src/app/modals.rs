@@ -127,19 +127,17 @@ impl AgentView {
                 ActiveModal::ArgPicker { window, state, .. } => {
                     (window, state.query.is_empty(), false, false)
                 }
-                ActiveModal::SessionTree { window, state, .. } => {
-                    (
-                        window,
-                        state.search_query.is_empty()
-                            && !matches!(
-                                state.focus,
-                                crate::views::session_tree::SessionTreeFocus::LabelEdit
-                                    | crate::views::session_tree::SessionTreeFocus::Search
-                            ),
-                        false,
-                        false,
-                    )
-                }
+                ActiveModal::SessionTree { window, state, .. } => (
+                    window,
+                    state.search_query.is_empty()
+                        && !matches!(
+                            state.focus,
+                            crate::views::session_tree::SessionTreeFocus::LabelEdit
+                                | crate::views::session_tree::SessionTreeFocus::Search
+                        ),
+                    false,
+                    false,
+                ),
                 ActiveModal::SessionPicker {
                     window,
                     state,
@@ -961,8 +959,8 @@ impl AgentView {
                 // Chat-mode picker lists conversations only: the Local/Remote
                 // source filter and local-disk delete are dead weight there.
                 let chat_mode = self.app_chat_mode;
-                let external_picker = *source_filter
-                    == crate::views::session_picker::SourceFilter::External;
+                let external_picker =
+                    *source_filter == crate::views::session_picker::SourceFilter::External;
                 let external_tabs = ["Current folder", "All"];
                 let config = PickerConfig {
                     title: Some("Resume session"),
@@ -975,7 +973,11 @@ impl AgentView {
                     non_selectable_clickable: &[],
                     shortcuts_area: None,
                     tabs: external_picker.then_some(&external_tabs),
-                    active_tab: if external_picker { window.active_tab } else { 0 },
+                    active_tab: if external_picker {
+                        window.active_tab
+                    } else {
+                        0
+                    },
                     filter_label: (!chat_mode && !external_picker).then(|| source_filter.label()),
                     filter_key_hint: (!chat_mode && !external_picker).then_some("f"),
                     filter_active: !chat_mode && !external_picker && source_filter.is_active(),
@@ -1820,8 +1822,8 @@ impl AgentView {
                 // Model list rows are Pi-style `id [provider]` only. Metadata for
                 // the hovered/selected model is rendered in a bottom detail pane
                 // (pi-model-selector-x), not as a right-column label.
-                let is_model_list = matches!(command.as_str(), "model" | "m")
-                    && args_query.is_empty();
+                let is_model_list =
+                    matches!(command.as_str(), "model" | "m") && args_query.is_empty();
                 let empty_right = "";
                 let picker_entries: Vec<PickerEntry> = items
                     .iter()
@@ -1904,11 +1906,31 @@ impl AgentView {
             } else if let modal::ActiveModal::SessionTree { state, window } = active_modal {
                 use crate::views::session_tree::render_session_tree;
                 let shortcuts = [
-                    mw::Shortcut { label: "↑/↓ nav", clickable: false, id: 0 },
-                    mw::Shortcut { label: "click select", clickable: false, id: 0 },
-                    mw::Shortcut { label: "dblclick go", clickable: false, id: 0 },
-                    mw::Shortcut { label: "Tab fold", clickable: false, id: 0 },
-                    mw::Shortcut { label: "Esc close", clickable: false, id: 0 },
+                    mw::Shortcut {
+                        label: "↑/↓ nav",
+                        clickable: false,
+                        id: 0,
+                    },
+                    mw::Shortcut {
+                        label: "click select",
+                        clickable: false,
+                        id: 0,
+                    },
+                    mw::Shortcut {
+                        label: "dblclick go",
+                        clickable: false,
+                        id: 0,
+                    },
+                    mw::Shortcut {
+                        label: "Tab fold",
+                        clickable: false,
+                        id: 0,
+                    },
+                    mw::Shortcut {
+                        label: "Esc close",
+                        clickable: false,
+                        id: 0,
+                    },
                 ];
                 let title = if state.loading {
                     "Session tree · loading".to_string()
@@ -2541,11 +2563,7 @@ impl AgentView {
                     let entry_id = state.selected_id();
                     let label = {
                         let draft = state.label_draft.trim().to_string();
-                        if draft.is_empty() {
-                            None
-                        } else {
-                            Some(draft)
-                        }
+                        if draft.is_empty() { None } else { Some(draft) }
                     };
                     state.focus = SessionTreeFocus::List;
                     state.label_draft.clear();
@@ -2768,12 +2786,7 @@ fn selected_model_detail_lines(
     model_picker_detail_lines(info)
 }
 
-fn render_model_picker_detail(
-    buf: &mut Buffer,
-    area: Rect,
-    lines: &[String],
-    theme: &Theme,
-) {
+fn render_model_picker_detail(buf: &mut Buffer, area: Rect, lines: &[String], theme: &Theme) {
     use ratatui::style::{Modifier, Style};
     use ratatui::text::{Line as TuiLine, Span};
     use ratatui::widgets::{Block, Borders, Paragraph, Wrap};

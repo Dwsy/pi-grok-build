@@ -105,6 +105,77 @@ struct MessageTokenEstimate {
     compaction_count: u64,
 }
 
+/// Raw system/tool/agents breakdown written by `__pi_context_breakdown`.
+///
+/// All token fields use the same `ceil(len/4)` estimate as pi-context; the
+/// adapter scales them so the bar totals match Pi's authoritative `used`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ContextBreakdownRaw {
+    pub system_prompt_tokens_raw: u64,
+    pub tool_definitions_count: u64,
+    pub tool_definitions_tokens_raw: u64,
+    pub append_tokens_raw: u64,
+    pub context_files: Vec<ContextFileRaw>,
+    pub skills_count: u64,
+    pub skills_tokens_raw: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ContextFileRaw {
+    pub path: String,
+    pub tokens_raw: u64,
+}
+
+/// Parse the JSON file written by the injected context breakdown extension.
+pub(crate) fn parse_context_breakdown(value: &Value) -> ContextBreakdownRaw {
+    let context_files = value
+        .get("contextFiles")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| ContextFileRaw {
+                    path: string(item, &["path"]).unwrap_or_default().to_string(),
+                    tokens_raw: number(item, &["tokensRaw", "tokens_raw"]).unwrap_or(0),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ContextBreakdownRaw {
+        system_prompt_tokens_raw: number(
+            value,
+            &["systemPromptTokensRaw", "system_prompt_tokens_raw"],
+        )
+        .unwrap_or(0),
+        tool_definitions_count: number(value, &["toolDefinitionsCount", "tool_definitions_count"])
+            .unwrap_or(0),
+        tool_definitions_tokens_raw: number(
+            value,
+            &["toolDefinitionsTokensRaw", "tool_definitions_tokens_raw"],
+        )
+        .unwrap_or(0),
+        append_tokens_raw: number(value, &["appendTokensRaw", "append_tokens_raw"]).unwrap_or(0),
+        context_files,
+        skills_count: number(value, &["skillsCount", "skills_count"]).unwrap_or(0),
+        skills_tokens_raw: number(value, &["skillsTokensRaw", "skills_tokens_raw"]).unwrap_or(0),
+    }
+}
+
+fn context_file_label(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if path.is_empty() {
+                "Project context".to_string()
+            } else {
+                path.to_string()
+            }
+        })
+}
+
 fn estimate_message_tokens(messages: &Value) -> MessageTokenEstimate {
     let mut estimate = MessageTokenEstimate::default();
     let Some(items) = messages
@@ -207,7 +278,8 @@ fn scale_token_parts(parts: &[u64], used: u64) -> Vec<u64> {
     scaled
 }
 
-/// Project Pi stats (+ optional message estimate) into Grok `SessionInfoResponse` JSON.
+/// Project Pi stats (+ optional message estimate + optional prompt/tool
+/// breakdown) into Grok `SessionInfoResponse` JSON.
 ///
 /// Shape matches `xai_grok_shell::session::SessionInfoResponse` so the pager can
 /// deserialize into `ContextInfo` and push `RenderBlock::context_info`.
@@ -218,6 +290,7 @@ pub(crate) fn build_session_info_response(
     cwd: &str,
     model: Option<&PiModel>,
     cached_tokens: Option<u64>,
+    breakdown: Option<&ContextBreakdownRaw>,
 ) -> Value {
     let used = context_tokens_from_stats(stats)
         .or(cached_tokens)
@@ -226,23 +299,84 @@ pub(crate) fn build_session_info_response(
         .or_else(|| model.and_then(|m| m.context_window))
         .unwrap_or(0);
     let estimate = messages.map(estimate_message_tokens).unwrap_or_default();
-    // When message estimation fails (RPC error / empty transcript), put the
-    // whole window into Messages so the bar is not 100% "Reasoning/overhead".
-    let raw_parts = [estimate.messages, estimate.tool_payload];
+    let empty = ContextBreakdownRaw::default();
+    let breakdown = breakdown.unwrap_or(&empty);
+
+    // Scale system / tool-defs / messages / tool-payload into the authoritative
+    // `used` total. Tool definitions appear both in the bar residual path (via
+    // overhead) and as an informational Tool definitions row, matching native
+    // Grok ContextInfoBlock layout.
+    let raw_parts = [
+        breakdown.system_prompt_tokens_raw,
+        breakdown.tool_definitions_tokens_raw,
+        estimate.messages,
+        estimate.tool_payload,
+    ];
     let raw_total: u64 = raw_parts.iter().sum();
-    let message_tokens = if used == 0 {
-        0
+    let (system_tokens, tool_def_tokens, message_tokens) = if used == 0 {
+        (0, 0, 0)
     } else if raw_total == 0 {
-        used
+        // No estimates at all → put the whole used window into Messages so the
+        // bar is not 100% "Reasoning/overhead".
+        (0, 0, used)
     } else {
-        scale_token_parts(&raw_parts, used)
-            .first()
-            .copied()
-            .unwrap_or(used)
+        let scaled = scale_token_parts(&raw_parts, used);
+        (
+            scaled.first().copied().unwrap_or(0),
+            scaled.get(1).copied().unwrap_or(0),
+            scaled.get(2).copied().unwrap_or(0),
+        )
     };
-    // tool_payload becomes Reasoning/overhead via used - system - messages.
-    // System prompt / tool definitions are not exposed over Pi RPC, so they stay 0
-    // (pi-context can read them in-process; we cannot without expanding RPC).
+
+    // Informational rows (overlap system/messages; do not affect the bar sum).
+    let ratio = if raw_total == 0 || used == 0 {
+        0.0
+    } else {
+        used as f64 / raw_total as f64
+    };
+    let scale_raw = |raw: u64| -> u64 {
+        if raw == 0 || ratio == 0.0 {
+            0
+        } else {
+            ((raw as f64) * ratio).round() as u64
+        }
+    };
+    let mut usage_categories = Vec::new();
+    if breakdown.append_tokens_raw > 0 {
+        usage_categories.push(json!({
+            "label": "Append system prompt",
+            "tokens": scale_raw(breakdown.append_tokens_raw),
+        }));
+    }
+    for file in &breakdown.context_files {
+        if file.tokens_raw == 0 {
+            continue;
+        }
+        usage_categories.push(json!({
+            "label": context_file_label(&file.path),
+            "tokens": scale_raw(file.tokens_raw),
+            "detail": file.path,
+        }));
+    }
+    if breakdown.skills_tokens_raw > 0 || breakdown.skills_count > 0 {
+        let mut row = json!({
+            "label": "Skills",
+            "tokens": scale_raw(breakdown.skills_tokens_raw),
+        });
+        if breakdown.skills_count > 0 {
+            let noun = if breakdown.skills_count == 1 {
+                "skill"
+            } else {
+                "skills"
+            };
+            row.as_object_mut().unwrap().insert(
+                "detail".into(),
+                Value::String(format!("{} {noun}", breakdown.skills_count)),
+            );
+        }
+        usage_categories.push(row);
+    }
+
     let free_tokens = total.saturating_sub(used);
     let usage_pct = usage_pct_from_stats(stats, used, total);
     let turns = number(stats, &["userMessages", "user_messages"]).unwrap_or(0);
@@ -269,9 +403,9 @@ pub(crate) fn build_session_info_response(
         "context": {
             "used": used,
             "total": total,
-            "systemPromptTokens": 0,
-            "toolDefinitionsCount": 0,
-            "toolDefinitionsTokens": 0,
+            "systemPromptTokens": system_tokens,
+            "toolDefinitionsCount": breakdown.tool_definitions_count,
+            "toolDefinitionsTokens": tool_def_tokens,
             "compactionCount": estimate.compaction_count,
             "turnCount": turns,
             "toolCallCount": tool_call_count,
@@ -280,6 +414,7 @@ pub(crate) fn build_session_info_response(
             "freeTokens": free_tokens,
             "usagePct": usage_pct,
             "autoCompactThresholdPercent": 85_u8,
+            "usageCategories": usage_categories,
         }
     });
     if let Some(obj) = response.as_object_mut() {
@@ -413,6 +548,7 @@ mod tests {
             "/repo",
             Some(&model),
             None,
+            None,
         );
         assert_eq!(response["sessionId"], json!("sess-1"));
         assert_eq!(response["cwd"], json!("/repo"));
@@ -431,8 +567,67 @@ mod tests {
         assert!(response["context"]["messageTokens"].as_u64().unwrap_or(0) > 0);
         let message_tokens = response["context"]["messageTokens"].as_u64().unwrap();
         assert!(message_tokens <= 10_000);
-        // system stays 0 without RPC access; overhead fills the rest of used.
+        // Without breakdown, system/tools stay 0; residual fills Reasoning/overhead.
         assert_eq!(response["context"]["systemPromptTokens"], json!(0));
+        assert_eq!(response["context"]["toolDefinitionsTokens"], json!(0));
+    }
+
+    #[test]
+    fn session_info_scales_system_and_tool_breakdown() {
+        let stats = json!({
+            "userMessages": 1,
+            "toolCalls": 0,
+            "totalMessages": 2,
+            "contextUsage": { "tokens": 10_000, "contextWindow": 100_000, "percent": 10.0 }
+        });
+        let messages = json!({
+            "messages": [
+                { "role": "user", "content": "hello world" },
+                { "role": "assistant", "content": "hi" }
+            ]
+        });
+        let breakdown = ContextBreakdownRaw {
+            system_prompt_tokens_raw: 4_000,
+            tool_definitions_count: 5,
+            tool_definitions_tokens_raw: 1_000,
+            append_tokens_raw: 100,
+            context_files: vec![ContextFileRaw {
+                path: "/repo/AGENTS.md".into(),
+                tokens_raw: 400,
+            }],
+            skills_count: 2,
+            skills_tokens_raw: 200,
+        };
+        let response = build_session_info_response(
+            &stats,
+            Some(&messages),
+            "sess-3",
+            "/repo",
+            None,
+            None,
+            Some(&breakdown),
+        );
+        let system = response["context"]["systemPromptTokens"].as_u64().unwrap();
+        let tools = response["context"]["toolDefinitionsTokens"]
+            .as_u64()
+            .unwrap();
+        let messages_tokens = response["context"]["messageTokens"].as_u64().unwrap();
+        assert!(system > 0);
+        assert!(tools > 0);
+        assert!(messages_tokens > 0);
+        assert_eq!(response["context"]["toolDefinitionsCount"], json!(5));
+        // system + messages <= used; residual is Reasoning/overhead in the UI.
+        assert!(system + messages_tokens <= 10_000);
+        let categories = response["context"]["usageCategories"]
+            .as_array()
+            .expect("usage categories");
+        assert!(
+            categories
+                .iter()
+                .any(|row| row["label"] == "Append system prompt")
+        );
+        assert!(categories.iter().any(|row| row["label"] == "AGENTS.md"));
+        assert!(categories.iter().any(|row| row["label"] == "Skills"));
     }
 
     #[test]
@@ -444,7 +639,7 @@ mod tests {
             "contextUsage": { "tokens": null, "contextWindow": 100_000, "percent": null }
         });
         let response =
-            build_session_info_response(&stats, None, "sess-2", "/tmp", None, Some(42_000));
+            build_session_info_response(&stats, None, "sess-2", "/tmp", None, Some(42_000), None);
         assert_eq!(response["context"]["used"], json!(42_000));
         assert_eq!(response["context"]["total"], json!(100_000));
         assert_eq!(response["context"]["freeTokens"], json!(58_000));

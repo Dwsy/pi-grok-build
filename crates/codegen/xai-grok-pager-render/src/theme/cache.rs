@@ -137,10 +137,7 @@ pub fn clear_custom() {
 /// Whether a custom palette is active.
 #[must_use]
 pub fn has_custom() -> bool {
-    CUSTOM
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .is_some()
+    CUSTOM.lock().unwrap_or_else(|e| e.into_inner()).is_some()
 }
 
 /// Clone of the active custom theme, if any.

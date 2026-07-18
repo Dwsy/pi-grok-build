@@ -19,6 +19,10 @@ pub struct UiConfig {
     /// gates the automatic return-from-away path. Written by F2 settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_recap: Option<bool>,
+    /// Show OSC 9;4 progress indicators in the terminal tab bar.
+    /// `None` = off (default). Written by F2 settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_bar: Option<bool>,
     /// YOLO mode. Read by `util::config`, declared here for `serde_ignored`.
     #[serde(default)]
     pub yolo: bool,
@@ -246,6 +250,7 @@ impl Default for UiConfig {
             fork_secondary_model: xai_grok_models::default_model().to_string(),
             recap_model: String::new(),
             session_recap: None,
+            progress_bar: None,
             yolo: false,
             ui_theme: None,
             compact_mode: false,

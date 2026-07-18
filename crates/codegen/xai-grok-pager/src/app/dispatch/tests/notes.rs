@@ -40,6 +40,7 @@ fn manual_recap_with_no_messages_toasts_empty_state_and_skips_request() {
 fn manual_recap_with_messages_requests_and_shows_spinner() {
     let mut app = test_app_with_agent();
     app.session_recap_available = true;
+    app.current_ui.recap_model = "provider/recap-model".into();
     let id = AgentId(0);
     {
         let agent = app.agents.get_mut(&id).unwrap();
@@ -70,6 +71,7 @@ fn manual_recap_with_messages_requests_and_shows_spinner() {
 fn manual_recap_during_batch_load_with_prompts_still_requests() {
     let mut app = test_app_with_agent();
     app.session_recap_available = true;
+    app.current_ui.recap_model = "provider/recap-model".into();
     let id = AgentId(0);
     {
         let agent = app.agents.get_mut(&id).unwrap();
@@ -101,6 +103,7 @@ fn manual_recap_during_batch_load_with_prompts_still_requests() {
 fn manual_recap_while_loading_replay_still_requests() {
     let mut app = test_app_with_agent();
     app.session_recap_available = true;
+    app.current_ui.recap_model = "provider/recap-model".into();
     let id = AgentId(0);
     {
         let agent = app.agents.get_mut(&id).unwrap();
@@ -117,6 +120,45 @@ fn manual_recap_while_loading_replay_still_requests() {
     let agent = app.agents.get(&id).unwrap();
     assert!(agent.pending_recap_entry.is_some());
     assert!(agent.toast.is_none());
+}
+
+#[test]
+fn manual_recap_without_dedicated_model_skips_request_and_explains_configuration() {
+    let mut app = test_app_with_agent();
+    app.session_recap_available = true;
+    let id = AgentId(0);
+    app.agents
+        .get_mut(&id)
+        .unwrap()
+        .scrollback
+        .push_block(RenderBlock::user_prompt("hello"));
+
+    let effects = dispatch(Action::SendRecap { auto: false }, &mut app);
+
+    assert!(effects.is_empty());
+    let agent = app.agents.get(&id).unwrap();
+    assert!(agent.pending_recap_entry.is_none());
+    assert_eq!(
+        agent.toast.as_ref().map(|(message, _)| message.as_str()),
+        Some("Choose a recap model in F2 settings")
+    );
+}
+
+#[test]
+fn auto_recap_without_dedicated_model_is_silent() {
+    let mut app = test_app_with_agent();
+    app.session_recap_available = true;
+    let id = AgentId(0);
+    app.agents
+        .get_mut(&id)
+        .unwrap()
+        .scrollback
+        .push_block(RenderBlock::user_prompt("hello"));
+
+    let effects = dispatch(Action::SendRecap { auto: true }, &mut app);
+
+    assert!(effects.is_empty());
+    assert!(app.agents[&id].toast.is_none());
 }
 
 #[test]

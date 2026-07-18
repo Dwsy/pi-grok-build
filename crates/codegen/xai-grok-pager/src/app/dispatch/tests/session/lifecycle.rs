@@ -165,6 +165,33 @@ fn session_created_sets_session_id() {
     );
 }
 #[test]
+fn external_session_created_clears_starting_session_indicator() {
+    let mut app = test_app_with_agent();
+    app.external_agent = true;
+    let id = AgentId(0);
+    let agent = app.agents.get_mut(&id).unwrap();
+    agent.session.session_id = None;
+    agent.mcp_init_progress = Some(crate::app::agent_view::McpInitProgress {
+        total: 0,
+        connected: 0,
+        started_at: Instant::now(),
+    });
+
+    dispatch(
+        Action::TaskComplete(TaskResult::SessionCreated {
+            agent_id: id,
+            session_id: "pi-session-ready".into(),
+            models: None,
+        }),
+        &mut app,
+    );
+
+    assert!(
+        app.agents[&id].mcp_init_progress.is_none(),
+        "the external session response must clear the startup indicator"
+    );
+}
+#[test]
 fn session_created_omits_cta_catalog_when_disabled() {
     let mut app = test_app_with_agent();
     assert!(!app.plugin_cta_enabled);

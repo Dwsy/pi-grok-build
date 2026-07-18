@@ -1272,6 +1272,12 @@ fn move_setting_away_from_default(app: &mut AppView, key: crate::settings::Setti
         "remember_tool_approvals" => {
             let _ = dispatch(Action::SetRememberToolApprovals(true), app);
         }
+        "session_recap" => {
+            let _ = dispatch(Action::SetSessionRecap(false), app);
+        }
+        "progress_bar" => {
+            let _ = dispatch(Action::SetProgressBar(true), app);
+        }
         "toolset.ask_user_question.timeout_enabled" => {
             let _ = dispatch(Action::SetAskUserQuestionTimeoutEnabled(false), app);
         }
@@ -1331,16 +1337,21 @@ fn move_setting_away_from_default(app: &mut AppView, key: crate::settings::Setti
         "voice_stt_language" => {
             let _ = dispatch(Action::SetVoiceSttLanguage("es".to_string()), app);
         }
-        "fork_secondary_model" => {
+        "fork_secondary_model" | "recap_model" => {
             use agent_client_protocol as acp;
             use std::sync::Arc;
             if let ActiveView::Agent(aid) = app.active_view
                 && let Some(agent) = app.agents.get_mut(&aid)
             {
-                let id = acp::ModelId::new(Arc::from("test-fork-move"));
-                let info = acp::ModelInfo::new(id.clone(), "Test Fork Move".to_string());
+                let id = acp::ModelId::new(Arc::from("test-aux-model-move"));
+                let info = acp::ModelInfo::new(id.clone(), "Test Aux Model Move".to_string());
                 agent.session.models.available.insert(id.clone(), info);
-                let _ = dispatch(Action::SetForkSecondaryModel(id), app);
+                let action = if key == "recap_model" {
+                    Action::SetRecapModel(id)
+                } else {
+                    Action::SetForkSecondaryModel(id)
+                };
+                let _ = dispatch(action, app);
             }
         }
         "default_selected_permission" => {

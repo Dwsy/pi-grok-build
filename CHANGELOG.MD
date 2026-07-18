@@ -4,6 +4,23 @@ All notable changes to **grok-pi** (Pi agent core in Grok Build's production TUI
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.0.5] - 2026-07-18
+
+### Added
+
+- Native Pi resource manager for extensions, skills, prompts, and themes
+- Context visualisation bridge with native Pager rendering
+- Session recap, timeline, and Pi model-selection integration improvements
+
+### Changed
+
+- Welcome hero card now uses the `grok-pi` name, product version, and Pi description
+- Release builds, update checks, and update installs use only `GROK_PI_VERSION`
+
+### Fixed
+
+- Upstream Grok `GROK_VERSION` and workspace version no longer affect `grok-pi` version display or update comparison
+
 ## [0.0.4] - 2026-07-17
 
 ### Added

@@ -10,10 +10,15 @@
  */
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { convertToLlm } from "@earendil-works/pi-coding-agent";
 
 const BRIDGE_TYPE = "pi-grok-recap/v1";
 const COMMAND = "__pi_grok_recap";
+const AUTO_MIN_TURNS = 3;
+const AUTO_MIN_IDLE_MS = 3 * 60 * 1000;
+const MAX_RECENT_TURNS = 6;
+const MAX_RECAP_CONTEXT_CHARS = 12_000;
+const MAX_MESSAGE_CHARS = 2_000;
+const MAX_EARLIER_SUMMARY_CHARS = 3_000;
 
 type RecapArgs = {
 	auto?: boolean;
@@ -43,11 +48,10 @@ function parseArgs(raw: string | undefined): RecapArgs {
 function languageInstruction(language: string | undefined): string {
 	const lang = (language ?? "").trim();
 	if (!lang || lang === "C" || lang === "POSIX") {
-		return "Write the body in the same language the user mostly used in this session.";
+		return "Use the dominant language of the user's messages for the entire body.";
 	}
-	// LANG often looks like zh_CN.UTF-8 — keep the locale tag readable.
 	const tag = lang.replace(/\..*$/, "").replace(/_/g, "-");
-	return `Write the body in the user's system language (${tag}). If that language is unclear, use the dominant language of the session.`;
+	return `Write the entire body in the user's operating-system language (${tag}). Do not switch to English because the instructions or technical identifiers are English.`;
 }
 
 function recapInstruction(language: string | undefined): string {
@@ -85,33 +89,99 @@ function cleanRecapText(raw: string): string {
 	return text;
 }
 
-function branchToAgentMessages(branch: Array<Record<string, unknown>>): unknown[] {
-	return branch.flatMap((entry) => {
-		if (entry.type === "message" && entry.message) return [entry.message];
-		if (entry.type === "compaction") {
-			return [
-				{
-					role: "compactionSummary",
-					summary: String(entry.summary ?? ""),
-					tokensBefore: Number(entry.tokensBefore ?? 0),
-					timestamp: new Date(String(entry.timestamp ?? "")).getTime(),
-				},
-			];
-		}
-		return [];
-	});
+function truncateText(text: string, maxChars: number): string {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	if (normalized.length <= maxChars) return normalized;
+	return `${normalized.slice(0, maxChars).trimEnd()}…`;
 }
 
-function countMainTurns(messages: Array<{ role?: string }>): number {
-	// Count persisted user messages only; custom bridge entries are not turns.
-	return messages.filter((m) => m.role === "user").length;
+function messageText(message: Record<string, unknown>): string {
+	const content = message.content;
+	if (typeof content === "string") return truncateText(content, MAX_MESSAGE_CHARS);
+	if (!Array.isArray(content)) return "";
+	const parts: string[] = [];
+	for (const block of content) {
+		if (!block || typeof block !== "object") continue;
+		const item = block as Record<string, unknown>;
+		if (item.type === "text" && typeof item.text === "string") parts.push(item.text);
+		if (item.type === "toolCall" && typeof item.name === "string") parts.push(`[tool: ${item.name}]`);
+	}
+	return truncateText(parts.join("\n"), MAX_MESSAGE_CHARS);
+}
+
+function countMainTurns(branch: Array<Record<string, unknown>>): number {
+	return branch.filter((entry) => {
+		if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") return false;
+		return (entry.message as Record<string, unknown>).role === "user";
+	}).length;
+}
+
+function lastCompletedTurnAt(branch: Array<Record<string, unknown>>): number | undefined {
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") continue;
+		if ((entry.message as Record<string, unknown>).role !== "assistant") continue;
+		const timestamp = Date.parse(String(entry.timestamp ?? ""));
+		if (Number.isFinite(timestamp)) return timestamp;
+	}
+	return undefined;
+}
+
+function lastSuccessfulRecapTurnCount(branch: Array<Record<string, unknown>>): number | undefined {
+	let userTurns = 0;
+	let lastSuccessful: number | undefined;
+	for (const entry of branch) {
+		if (entry.type === "message" && entry.message && typeof entry.message === "object") {
+			if ((entry.message as Record<string, unknown>).role === "user") userTurns++;
+			continue;
+		}
+		if (entry.type !== "custom_message" || entry.customType !== BRIDGE_TYPE) continue;
+		const details = entry.details;
+		if (details && typeof details === "object" && (details as Record<string, unknown>).ok === true) {
+			lastSuccessful = userTurns;
+		}
+	}
+	return lastSuccessful;
+}
+
+function buildRecapContext(branch: Array<Record<string, unknown>>): string {
+	const lines: string[] = [];
+	let selectedTurns = 0;
+	let earliestSelectedIndex = branch.length;
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") continue;
+		const message = entry.message as Record<string, unknown>;
+		const role = message.role;
+		if (role !== "user" && role !== "assistant" && role !== "toolResult") continue;
+		if (role === "user" && selectedTurns >= MAX_RECENT_TURNS) break;
+		const text = messageText(message);
+		if (!text) continue;
+		const label = role === "user" ? "User" : role === "assistant" ? "Assistant" : "Tool result";
+		lines.push(`[${label}]: ${text}`);
+		earliestSelectedIndex = index;
+		if (role === "user") selectedTurns++;
+	}
+	lines.reverse();
+
+	for (let index = earliestSelectedIndex - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry.type !== "compaction") continue;
+		const summary = truncateText(String(entry.summary ?? ""), MAX_EARLIER_SUMMARY_CHARS);
+		if (summary) lines.unshift(`[Earlier summary]: ${summary}`);
+		break;
+	}
+
+	const context = lines.join("\n\n");
+	if (context.length <= MAX_RECAP_CONTEXT_CHARS) return context;
+	const tail = context.slice(-MAX_RECAP_CONTEXT_CHARS);
+	const firstBoundary = tail.indexOf("\n\n");
+	return firstBoundary >= 0 ? tail.slice(firstBoundary + 2) : tail;
 }
 
 function resolveModel(ctx: ExtensionCommandContext, modelRef: string | undefined) {
+	if (!modelRef || !modelRef.trim()) return undefined;
 	const sessionModel = ctx.model;
-	if (!modelRef || !modelRef.trim()) {
-		return sessionModel;
-	}
 	const raw = modelRef.trim();
 	// Accept "provider/id" or bare id (prefer session provider).
 	const slash = raw.indexOf("/");
@@ -128,10 +198,10 @@ function resolveModel(ctx: ExtensionCommandContext, modelRef: string | undefined
 		const found = ctx.modelRegistry.find(provider, id);
 		if (found) return found;
 	}
-	// Last resort: scan all models by id.
+	// Last resort: scan all models by id. Never fall back to the active session
+	// model: recap uses only the model explicitly configured in F2.
 	const all = ctx.modelRegistry.getAll();
-	const byId = all.find((m) => m.id === id || `${m.provider}/${m.id}` === raw);
-	return byId ?? sessionModel;
+	return all.find((m) => m.id === id || `${m.provider}/${m.id}` === raw);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -167,12 +237,24 @@ export default function (pi: ExtensionAPI) {
 			const auto = Boolean(parsed.auto);
 
 			try {
-				const branch = ctx.sessionManager.getBranch();
-				const sessionMessages = branchToAgentMessages(branch as Array<Record<string, unknown>>);
-				const mainTurns = countMainTurns(sessionMessages as Array<{ role?: string }>);
-				const llmMessages = convertToLlm(sessionMessages as any);
+				const branch = ctx.sessionManager.getBranch() as Array<Record<string, unknown>>;
+				const mainTurns = countMainTurns(branch);
 				if (mainTurns === 0) {
 					emit({ ok: false, auto, reason: "no main turns yet" });
+					return;
+				}
+				if (auto && mainTurns < AUTO_MIN_TURNS) {
+					emit({ ok: false, auto, reason: "fewer than 3 turns" });
+					return;
+				}
+				const completedAt = lastCompletedTurnAt(branch);
+				if (auto && (!completedAt || Date.now() - completedAt < AUTO_MIN_IDLE_MS)) {
+					emit({ ok: false, auto, reason: "last turn completed less than 3 minutes ago" });
+					return;
+				}
+				const recappedTurns = lastSuccessfulRecapTurnCount(branch);
+				if (auto && recappedTurns !== undefined && mainTurns <= recappedTurns) {
+					emit({ ok: false, auto, reason: "no new turns since last recap" });
 					return;
 				}
 
@@ -192,14 +274,17 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 
-				// Keep a modest history budget: recap is a short side-call.
-				const history = (llmMessages as Message[]).slice(-40);
+				const conversation = buildRecapContext(branch);
+				if (!conversation) {
+					emit({ ok: false, auto, reason: "no recap context" });
+					return;
+				}
 				const userMessage: Message = {
 					role: "user",
 					content: [
 						{
 							type: "text",
-							text: recapInstruction(parsed.language),
+							text: `${recapInstruction(parsed.language)}\n\n<conversation>\n${conversation}\n</conversation>`,
 						},
 					],
 					timestamp: Date.now(),
@@ -207,9 +292,7 @@ export default function (pi: ExtensionAPI) {
 
 				const response = await complete(
 					model,
-					{
-						messages: [...history, userMessage],
-					},
+					{ messages: [userMessage] },
 					{
 						apiKey: auth.apiKey,
 						headers: auth.headers,
@@ -219,6 +302,10 @@ export default function (pi: ExtensionAPI) {
 
 				if (response.stopReason === "aborted") {
 					emit({ ok: false, auto, reason: "aborted" });
+					return;
+				}
+				if (response.stopReason === "error") {
+					emit({ ok: false, auto, reason: response.errorMessage || "model error" });
 					return;
 				}
 

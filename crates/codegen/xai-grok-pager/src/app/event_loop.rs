@@ -448,6 +448,15 @@ fn run_pending_suspends(
     }
 }
 
+fn sync_timeline_appearance(app: &mut AppView, show_timeline: bool) {
+    app.current_ui.show_timeline = Some(show_timeline);
+    if app.appearance.show_timeline != show_timeline {
+        let mut config = app.appearance.clone();
+        config.show_timeline = show_timeline;
+        app.set_appearance(config);
+    }
+}
+
 /// Run the main event loop until quit.
 ///
 /// Returns a [`RunResult`] with optional exit info (for the resume hint)
@@ -494,6 +503,7 @@ pub(crate) async fn run(
             crate::slash::set_builtin_command_profile(crate::slash::BuiltinCommandProfile::Grok);
             crate::views::welcome::logo::set_logo_override(None);
             crate::views::welcome::logo::set_welcome_menu_override(None);
+            crate::views::welcome::logo::set_welcome_brand_override(None);
         }
         crate::acp::UiProfile::External(profile) => {
             crate::slash::set_builtin_command_profile(
@@ -506,12 +516,20 @@ pub(crate) async fn run(
                     changelog_url: profile.changelog_url,
                 },
             ));
+            crate::views::welcome::logo::set_welcome_brand_override(profile.welcome_brand.map(
+                |brand| crate::views::welcome::logo::ExternalWelcomeBrand {
+                    title: brand.title,
+                    subtitle: brand.subtitle,
+                    version: brand.version,
+                },
+            ));
             crate::unified_log::info(
                 "external agent pager profile enabled",
                 None,
                 Some(serde_json::json!({
                     "agent": profile.agent_name,
                     "logo_override": profile.logo.is_some(),
+                    "welcome_brand_override": profile.welcome_brand.is_some(),
                     "hide_new_worktree": profile.hide_new_worktree,
                     "changelog_url": profile.changelog_url,
                 })),
@@ -827,6 +845,7 @@ pub(crate) async fn run(
         if let Some(enabled) = app.current_ui.session_recap {
             notif.session_recap = enabled;
         }
+        notif.progress_bar = app.current_ui.progress_bar.unwrap_or(false);
         app.notification_service = crate::notifications::NotificationService::new(notif);
         if let Some(table) = raw.as_table() {
             // Voice inherits the same resolved endpoints base as chat
@@ -1040,6 +1059,7 @@ pub(crate) async fn run(
         app.last_known_terminal_rows,
     );
     initial_config.show_timestamps = crate::appearance::cache::load_timestamps();
+    initial_config.show_timeline = crate::appearance::cache::load_show_timeline();
     let tick_interval = initial_config.animation.tick_interval();
     crate::appearance::set_tab_width(initial_config.scrollback.display.tab_width);
     app.set_appearance(initial_config);
@@ -1047,6 +1067,11 @@ pub(crate) async fn run(
     // Seed app state from disk once at the I/O boundary so dispatch
     // stays sans-IO.
     app.current_ui = load_initial_ui_config();
+    // Field-tolerant: a whole-`UiConfig` default (malformed unrelated `[ui]`
+    // field) must not wipe a valid `show_timeline` or leave appearance /
+    // cache / `current_ui` disagreeing — `/timeline` and the rail all read
+    // the same canonical value after this sync + `prime` below.
+    sync_timeline_appearance(&mut app, crate::appearance::cache::load_show_timeline());
     // Disk load replaces `current_ui`. Assign one policy-clamped resolved
     // launch mode unconditionally (CLI > TOML > remote > Ask) so disk Auto
     // cannot win over `--permission-mode ask`, and a policy-clamped remote
@@ -2104,6 +2129,7 @@ pub(crate) async fn run(
                 // `PromptWidget.compact`).
                 config.prompt.compact = app.appearance.prompt.compact;
                 config.show_timestamps = app.appearance.show_timestamps;
+                config.show_timeline = app.appearance.show_timeline;
                 tick_interval = config.animation.tick_interval();
                 crate::appearance::set_tab_width(config.scrollback.display.tab_width);
                 app.set_appearance(config);
@@ -2791,12 +2817,9 @@ async fn drain_and_process(
                     force_repaint = true;
                     needs_draw = true;
                 }
-                // Capture recap eligibility BEFORE on_focus_gained() clears the
-                // away timer. Auto recap requires the shell rollout flag plus
-                // the notifications opt-in; manual `/recap` only needs the flag.
-                let recap_due = app.session_recap_available
-                    && app.notification_service.focus_tracker.recap_due()
-                    && app.notification_service.config().session_recap;
+                // Automatic recap is generated only while unfocused by the
+                // background poll. Refocus must never start a second request;
+                // it only reveals a recap that already completed while away.
                 app.notification_service.focus_tracker.on_focus_gained();
                 // Pre-warm AppKit's lazy dlopen off the UI thread (once) so the
                 // first changeCount poll after returning is just the cheap
@@ -2823,30 +2846,6 @@ async fn drain_and_process(
                             && agent.should_restore_prompt_on_focus_gained()
                         {
                             agent.set_active_pane(crate::views::agent::ActivePane::Prompt, false);
-                            needs_draw = true;
-                            had_non_resize_change = true;
-                        }
-
-                        // Automatic "where was I" recap: the user just returned
-                        // after being away long enough. Only when the session is
-                        // idle and not blocked by a modal or pending question.
-                        // Compute eligibility into a bool first so the immutable
-                        // agent borrow is dropped before dispatch (&mut app).
-                        let eligible = app.agents.get(&id).is_some_and(|agent| {
-                            agent.session.state.is_idle()
-                                && agent.active_modal.is_none()
-                                && agent.question_view.is_none()
-                                && agent.session.session_id.is_some()
-                                && !agent.session.has_running_bg_tasks()
-                        });
-                        if recap_due && eligible {
-                            let effs = dispatch::dispatch(
-                                crate::app::actions::Action::SendRecap { auto: true },
-                                app,
-                            );
-                            if process_effects(effs, tasks, app, progress_tx) {
-                                return true;
-                            }
                             needs_draw = true;
                             had_non_resize_change = true;
                         }
@@ -4264,6 +4263,25 @@ mod tests {
         let result = coalesce_rapid_keys(events);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], Event::Paste(r"C:\foo.png".to_string()));
+    }
+
+    #[test]
+    fn timeline_startup_sync_updates_ui_and_renderer() {
+        use crate::app::agent::AgentId;
+
+        let mut app = crate::app::app_view::tests::test_app_with_agent();
+        assert!(!app.appearance.show_timeline);
+
+        sync_timeline_appearance(&mut app, true);
+
+        assert_eq!(app.current_ui.show_timeline, Some(true));
+        assert!(app.appearance.show_timeline);
+        assert!(
+            app.agents[&AgentId(0)]
+                .scrollback
+                .appearance()
+                .show_timeline
+        );
     }
 
     // ── make_run_result exit info ────────────────────────────────────────

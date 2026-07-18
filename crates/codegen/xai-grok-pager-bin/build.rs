@@ -3,7 +3,6 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs/tags");
-    println!("cargo:rerun-if-env-changed=GROK_VERSION");
     println!("cargo:rerun-if-env-changed=GROK_PI_VERSION");
 
     let commit = Command::new("git")
@@ -21,13 +20,11 @@ fn main() {
     let version = product_version();
 
     println!("cargo:rustc-env=GROK_PI_VERSION={version}");
-    println!(
-        "cargo:rustc-env=VERSION_WITH_COMMIT={version} ({commit})"
-    );
+    println!("cargo:rustc-env=VERSION_WITH_COMMIT={version} ({commit})");
 }
 
 fn product_version() -> String {
-    if let Ok(v) = std::env::var("GROK_PI_VERSION").or_else(|_| std::env::var("GROK_VERSION")) {
+    if let Ok(v) = std::env::var("GROK_PI_VERSION") {
         let v = v.trim().trim_start_matches('v').to_string();
         if !v.is_empty() {
             return v;

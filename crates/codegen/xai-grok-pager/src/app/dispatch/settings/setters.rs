@@ -1944,12 +1944,12 @@ pub(in crate::app::dispatch) fn set_recap_model(
 pub(in crate::app::dispatch) fn clear_recap_model(app: &mut AppView) -> Vec<Effect> {
     let prev_id_str = app.current_ui.recap_model.clone();
     if prev_id_str.is_empty() {
-        app.show_toast("\u{2713} Recap model: already using session model");
+        app.show_toast("\u{2713} Recap model: already disabled");
         return vec![];
     }
     set_recap_model_inner(app, String::new());
     refresh_open_settings_modals(app);
-    app.show_toast("\u{2713} Recap model: cleared");
+    app.show_toast("\u{2713} Recap model: disabled");
     vec![Effect::PersistSetting {
         key: "recap_model",
         value: crate::settings::SettingValue::String(String::new()),
@@ -1978,6 +1978,36 @@ pub(in crate::app::dispatch) fn set_session_recap(app: &mut AppView, enabled: bo
     });
     vec![Effect::PersistSetting {
         key: "session_recap",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(prev),
+    }]
+}
+
+/// State-only mutation for OSC 9;4 terminal-tab progress indicators.
+pub(super) fn set_progress_bar_inner(app: &mut AppView, enabled: bool) {
+    app.current_ui.progress_bar = Some(enabled);
+    if let Some(escapes) = app.notification_service.set_progress_bar(enabled) {
+        app.pending_notification_escapes
+            .get_or_insert_with(String::new)
+            .push_str(&escapes);
+    }
+}
+
+/// Outer dispatcher for `Action::SetProgressBar`.
+pub(in crate::app::dispatch) fn set_progress_bar(app: &mut AppView, enabled: bool) -> Vec<Effect> {
+    let prev = app.current_ui.progress_bar.unwrap_or(false);
+    if prev == enabled {
+        return vec![];
+    }
+    set_progress_bar_inner(app, enabled);
+    refresh_open_settings_modals(app);
+    app.show_toast(if enabled {
+        "\u{2713} Terminal tab progress: on"
+    } else {
+        "\u{2713} Terminal tab progress: off"
+    });
+    vec![Effect::PersistSetting {
+        key: "progress_bar",
         value: crate::settings::SettingValue::Bool(enabled),
         rollback_value: crate::settings::SettingValue::Bool(prev),
     }]

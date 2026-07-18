@@ -157,7 +157,10 @@ mod tests {
     #[test]
     fn hex_parses() {
         assert_eq!(hex_to_color("#00d7ff").unwrap(), Color::Rgb(0, 215, 255));
-        assert_eq!(hex_to_color("#AbCdEf").unwrap(), Color::Rgb(0xab, 0xcd, 0xef));
+        assert_eq!(
+            hex_to_color("#AbCdEf").unwrap(),
+            Color::Rgb(0xab, 0xcd, 0xef)
+        );
     }
 
     #[test]

@@ -858,13 +858,33 @@ fn slash_model_invalid_arg_produces_scrollback_error() {
     assert!(app.agents[&id].prompt.text().is_empty());
 }
 #[test]
-fn slash_model_no_args_produces_scrollback_error() {
+fn slash_model_no_args_opens_model_picker() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
-    let initial_scrollback = app.agents[&id].scrollback.len();
+    let model_id = acp::ModelId::new("test-provider::test-model");
+    app.agents
+        .get_mut(&id)
+        .expect("agent")
+        .session
+        .models
+        .available
+        .insert(
+            model_id.clone(),
+            acp::ModelInfo::new(model_id.clone(), "Test Model"),
+        );
+    app.agents
+        .get_mut(&id)
+        .expect("agent")
+        .session
+        .models
+        .current = Some(model_id);
     let effects = dispatch(Action::SendPrompt("/model".into()), &mut app);
     assert!(effects.is_empty());
-    assert_eq!(app.agents[&id].scrollback.len(), initial_scrollback + 1);
+    assert!(matches!(
+        app.agents[&id].active_modal,
+        Some(crate::views::modal::ActiveModal::ArgPicker { ref command, .. })
+            if command == "model"
+    ));
 }
 #[test]
 fn slash_hooks_opens_modal() {

@@ -43,6 +43,15 @@ impl AgentView {
     fn clear_scrollback_selection_state(&mut self) {
         self.update_scrollback_selection_state(Default::default(), Default::default());
     }
+    pub(crate) fn sync_timeline_hover_preview(&mut self) {
+        self.timeline_hover_preview = match self.timeline_hover {
+            Some(crate::views::timeline::TimelineHit::Tick(turn_idx)) => self
+                .scrollback
+                .turn_preview(turn_idx)
+                .map(|text| (turn_idx, text)),
+            _ => None,
+        };
+    }
     /// Open the fullscreen subagent view for `child_sid`, replaying child
     /// `updates.jsonl` when scrollback only has the injected task prompt.
     pub(crate) fn open_subagent_fullscreen(&mut self, child_sid: String) {
@@ -1129,6 +1138,7 @@ impl AgentView {
         } else {
             self.timeline_rail = None;
             self.timeline_hover = None;
+            self.timeline_hover_preview = None;
         }
         agent::fill_background(buf, area, layout_cfg, compact, &theme);
         use crate::views::agent_status::AgentStatusBar;
@@ -1568,6 +1578,20 @@ impl AgentView {
             }
             if let Some(rail) = self.timeline_rail.as_ref() {
                 crate::views::timeline::render_rail(buf, rail, self.timeline_hover, &theme);
+                if let Some(crate::views::timeline::TimelineHit::Tick(turn_idx)) =
+                    self.timeline_hover
+                    && let Some((preview_turn, preview)) = self.timeline_hover_preview.as_ref()
+                    && *preview_turn == turn_idx
+                {
+                    crate::views::timeline::render_tick_hover_popup(
+                        buf,
+                        rail,
+                        layout.scrollback,
+                        turn_idx,
+                        preview,
+                        &theme,
+                    );
+                }
             }
         }
         if self.block_viewer.is_none() && !search_active {

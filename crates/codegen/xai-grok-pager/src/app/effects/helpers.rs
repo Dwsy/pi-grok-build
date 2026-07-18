@@ -1136,6 +1136,14 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "progress_bar" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("progress_bar", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_progress_bar(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
         other => Err(format!("unknown setting key for persist: `{other}`")),
     }
 }

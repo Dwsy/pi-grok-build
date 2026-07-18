@@ -642,10 +642,14 @@ pub enum Action {
     /// Commit the recap model override. Empty-clear via ClearRecapModel.
     /// Persisted to `[ui].recap_model`.
     SetRecapModel(acp::ModelId),
-    /// Clear recap model override (use active session model).
+    /// Clear the dedicated recap model (recap generation stays disabled).
     ClearRecapModel,
+    /// Open the model picker for the active agent.
+    OpenModelPicker,
     /// Commit auto session-recap toggle (`[ui].session_recap`).
     SetSessionRecap(bool),
+    /// Commit OSC 9;4 terminal-tab progress indicators (`[ui].progress_bar`).
+    SetProgressBar(bool),
     /// Commit the `show_tips` preference. Persisted to `[cli].show_tips`.
     /// Restart-required — tips are resolved once at startup.
     SetShowTips(bool),
@@ -1186,11 +1190,7 @@ impl PlanModeKind {
     }
     /// Construct from a bool (the inverse of [`Self::to_bool`]).
     pub fn from_bool(b: bool) -> Self {
-        if b {
-            Self::On
-        } else {
-            Self::Off
-        }
+        if b { Self::On } else { Self::Off }
     }
 }
 /// Async side effect produced by [`super::dispatch::dispatch`].
