@@ -105,18 +105,6 @@ const PI_LOGO: &str = "\
 const GROK_PI_VERSION: &str = env!("GROK_PI_VERSION");
 const PI_WELCOME_SUBTITLE: &str = "Pi agent core in Grok Build's native terminal UI";
 
-fn resolve_pi_bin(configured: &str) -> Result<String> {
-    if configured != "pi" {
-        return Ok(configured.to_owned());
-    }
-    let bundled = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../pi-main/packages/coding-agent/dist/cli.js");
-    if bundled.is_file() {
-        return Ok(bundled.to_string_lossy().into_owned());
-    }
-    Ok(configured.to_owned())
-}
-
 fn main() -> Result<()> {
     // Keep the exact production pager process hooks. In particular, Mermaid
     // rendering re-enters this binary with an internal worker argument and
@@ -165,7 +153,6 @@ fn main() -> Result<()> {
 }
 
 async fn run(mut args: Args) -> Result<()> {
-    args.pi_bin = resolve_pi_bin(&args.pi_bin)?;
     let cwd = match args.pi_cwd.as_ref() {
         Some(path) => std::path::absolute(path).context("failed to resolve --pi-cwd")?,
         None => std::env::current_dir().context("failed to read current directory")?,
@@ -176,28 +163,33 @@ async fn run(mut args: Args) -> Result<()> {
     let _theme_report = xai_grok_pager::theme::pi::init_discovery(&cwd);
 
     let pi_session_dir = pi_session_dir(&args.pi_args, &cwd);
-    // Keep the bridge extension alive for the process lifetime. Pi loads it via
-    // `--extension`; drop would unlink the temp path before Pi finishes boot.
-    let navigate_tree_extension = write_navigate_tree_extension()
+    let bridge_extensions_enabled = !args.no_extensions;
+    let navigate_tree_extension = bridge_extensions_enabled
+        .then(|| write_navigate_tree_extension())
+        .transpose()
         .context("failed to create Pi navigateTree bridge extension")?;
-    // Default ON. Disable with PI_GROK_BASH=0 (or false/off/no).
-    // Note: re-registers tool "bash" and can conflict with user packages
-    // such as pi-tool-display — set PI_GROK_BASH=0 if bootstrap fails on tool clash.
-    let bash_enabled = env_flag_default_on("PI_GROK_BASH");
-    let bash_extension = if bash_enabled {
+    let bash_extension = if bridge_extensions_enabled && env_flag_default_on("PI_GROK_BASH") {
         Some(write_bash_extension().context("failed to create Pi Bash extension")?)
     } else {
         None
     };
-    let subagent_extension =
-        write_subagent_extension().context("failed to create Pi subagent extension")?;
-    let recap_extension = write_recap_extension().context("failed to create Pi recap extension")?;
-    let context_extension =
-        write_context_extension().context("failed to create Pi context breakdown extension")?;
-    let native_commands_extension = write_native_commands_extension()
+    let subagent_extension = bridge_extensions_enabled
+        .then(|| write_subagent_extension())
+        .transpose()
+        .context("failed to create Pi subagent extension")?;
+    let recap_extension = bridge_extensions_enabled
+        .then(|| write_recap_extension())
+        .transpose()
+        .context("failed to create Pi recap extension")?;
+    let context_extension = bridge_extensions_enabled
+        .then(|| write_context_extension())
+        .transpose()
+        .context("failed to create Pi context breakdown extension")?;
+    let native_commands_extension = bridge_extensions_enabled
+        .then(|| write_native_commands_extension())
+        .transpose()
         .context("failed to create Pi native commands extension")?;
-    // Experimental Remote TUI — default ON. Disable with PI_GROK_REMOTE_TUI=0.
-    let remote_tui_enabled = env_flag_default_on("PI_GROK_REMOTE_TUI");
+    let remote_tui_enabled = bridge_extensions_enabled && env_flag_default_on("PI_GROK_REMOTE_TUI");
     let remote_tui_extension = if remote_tui_enabled {
         Some(write_remote_tui_extension().context("failed to create Pi remote-tui extension")?)
     } else {
@@ -206,53 +198,50 @@ async fn run(mut args: Args) -> Result<()> {
     let mut pi_args = pi_args_with_startup_flags(
         std::mem::take(&mut args.pi_args),
         &args,
-        Some(navigate_tree_extension.path()),
+        navigate_tree_extension
+            .as_ref()
+            .map(|extension| extension.path()),
     );
-    // Explicit extensions remain active under --no-extensions. The Pi
-    // subagent/recap runtimes are lifecycle-only and never own a terminal surface.
-    pi_args.extend([
-        "--extension".to_string(),
-        subagent_extension.path().to_string_lossy().into_owned(),
-        "--extension".to_string(),
-        recap_extension.path().to_string_lossy().into_owned(),
-        "--extension".to_string(),
+    for path in [
+        subagent_extension
+            .as_ref()
+            .map(|extension| extension.path()),
+        recap_extension.as_ref().map(|extension| extension.path()),
         context_extension
-            .source_path()
-            .to_string_lossy()
-            .into_owned(),
-        "--extension".to_string(),
+            .as_ref()
+            .map(|extension| extension.source_path()),
         native_commands_extension
-            .path()
-            .to_string_lossy()
-            .into_owned(),
-    ]);
-    if let Some(path) = bash_extension
-        .as_ref()
-        .map(|extension| extension.source_path())
+            .as_ref()
+            .map(|extension| extension.path()),
+        bash_extension
+            .as_ref()
+            .map(|extension| extension.source_path()),
+        remote_tui_extension
+            .as_ref()
+            .map(|extension| extension.path()),
+    ]
+    .into_iter()
+    .flatten()
     {
         pi_args.extend([
             "--extension".to_string(),
             path.to_string_lossy().into_owned(),
         ]);
     }
-    if let Some(path) = remote_tui_extension.as_ref().map(|file| file.path()) {
-        pi_args.extend([
-            "--extension".to_string(),
-            path.to_string_lossy().into_owned(),
-        ]);
-    }
     // Identifies this Pi child as running under the grok-pi host for user extensions.
-    let mut env = vec![
-        ("PI_GROK".to_string(), "1".to_string()),
-        ("PI_GROK_SUBAGENTS".to_string(), "1".to_string()),
-        (
+    let mut env = vec![("PI_GROK".to_string(), "1".to_string())];
+    if subagent_extension.is_some() {
+        env.push(("PI_GROK_SUBAGENTS".to_string(), "1".to_string()));
+    }
+    if let Some(context_extension) = context_extension.as_ref() {
+        env.push((
             "PI_GROK_CONTEXT_BREAKDOWN".to_string(),
             context_extension
                 .breakdown_path()
                 .to_string_lossy()
                 .into_owned(),
-        ),
-    ];
+        ));
+    }
     if let Some(extension) = bash_extension.as_ref() {
         env.push(("PI_GROK_BASH".to_string(), "1".to_string()));
         env.push((
@@ -283,7 +272,9 @@ async fn run(mut args: Args) -> Result<()> {
     let bash_control_meta = bash_extension
         .as_ref()
         .map(|extension| extension.control_meta_path().to_path_buf());
-    let context_breakdown = context_extension.breakdown_path().to_path_buf();
+    let context_breakdown = context_extension
+        .as_ref()
+        .map(|extension| extension.breakdown_path().to_path_buf());
     // Hold the NamedTempFiles so the extension paths remain valid.
     let _navigate_tree_extension = navigate_tree_extension;
     let _bash_extension = bash_extension;
@@ -311,7 +302,7 @@ async fn run(mut args: Args) -> Result<()> {
         bootstrap,
         pi_session_dir,
         bash_control_meta,
-        Some(context_breakdown),
+        context_breakdown,
     ));
 
     let event_adapter = adapter.clone();
@@ -418,7 +409,8 @@ fn env_flag_default_on(name: &str) -> bool {
 
 #[cfg(test)]
 mod env_flag_tests {
-    use super::{env_flag_default_on, resolve_pi_bin};
+    use super::{Args, env_flag_default_on};
+    use clap::Parser;
 
     #[test]
     fn default_on_when_unset() {
@@ -430,17 +422,9 @@ mod env_flag_tests {
     }
 
     #[test]
-    fn defaults_to_bundled_pi_when_available() {
-        let resolved = resolve_pi_bin("pi").expect("resolve bundled Pi");
-        assert!(resolved.ends_with("pi-main/packages/coding-agent/dist/cli.js"));
-    }
-
-    #[test]
-    fn preserves_explicit_pi_bin() {
-        assert_eq!(
-            resolve_pi_bin("/tmp/custom-pi").expect("preserve explicit Pi executable"),
-            "/tmp/custom-pi"
-        );
+    fn no_extensions_disables_bridge_extensions() {
+        let args = Args::try_parse_from(["grok-pi", "--no-extensions"]).expect("parse args");
+        assert!(args.no_extensions);
     }
 
     #[test]

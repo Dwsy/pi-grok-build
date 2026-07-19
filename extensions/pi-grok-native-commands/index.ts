@@ -2,12 +2,10 @@ import * as path from "node:path";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { getProviders, type Model, type OAuthProviderId, type OAuthSelectPrompt } from "@earendil-works/pi-ai";
+import { type Model, type OAuthProviderId, type OAuthSelectPrompt } from "@earendil-works/pi-ai";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
 type SessionListProgress = (loaded: number, total: number) => void;
-
-let builtInApiKeyProviders = new Set<string>();
 
 type SessionInfo = {
 	path: string;
@@ -120,11 +118,8 @@ function loginProviders(ctx: ExtensionCommandContext): AuthSelectorProvider[] {
 		authType: "oauth" as const,
 	}));
 
-	const builtInProviders = new Set<string>(getProviders());
 	for (const providerId of new Set(ctx.modelRegistry.getAll().map((model) => model.provider))) {
-		const supportsApiKey = builtInApiKeyProviders.has(providerId) ||
-			(!oauthIds.has(providerId) && !builtInProviders.has(providerId));
-		if (!supportsApiKey) continue;
+		if (oauthIds.has(providerId)) continue;
 		providers.push({
 			id: providerId,
 			name: ctx.modelRegistry.getProviderDisplayName(providerId),
@@ -156,7 +151,7 @@ export default async function piGrokNativeCommands(pi: ExtensionAPI) {
 		return;
 	}
 
-	const [{ ModelSelectorComponent }, { SessionSelectorComponent, SessionManager, SettingsManager }, { BUILT_IN_PROVIDER_DISPLAY_NAMES }] = await Promise.all([
+	const [{ ModelSelectorComponent }, { SessionSelectorComponent, SessionManager, SettingsManager }] = await Promise.all([
 		import(hostUrl("modes/interactive/components/model-selector.js")) as Promise<{
 			ModelSelectorComponent: ModelSelectorConstructor;
 		}>,
@@ -169,11 +164,7 @@ export default async function piGrokNativeCommands(pi: ExtensionAPI) {
 			SessionManager: manager.SessionManager as SessionManagerStatic,
 			SettingsManager: settings.SettingsManager as SettingsManagerStatic,
 		})),
-		import(hostUrl("core/provider-display-names.js")) as Promise<{
-			BUILT_IN_PROVIDER_DISPLAY_NAMES: Record<string, string>;
-		}>,
 	]);
-	builtInApiKeyProviders = new Set(Object.keys(BUILT_IN_PROVIDER_DISPLAY_NAMES));
 
 	pi.registerCommand("pi-model", {
 		description: "[experimental] Open Pi's native model selector",
