@@ -105,6 +105,18 @@ const PI_LOGO: &str = "\
 const GROK_PI_VERSION: &str = env!("GROK_PI_VERSION");
 const PI_WELCOME_SUBTITLE: &str = "Pi agent core in Grok Build's native terminal UI";
 
+fn resolve_pi_bin(configured: &str) -> Result<String> {
+    if configured != "pi" {
+        return Ok(configured.to_owned());
+    }
+    let bundled = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../pi-main/packages/coding-agent/dist/cli.js");
+    if bundled.is_file() {
+        return Ok(bundled.to_string_lossy().into_owned());
+    }
+    Ok(configured.to_owned())
+}
+
 fn main() -> Result<()> {
     // Keep the exact production pager process hooks. In particular, Mermaid
     // rendering re-enters this binary with an internal worker argument and
@@ -153,6 +165,7 @@ fn main() -> Result<()> {
 }
 
 async fn run(mut args: Args) -> Result<()> {
+    args.pi_bin = resolve_pi_bin(&args.pi_bin)?;
     let cwd = match args.pi_cwd.as_ref() {
         Some(path) => std::path::absolute(path).context("failed to resolve --pi-cwd")?,
         None => std::env::current_dir().context("failed to read current directory")?,
@@ -405,7 +418,7 @@ fn env_flag_default_on(name: &str) -> bool {
 
 #[cfg(test)]
 mod env_flag_tests {
-    use super::env_flag_default_on;
+    use super::{env_flag_default_on, resolve_pi_bin};
 
     #[test]
     fn default_on_when_unset() {
@@ -414,6 +427,20 @@ mod env_flag_tests {
             std::env::remove_var("PI_GROK_TEST_FLAG_DEFAULT_ON");
         }
         assert!(env_flag_default_on("PI_GROK_TEST_FLAG_DEFAULT_ON"));
+    }
+
+    #[test]
+    fn defaults_to_bundled_pi_when_available() {
+        let resolved = resolve_pi_bin("pi").expect("resolve bundled Pi");
+        assert!(resolved.ends_with("pi-main/packages/coding-agent/dist/cli.js"));
+    }
+
+    #[test]
+    fn preserves_explicit_pi_bin() {
+        assert_eq!(
+            resolve_pi_bin("/tmp/custom-pi").expect("preserve explicit Pi executable"),
+            "/tmp/custom-pi"
+        );
     }
 
     #[test]

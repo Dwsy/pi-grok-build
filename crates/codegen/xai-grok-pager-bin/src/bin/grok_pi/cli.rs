@@ -17,7 +17,7 @@ pub(super) struct Args {
     #[command(subcommand)]
     pub(super) command: Option<Command>,
 
-    /// Pi executable. Use `node` with --pi-prefix-arg for a local Pi build.
+    /// Pi executable. By default, use the repository-bundled Pi CLI when present.
     #[arg(long, default_value = "pi")]
     pub(super) pi_bin: String,
 
