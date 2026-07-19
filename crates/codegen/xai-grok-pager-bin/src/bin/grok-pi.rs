@@ -84,6 +84,9 @@ const PI_GROK_NATIVE_COMMANDS: &[&str] = &[
     "timestamps",
     "timeline",
     "toggle-mouse-reporting",
+    // Pager-owned dictation writes to the native prompt; Pi still receives the
+    // resulting prompt only when the user submits it.
+    "voice",
     // Pager-native Pi resource manager (`/pi-config`, `/pi-resources`).
     "pi-config",
 ];
@@ -350,6 +353,7 @@ async fn run(mut args: Args) -> Result<()> {
             // Grok worktree product flow is not wired for Pi yet.
             hide_new_worktree: true,
             changelog_url: Some("https://github.com/Dwsy/grok-pi/blob/main/CHANGELOG.MD"),
+            enable_voice_dictation: true,
         },
     );
     connection.session_recap_available = true;
@@ -423,7 +427,7 @@ fn env_flag_default_off(name: &str) -> bool {
 
 #[cfg(test)]
 mod env_flag_tests {
-    use super::{Args, env_flag_default_off, env_flag_default_on};
+    use super::{Args, PI_GROK_NATIVE_COMMANDS, env_flag_default_off, env_flag_default_on};
     use clap::Parser;
 
     #[test]
@@ -433,6 +437,11 @@ mod env_flag_tests {
             std::env::remove_var("PI_GROK_TEST_FLAG_DEFAULT_ON");
         }
         assert!(env_flag_default_on("PI_GROK_TEST_FLAG_DEFAULT_ON"));
+    }
+
+    #[test]
+    fn grok_pi_command_profile_includes_voice() {
+        assert!(PI_GROK_NATIVE_COMMANDS.contains(&"voice"));
     }
 
     #[test]

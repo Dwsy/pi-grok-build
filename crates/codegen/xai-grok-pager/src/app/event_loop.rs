@@ -739,6 +739,10 @@ pub(crate) async fn run(
     // product commands that their protocol cannot satisfy are omitted.
     let ui_profile = connection.ui_profile.clone();
     let external_agent = ui_profile.is_external();
+    let external_voice_dictation_enabled = matches!(
+        &ui_profile,
+        crate::acp::UiProfile::External(profile) if profile.enable_voice_dictation
+    );
     match &ui_profile {
         crate::acp::UiProfile::Grok => {
             crate::slash::set_builtin_command_profile(crate::slash::BuiltinCommandProfile::Grok);
@@ -773,6 +777,7 @@ pub(crate) async fn run(
                     "welcome_brand_override": profile.welcome_brand.is_some(),
                     "hide_new_worktree": profile.hide_new_worktree,
                     "changelog_url": profile.changelog_url,
+                    "voice_dictation_enabled": profile.enable_voice_dictation,
                 })),
             );
         }
@@ -910,10 +915,10 @@ pub(crate) async fn run(
         && xai_grok_config::env_bool("GROK_PLUGIN_CTA")
             .or_else(|| remote_settings.as_ref().and_then(|s| s.plugin_cta))
             .unwrap_or(false);
-    // Voice/auth/product surfaces belong to the Grok backend. An external
-    // adapter may expose its own dynamic commands, but it must not accidentally
-    // activate Grok.com services.
-    let voice_mode_enabled = !external_agent
+    // Voice dictation stays Pager-owned: it only writes a transcript into the
+    // native prompt. External hosts opt in explicitly and still use their ACP
+    // backend for prompt submission, sessions, and model selection.
+    let voice_mode_enabled = (!external_agent || external_voice_dictation_enabled)
         && crate::app::resolve_voice_mode_enabled(
             xai_grok_config::env_bool("GROK_VOICE_MODE"),
             remote_settings.as_ref().and_then(|s| s.voice_mode_enabled),

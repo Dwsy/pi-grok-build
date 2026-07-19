@@ -109,6 +109,9 @@ pub struct ExternalUiProfile {
     /// When set, the welcome "Changelog" row opens this https URL in the
     /// system browser instead of Grok's CDN release-notes viewer.
     pub changelog_url: Option<&'static str>,
+    /// Allow Pager-owned voice dictation while retaining the external agent's
+    /// ownership of prompts, sessions, and model selection.
+    pub enable_voice_dictation: bool,
 }
 
 impl Default for ExternalUiProfile {
@@ -120,6 +123,7 @@ impl Default for ExternalUiProfile {
             welcome_brand: None,
             hide_new_worktree: false,
             changelog_url: None,
+            enable_voice_dictation: false,
         }
     }
 }

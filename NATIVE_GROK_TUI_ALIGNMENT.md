@@ -16,6 +16,7 @@ The current entry point is not a self-drawn Ratatui shell. `grok-pi` lives insid
 | Tools and diffs | `acp/tracker`, native `RenderBlock` | Pi tool lifecycle converted to ACP `ToolCall`/`ToolCallUpdate` |
 | Q&A overlay | `views/question_view` | `select`/`confirm`/`input`/`editor` converted to `x.ai/ask_user_question` |
 | Status and notifications | native toast / sticky surface | `notify`/`setStatus`/`setWidget` converted to narrow ACP notifications |
+| Voice dictation | native Pager Voice pipeline | opt-in external profile captures speech through xAI STT and inserts text into PromptWidget; Pi receives only the user-submitted prompt |
 | Scroll and transcript | native scrollback / transcript | both historical and live events are ACP `SessionUpdate` |
 | Model selection | native model selector | Pi models / thinking levels converted to `SessionModelState` |
 
@@ -41,6 +42,7 @@ The ACP standard does not cover all of Pi's UI/command semantics, so narrow seam
 6. slash profile: only selects existing Grok commands that are meaningful for Pi and fully work under the external ACP composition; Pi dynamic commands remain managed by the native registry.
 7. `/compact <instructions>`: passes the optional text from the native Grok command to Pi `customInstructions`.
 8. screen-mode boundary: Grok's native minimal/fullscreen renderer is retained, but the original slash re-exec would rebuild Grok's own `--resume` argv and cannot carry `grok-pi`'s Pi startup arguments, so only the startup option is exposed, not the broken `/minimal`/`/fullscreen` re-exec.
+9. voice dictation: the Pi external profile explicitly opts into the existing Pager-only `/voice` / Ctrl+Space/F8 flow. Its STT bearer comes from the local Grok login or API key; it inserts transcript text into PromptWidget and never changes Pi's model, session, or agent ownership.
 
 These seams do not create a new renderer, nor copy the PromptWidget, QuestionView, Markdown, tool, or diff components.
 

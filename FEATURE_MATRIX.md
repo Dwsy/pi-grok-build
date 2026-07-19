@@ -17,6 +17,7 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | Prompt editing | Native | PromptWidget |
 | Multiline / Vim mode | Native | Grok slash/settings |
 | Theme / timestamps / mouse | Native+Adapted | Grok appearance/input; Pi theme JSON mapped to Grok `Theme` via `theme::pi`, `/theme` accepts `pi:<name>`; F2 controls OSC 9;4 terminal-tab progress, off by default |
+| Voice dictation | Native+Adapted | Pager-native `/voice` / Ctrl+Space/F8 writes xAI STT text into the PromptWidget; grok-pi explicitly enables this narrow Pager-owned surface. It uses the local Grok login/API-key credential and does not affect Pi model, session, or prompt ownership. |
 | Markdown / code blocks | Native+Adapted | Pi text/reasoning → ACP chunks → `xai-grok-markdown` |
 | Tool cards | Native+Adapted | Pi tool events → ACP `ToolCall`; `read`/`bash`/`edit`/`write`/`grep`/`find`/`ls` projected to native cards |
 | Todo / plan list | Native+Adapted | Pi `@juicesharp/rpiv-todo` `todo` tool `details.tasks` → ACP `Plan` → native TodoPane/badge; `todo` card suppressed in scrollback |
