@@ -1,8 +1,10 @@
-# grok-pi
+# grok-pi — Remote TUI bridge for Pi and Grok Build
 
 > Pi agent core in Grok Build's native terminal UI.
 
 [Download latest release](https://github.com/Dwsy/grok-pi/releases/latest) · [中文文档](README.zh-CN.md) · [Feature matrix](FEATURE_MATRIX.md) · [Architecture](NATIVE_GROK_TUI_ALIGNMENT.md) · [Verification](VERIFICATION.md) · [Changelog](CHANGELOG.MD)
+
+> **Remote TUI bridge.** Pi's interactive components render through Grok Build's native Pager, preserving the Grok terminal experience while exposing Pi's extension ecosystem. Pi users get Grok Build's native UI; Grok Build users get Pi's models, tools, sessions, and extensions.
 
 `grok-pi` combines Pi's agent runtime with Grok Build's native Pager. Pi remains responsible for models, tools, extensions, sessions, and agent execution. Grok Pager remains the only terminal UI.
 
@@ -57,7 +59,7 @@ grok-pi update
 |---|---|
 | Agent runtime | Pi models, providers, tools, extensions, skills, sessions, retries, and compaction |
 | Terminal UI | Grok Pager input, slash completion, Markdown, tool cards, diffs, dialogs, and scrollback |
-| Interactive extensions | Pi `ctx.ui.custom` components rendered through the native Pager |
+| **Remote TUI bridge** | Pi `ctx.ui.custom` components rendered through Grok Build's native Pager, without a second TUI |
 | Shell execution | Bash integration, background tasks, output limits, timeouts, and process-tree cleanup |
 | Parallel work | Pi sub-agents with foreground/background execution and native task views |
 | Session workflow | Resume, tree navigation, labels, recap, context inspection, and session picker |
@@ -82,7 +84,7 @@ The integration has three boundaries:
 - **Pi** owns the agent loop, models, providers, tools, extensions, and sessions.
 - **`pi-grok-adapter`** is a headless JSONL RPC ↔ ACP bridge. It does not own a terminal or render a second UI.
 
-Pi source is not modified. Capabilities unavailable in Pi RPC are connected through the official extension API or a declared Pager seam.
+Pi source is not modified. The Remote TUI bridge connects capabilities unavailable in Pi RPC through the official extension API and projects them onto native Pager surfaces.
 
 ## Configuration
 

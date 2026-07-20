@@ -1,8 +1,10 @@
-# grok-pi
+# grok-pi — Pi 与 Grok Build 的 Remote TUI 桥接
 
 > 在 Grok Build 原生终端 UI 中运行 Pi Agent Core。
 
 [下载最新版本](https://github.com/Dwsy/grok-pi/releases/latest) · [English](README.md) · [功能矩阵](FEATURE_MATRIX.md) · [架构说明](NATIVE_GROK_TUI_ALIGNMENT.md) · [验证记录](VERIFICATION.md) · [更新日志](CHANGELOG.MD)
+
+> **Remote TUI 桥接。** Pi 的交互式组件通过 Grok Build 原生 Pager 渲染，在保留 Grok 终端体验的同时接入 Pi 的扩展生态。Pi 用户获得 Grok Build 的原生 UI；Grok Build 用户获得 Pi 的模型、工具、会话和扩展能力。
 
 `grok-pi` 将 Pi Agent Runtime 接入 Grok Build 原生 Pager。Pi 负责模型、工具、扩展、会话和 Agent 执行；Grok Pager 负责终端 UI，且是唯一的可见终端界面。
 
@@ -57,7 +59,7 @@ grok-pi update
 |---|---|
 | Agent Runtime | Pi 模型、Provider、工具、扩展、skills、会话、重试和压缩 |
 | 终端 UI | Grok Pager 输入、斜杠补全、Markdown、工具卡片、diff、对话框和 scrollback |
-| 交互式扩展 | Pi `ctx.ui.custom` 组件通过原生 Pager 渲染 |
+| **Remote TUI 桥接** | Pi `ctx.ui.custom` 组件通过 Grok Build 原生 Pager 渲染，不创建第二套 TUI |
 | Shell 执行 | Bash 集成、后台任务、输出限制、超时和进程树清理 |
 | 并行工作 | Pi 子代理，支持前台/后台执行和原生任务视图 |
 | 会话流程 | Resume、树导航、标签、回顾、上下文查看和会话选择器 |
@@ -82,7 +84,7 @@ flowchart LR
 - **Pi** 负责 Agent loop、模型、Provider、工具、扩展和会话。
 - **`pi-grok-adapter`** 是 headless JSONL RPC ↔ ACP 桥接层，不拥有终端，也不渲染第二套 UI。
 
-不修改 Pi 源码。Pi RPC 未暴露的能力通过官方扩展 API 或已声明的 Pager 接缝接入。
+不修改 Pi 源码。Remote TUI 通过官方扩展 API 接入 Pi RPC 未暴露的能力，并将其投影到原生 Pager 承载面。
 
 ## 配置
 
