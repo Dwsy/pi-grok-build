@@ -653,23 +653,40 @@ impl AgentView {
         match step {
             ArgPickerStep::FilterChanged => {
                 if let Some(ActiveModal::ArgPicker {
+                    command,
+                    args_query,
                     items,
                     original_items,
                     state,
                     ..
                 }) = self.active_modal.as_mut()
                 {
-                    let q = state.query().to_lowercase();
-                    *items = original_items
-                        .iter()
-                        .filter(|item| {
-                            q.is_empty()
-                                || item.match_text.to_lowercase().contains(&q)
-                                || item.display.to_lowercase().contains(&q)
-                                || item.description.to_lowercase().contains(&q)
-                        })
-                        .cloned()
-                        .collect();
+                    let query = state.query().to_owned();
+                    if matches!(command.as_str(), "model" | "m") && args_query.is_empty() {
+                        // Keep the model picker aligned with Pi TUI: fuzzyFilter
+                        // ranks all matching rows instead of requiring the raw
+                        // query to occur as one contiguous substring.
+                        let indexes = crate::slash::matcher::FuzzyMatcher::new()
+                            .rank_pi_model_selector(original_items, &query, |item| {
+                                item.match_text.as_str()
+                            });
+                        *items = indexes
+                            .into_iter()
+                            .filter_map(|index| original_items.get(index).cloned())
+                            .collect();
+                    } else {
+                        let q = query.to_lowercase();
+                        *items = original_items
+                            .iter()
+                            .filter(|item| {
+                                q.is_empty()
+                                    || item.match_text.to_lowercase().contains(&q)
+                                    || item.display.to_lowercase().contains(&q)
+                                    || item.description.to_lowercase().contains(&q)
+                            })
+                            .cloned()
+                            .collect();
+                    }
                     state.selected = state.selected.min(items.len().saturating_sub(1));
                 }
                 InputOutcome::Changed
