@@ -130,6 +130,19 @@ const PERMISSION_MODE_CHOICES: &[EnumChoice] = &[
 // can fail. Commit on Enter only.
 // ---------------------------------------------------------------------------
 
+const CTRL_O_TOOL_EXPANSION_CHOICES: &[EnumChoice] = &[
+    EnumChoice {
+        canonical: "write_edit",
+        display: "Write and edit",
+        description: "Expand write and edit diffs (default).",
+    },
+    EnumChoice {
+        canonical: "all_tools",
+        display: "All tool output",
+        description: "Expand every tool output block.",
+    },
+];
+
 const CODING_DATA_SHARING_CHOICES: &[EnumChoice] = &[
     EnumChoice {
         canonical: "opt-in",
@@ -514,6 +527,16 @@ const CONTEXTUAL_HINTS_CHILDREN: &[&str] = &[
     "contextual_hints.small_screen",
     "contextual_hints.word_select",
     "contextual_hints.ssh_wrap",
+];
+
+const PI_BUILTIN_TOOLS_CHILDREN: &[&str] = &[
+    "pi_builtin_tools.read",
+    "pi_builtin_tools.bash",
+    "pi_builtin_tools.edit",
+    "pi_builtin_tools.write",
+    "pi_builtin_tools.grep",
+    "pi_builtin_tools.find",
+    "pi_builtin_tools.ls",
 ];
 
 /// Build the catalog. Called once at process start via
@@ -979,6 +1002,25 @@ pub fn default_settings() -> Vec<SettingMeta> {
             ],
             kind: SettingKind::Bool {
                 default: ui_default.collapsed_edit_blocks.unwrap_or(false),
+            },
+            restart_required: false,
+            hidden_in_minimal: false,
+        },
+        // SHELL-owned: `[ui].ctrl_o_tool_expansion`. Only grok-pi consumes this
+        // setting; normal Grok retains its existing Ctrl+O behavior.
+        SettingMeta {
+            key: "ctrl_o_tool_expansion",
+            category: SettingCategory::Appearance,
+            owner: SettingOwner::Shell,
+            label: "Ctrl+O tool expansion",
+            description: "Choose whether Ctrl+O expands write/edit diffs or all tool output in grok-pi.",
+            keywords: &[
+                "ctrl+o", "tool", "expand", "collapse", "write", "edit", "all",
+            ],
+            kind: SettingKind::Enum {
+                default: "write_edit",
+                choices: CTRL_O_TOOL_EXPANSION_CHOICES,
+                supports_preview: false,
             },
             restart_required: false,
             hidden_in_minimal: false,
@@ -1551,6 +1593,112 @@ pub fn default_settings() -> Vec<SettingMeta> {
         // External Pi profile resource manager. This is a Pager navigation row,
         // not a Grok-shell setting, so its Group form only supplies the native
         // chevron presentation; settings-modal input maps it to OpenPiConfig.
+        SettingMeta {
+            key: "pi_builtin_tools",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Pi built-in tools",
+            description: "Choose the Pi built-in tools for the next grok-pi session. Existing extension and custom tools stay enabled.",
+            keywords: &[
+                "pi", "tools", "read", "bash", "edit", "write", "grep", "find", "ls", "search",
+            ],
+            kind: SettingKind::Group {
+                children: PI_BUILTIN_TOOLS_CHILDREN,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "pi_builtin_tools.read",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Read",
+            description: "Allow Pi to read files.",
+            keywords: &["pi", "tool", "read"],
+            kind: SettingKind::Bool {
+                default: ui_default.pi_builtin_tools.read,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "pi_builtin_tools.bash",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Bash",
+            description: "Allow Pi to run shell commands.",
+            keywords: &["pi", "tool", "bash", "shell"],
+            kind: SettingKind::Bool {
+                default: ui_default.pi_builtin_tools.bash,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "pi_builtin_tools.edit",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Edit",
+            description: "Allow Pi to patch existing files.",
+            keywords: &["pi", "tool", "edit"],
+            kind: SettingKind::Bool {
+                default: ui_default.pi_builtin_tools.edit,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "pi_builtin_tools.write",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Write",
+            description: "Allow Pi to create or overwrite files.",
+            keywords: &["pi", "tool", "write"],
+            kind: SettingKind::Bool {
+                default: ui_default.pi_builtin_tools.write,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "pi_builtin_tools.grep",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Grep",
+            description: "Allow Pi to search file contents with ripgrep.",
+            keywords: &["pi", "tool", "grep", "search", "ripgrep"],
+            kind: SettingKind::Bool {
+                default: ui_default.pi_builtin_tools.grep,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "pi_builtin_tools.find",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Find",
+            description: "Allow Pi to locate files by glob.",
+            keywords: &["pi", "tool", "find", "files", "glob"],
+            kind: SettingKind::Bool {
+                default: ui_default.pi_builtin_tools.find,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
+            key: "pi_builtin_tools.ls",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Ls",
+            description: "Allow Pi to list directory contents.",
+            keywords: &["pi", "tool", "ls", "list", "directory"],
+            kind: SettingKind::Bool {
+                default: ui_default.pi_builtin_tools.ls,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+        },
         SettingMeta {
             key: "pi_config",
             category: SettingCategory::Agent,

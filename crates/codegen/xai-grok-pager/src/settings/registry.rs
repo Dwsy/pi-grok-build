@@ -224,6 +224,7 @@ pub enum SettingValue {
     String(String),
     Enum(&'static str),
     Int(i64),
+    PiBuiltinTools(xai_grok_shell::agent::config::PiBuiltinTools),
 }
 
 /// Snapshot of pager-local state captured when the modal opens.
@@ -485,6 +486,13 @@ pub fn current_value_for(
         "compact_mode" => Some(SettingValue::Bool(ui.compact_mode)),
         "show_timestamps" => Some(SettingValue::Bool(ui.show_timestamps.unwrap_or(true))),
         "show_timeline" => Some(SettingValue::Bool(ui.show_timeline_enabled())),
+        "pi_builtin_tools.read" => Some(SettingValue::Bool(ui.pi_builtin_tools.read)),
+        "pi_builtin_tools.bash" => Some(SettingValue::Bool(ui.pi_builtin_tools.bash)),
+        "pi_builtin_tools.edit" => Some(SettingValue::Bool(ui.pi_builtin_tools.edit)),
+        "pi_builtin_tools.write" => Some(SettingValue::Bool(ui.pi_builtin_tools.write)),
+        "pi_builtin_tools.grep" => Some(SettingValue::Bool(ui.pi_builtin_tools.grep)),
+        "pi_builtin_tools.find" => Some(SettingValue::Bool(ui.pi_builtin_tools.find)),
+        "pi_builtin_tools.ls" => Some(SettingValue::Bool(ui.pi_builtin_tools.ls)),
         // Cache is the send-path source of truth (same pattern as group_tool_verbs).
         "page_flip_on_send" => Some(SettingValue::Bool(
             crate::appearance::cache::load_page_flip_on_send(),
@@ -549,6 +557,12 @@ pub fn current_value_for(
         // Live cache (like `group_tool_verbs`).
         "collapsed_edit_blocks" => Some(SettingValue::Bool(
             crate::appearance::cache::load_collapsed_edit_blocks(),
+        )),
+        "ctrl_o_tool_expansion" => Some(SettingValue::Enum(
+            match ui.ctrl_o_tool_expansion.as_deref() {
+                Some("all_tools") => "all_tools",
+                _ => "write_edit",
+            },
         )),
         // Live cache; `GROK_PROMPT_SUGGESTIONS` env overrides at the gate.
         "prompt_suggestions" => Some(SettingValue::Bool(
@@ -791,6 +805,27 @@ mod tests {
                         "show_timeline default drifts from UiConfig::default()"
                     );
                 }
+                ("pi_builtin_tools.read", SettingKind::Bool { default }) => {
+                    assert_eq!(*default, ui.pi_builtin_tools.read);
+                }
+                ("pi_builtin_tools.bash", SettingKind::Bool { default }) => {
+                    assert_eq!(*default, ui.pi_builtin_tools.bash);
+                }
+                ("pi_builtin_tools.edit", SettingKind::Bool { default }) => {
+                    assert_eq!(*default, ui.pi_builtin_tools.edit);
+                }
+                ("pi_builtin_tools.write", SettingKind::Bool { default }) => {
+                    assert_eq!(*default, ui.pi_builtin_tools.write);
+                }
+                ("pi_builtin_tools.grep", SettingKind::Bool { default }) => {
+                    assert_eq!(*default, ui.pi_builtin_tools.grep);
+                }
+                ("pi_builtin_tools.find", SettingKind::Bool { default }) => {
+                    assert_eq!(*default, ui.pi_builtin_tools.find);
+                }
+                ("pi_builtin_tools.ls", SettingKind::Bool { default }) => {
+                    assert_eq!(*default, ui.pi_builtin_tools.ls);
+                }
                 ("page_flip_on_send", SettingKind::Bool { default }) => {
                     assert_eq!(
                         *default,
@@ -850,6 +885,13 @@ mod tests {
                     assert_eq!(
                         *default, expected,
                         "auto_light_theme default drifts from UiConfig::default()",
+                    );
+                }
+                ("ctrl_o_tool_expansion", SettingKind::Enum { default, .. }) => {
+                    assert_eq!(
+                        *default,
+                        ui.ctrl_o_tool_expansion.as_deref().unwrap_or("write_edit"),
+                        "ctrl_o_tool_expansion default drifts from UiConfig::default()",
                     );
                 }
                 // permission_mode: None on disk → "ask" fallback.

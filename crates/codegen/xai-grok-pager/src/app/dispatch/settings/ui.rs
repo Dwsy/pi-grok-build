@@ -10,7 +10,7 @@ use super::setters::{
 set_multiline_mode, set_page_flip_on_send_inner, set_progress_bar_inner,
     set_prompt_suggestions_inner, set_recap_model_inner, set_remember_tool_approvals_inner,
     set_render_mermaid_inner, set_respect_manual_folds_inner, set_screen_mode_inner,
-    set_scroll_lines_inner, set_scroll_mode_inner, set_scroll_speed_inner,
+set_scroll_lines_inner, set_scroll_mode_inner, set_scroll_speed_inner,
     set_session_recap_inner,
     set_show_thinking_blocks_inner, set_show_tips_inner, set_simple_mode_inner, set_theme_inner,
     set_timeline_inner, set_timestamps, set_timestamps_inner, set_vim_mode_inner,
@@ -100,6 +100,19 @@ pub(crate) fn refresh_open_settings_modals(app: &mut AppView) {
 /// keybinding handler (`ActionId::CommandPalette`); toggles closed if already
 /// open. Hosted inline in minimal mode by the overlay app-modal host.
 pub(in crate::app::dispatch) fn dispatch_open_model_picker(app: &mut AppView) -> Vec<Effect> {
+    open_model_picker(app, crate::views::modal::ArgPickerSelection::RunCommand)
+}
+
+/// Replace the settings modal's ad-hoc DynamicEnum list with the native
+/// model selector, persisting the selected model only for session recaps.
+pub(in crate::app::dispatch) fn dispatch_open_recap_model_picker(app: &mut AppView) -> Vec<Effect> {
+    open_model_picker(app, crate::views::modal::ArgPickerSelection::SetRecapModel)
+}
+
+fn open_model_picker(
+    app: &mut AppView,
+    selection: crate::views::modal::ArgPickerSelection,
+) -> Vec<Effect> {
     use crate::views::modal::ActiveModal;
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
@@ -112,16 +125,28 @@ pub(in crate::app::dispatch) fn dispatch_open_model_picker(app: &mut AppView) ->
         return vec![];
     };
     let ctx = agent.prompt.slash_controller.app_ctx(&agent.session.models);
-    let Some(items) = cmd.suggest_args(&ctx, "").filter(|items| !items.is_empty()) else {
+    let Some(mut items) = cmd.suggest_args(&ctx, "").filter(|items| !items.is_empty()) else {
         return vec![];
     };
+    if selection == crate::views::modal::ArgPickerSelection::SetRecapModel {
+        items.insert(
+            0,
+            crate::slash::command::ArgItem {
+                display: "(no override)".to_string(),
+                match_text: "no override disable recap".to_string(),
+                insert_text: String::new(),
+                description: String::new(),
+            },
+        );
+    }
     agent.active_modal = Some(ActiveModal::ArgPicker {
         command: command.to_string(),
         args_query: String::new(),
-        items: items.clone(),
-        original_items: items,
+        original_items: items.clone(),
+        items,
         state: crate::views::picker::PickerState::input_active(),
         previous_palette: None,
+        selection,
         window: crate::views::modal_window::ModalWindowState::new(),
     });
     vec![]
@@ -746,6 +771,34 @@ pub(in crate::app::dispatch) fn action_for_reset(
         ("compact_mode", SettingValue::Bool(b)) => Some(Action::SetCompactMode(*b)),
         ("show_timestamps", SettingValue::Bool(b)) => Some(Action::SetTimestamps(*b)),
         ("show_timeline", SettingValue::Bool(b)) => Some(Action::SetTimeline(*b)),
+        ("pi_builtin_tools.read", SettingValue::Bool(b)) => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Read,
+            enabled: *b,
+        }),
+        ("pi_builtin_tools.bash", SettingValue::Bool(b)) => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Bash,
+            enabled: *b,
+        }),
+        ("pi_builtin_tools.edit", SettingValue::Bool(b)) => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Edit,
+            enabled: *b,
+        }),
+        ("pi_builtin_tools.write", SettingValue::Bool(b)) => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Write,
+            enabled: *b,
+        }),
+        ("pi_builtin_tools.grep", SettingValue::Bool(b)) => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Grep,
+            enabled: *b,
+        }),
+        ("pi_builtin_tools.find", SettingValue::Bool(b)) => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Find,
+            enabled: *b,
+        }),
+        ("pi_builtin_tools.ls", SettingValue::Bool(b)) => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Ls,
+            enabled: *b,
+        }),
         ("page_flip_on_send", SettingValue::Bool(b)) => Some(Action::SetPageFlipOnSend(*b)),
         ("simple_mode", SettingValue::Bool(b)) => Some(Action::SetSimpleMode(*b)),
         ("contextual_hints.undo", SettingValue::Bool(b)) => Some(Action::SetContextualHintUndo(*b)),
@@ -793,6 +846,9 @@ pub(in crate::app::dispatch) fn action_for_reset(
         ("group_tool_verbs", SettingValue::Bool(b)) => Some(Action::SetGroupToolVerbs(*b)),
         ("collapsed_edit_blocks", SettingValue::Bool(b)) => {
             Some(Action::SetCollapsedEditBlocks(*b))
+        }
+        ("ctrl_o_tool_expansion", SettingValue::Enum(s)) => {
+            Some(Action::SetCtrlOToolExpansion((*s).to_string()))
         }
         ("prompt_suggestions", SettingValue::Bool(b)) => Some(Action::SetPromptSuggestions(*b)),
         ("respect_manual_folds", SettingValue::Bool(b)) => Some(Action::SetRespectManualFolds(*b)),
@@ -951,6 +1007,9 @@ pub(in crate::app::dispatch) fn apply_setting_rollback(
         ("compact_mode", SettingValue::Bool(b)) => set_compact_mode_inner(app, *b),
         ("show_timestamps", SettingValue::Bool(b)) => set_timestamps_inner(app, *b),
         ("show_timeline", SettingValue::Bool(b)) => set_timeline_inner(app, *b),
+        ("pi_builtin_tools", SettingValue::PiBuiltinTools(value)) => {
+            app.current_ui.pi_builtin_tools = value.clone()
+        }
         ("page_flip_on_send", SettingValue::Bool(b)) => set_page_flip_on_send_inner(app, *b),
         ("simple_mode", SettingValue::Bool(b)) => set_simple_mode_inner(app, *b),
         ("contextual_hints.undo", SettingValue::Bool(b)) => {
@@ -1140,6 +1199,9 @@ pub(in crate::app::dispatch) fn apply_setting_rollback(
         ("group_tool_verbs", SettingValue::Bool(b)) => set_group_tool_verbs_inner(app, *b),
         ("collapsed_edit_blocks", SettingValue::Bool(b)) => {
             set_collapsed_edit_blocks_inner(app, *b)
+        }
+        ("ctrl_o_tool_expansion", SettingValue::Enum(s)) => {
+            app.current_ui.ctrl_o_tool_expansion = Some((*s).to_string());
         }
         ("prompt_suggestions", SettingValue::Bool(b)) => set_prompt_suggestions_inner(app, *b),
         // keep_text_selection: restore the cache mirror to the canonical value.

@@ -686,6 +686,7 @@ pub(super) fn render_rows(
                     }
                     SettingValue::Enum(e) => display_for_enum_canonical(&meta.kind, e).to_string(),
                     SettingValue::Int(i) => i.to_string(),
+                    SettingValue::PiBuiltinTools(_) => "Pi built-in tools".to_string(),
                 };
                 let show_restart_pill_for_layout = meta.restart_required && is_expanded;
                 let layout_decision = row_layout(
@@ -851,6 +852,7 @@ fn compute_filtered_row_heights(state: &SettingsModalState, area_width: u16) -> 
                     }
                     SettingValue::Enum(e) => display_for_enum_canonical(&meta.kind, e).to_string(),
                     SettingValue::Int(i) => i.to_string(),
+                    SettingValue::PiBuiltinTools(_) => "Pi built-in tools".to_string(),
                 };
                 let show_restart_pill = meta.restart_required && is_expanded;
                 let layout = row_layout(area_width, meta.label, &value_display, show_restart_pill);
@@ -2349,6 +2351,7 @@ pub(super) fn render_setting_row(
             value_text_owned = i.to_string();
             &value_text_owned
         }
+        SettingValue::PiBuiltinTools(_) => "Pi built-in tools",
     };
 
     let value_style = if matches!(value, SettingValue::Bool(false)) {

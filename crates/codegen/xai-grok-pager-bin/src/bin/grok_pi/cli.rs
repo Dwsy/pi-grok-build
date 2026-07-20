@@ -11,7 +11,38 @@ use crate::GROK_PI_VERSION;
     name = "grok-pi",
     version = GROK_PI_VERSION,
     about = "Run the Pi agent core in Grok Build's production TUI",
-    after_help = "Pi-compatible aliases:\n  -ns  Alias for --no-skills\n  -nc  Alias for --no-context-files\n  -ne  Alias for --no-extensions\n  -nt  Alias for --no-tools\n\nUpdate (GitHub releases only):\n  grok-pi update            Install latest from Dwsy/grok-pi\n  grok-pi update --check    Print current vs latest\n  Welcome Ctrl+U            Same install when an update is offered"
+    after_help = "\
+Pi-compatible aliases:
+  -ns   Alias for --no-skills
+  -nc   Alias for --no-context-files
+  -ne   Alias for --no-extensions
+  -nt   Alias for --no-tools
+  -nbt  Alias for --no-builtin-tools
+  -xt   Alias for --exclude-tools
+  -na   Alias for --no-approve
+
+Passthrough:
+  Arguments after `--` are forwarded unchanged to Pi after `--mode rpc`.
+  Prefer first-class flags above when available.
+
+  grok-pi -- --model openai/gpt-4o --session-dir ~/.pi/agent/sessions
+
+Examples:
+  grok-pi --continue
+  grok-pi --model anthropic/claude-sonnet-4-5 --thinking high
+  grok-pi --session-dir ~/.pi/agent/sessions --session abc123
+  grok-pi --tools read,bash,grep --offline
+  grok-pi --no-builtin-tools -e ./my-extension.ts
+
+Notes:
+  TUI is Grok Pager; agent core is Pi (always `--mode rpc`).
+  Runtime /model and /resume use native Grok surfaces, not Pi's TUI pickers.
+  --resume is intentionally not exposed: use Welcome or /resume.
+
+Update (GitHub releases only):
+  grok-pi update            Install latest from Dwsy/grok-pi
+  grok-pi update --check    Print current vs latest
+  Welcome Ctrl+U            Same install when an update is offered"
 )]
 pub(super) struct Args {
     #[command(subcommand)]
@@ -32,6 +63,38 @@ pub(super) struct Args {
     /// Continue previous session.
     #[arg(short = 'c', long = "continue")]
     pub(super) continue_last_session: bool,
+
+    /// Provider name (default: google).
+    #[arg(long, value_name = "NAME")]
+    pub(super) provider: Option<String>,
+
+    /// Model pattern or ID (supports "provider/id" and optional ":<thinking>").
+    #[arg(long, value_name = "PATTERN")]
+    pub(super) model: Option<String>,
+
+    /// Comma-separated model patterns for cycling (globs and fuzzy matching).
+    #[arg(long, value_name = "PATTERNS")]
+    pub(super) models: Option<String>,
+
+    /// Set thinking level: off, minimal, low, medium, high, xhigh, max.
+    #[arg(long, value_name = "LEVEL")]
+    pub(super) thinking: Option<String>,
+
+    /// Use specific session file or partial UUID.
+    #[arg(long, value_name = "PATH|ID")]
+    pub(super) session: Option<String>,
+
+    /// Use exact project session ID, creating it if missing.
+    #[arg(long = "session-id", value_name = "ID")]
+    pub(super) session_id: Option<String>,
+
+    /// Fork specific session file or partial UUID into a new session.
+    #[arg(long, value_name = "PATH|ID")]
+    pub(super) fork: Option<String>,
+
+    /// Directory for session storage and lookup.
+    #[arg(long = "session-dir", value_name = "DIR")]
+    pub(super) session_dir: Option<String>,
 
     /// System prompt (default: coding assistant prompt).
     #[arg(long, value_name = "TEXT")]
@@ -57,9 +120,21 @@ pub(super) struct Args {
     #[arg(long)]
     pub(super) no_extensions: bool,
 
+    /// Comma-separated allowlist of tool names to enable.
+    #[arg(short = 't', long = "tools", value_name = "TOOLS")]
+    pub(super) tools: Option<String>,
+
+    /// Comma-separated denylist of tool names to disable.
+    #[arg(long = "exclude-tools", value_name = "TOOLS")]
+    pub(super) exclude_tools: Option<String>,
+
     /// Disable all tools by default (built-in and extension).
     #[arg(long)]
     pub(super) no_tools: bool,
+
+    /// Disable built-in tools by default but keep extension/custom tools enabled.
+    #[arg(long = "no-builtin-tools")]
+    pub(super) no_builtin_tools: bool,
 
     /// Don't save session (ephemeral).
     #[arg(long)]
@@ -68,6 +143,18 @@ pub(super) struct Args {
     /// Set session display name.
     #[arg(short = 'n', long, value_name = "NAME")]
     pub(super) name: Option<String>,
+
+    /// Trust project-local files for this run.
+    #[arg(short = 'a', long = "approve", conflicts_with = "no_approve")]
+    pub(super) approve: bool,
+
+    /// Ignore project-local files for this run.
+    #[arg(long = "no-approve", conflicts_with = "approve")]
+    pub(super) no_approve: bool,
+
+    /// Disable startup network operations (same as PI_OFFLINE=1).
+    #[arg(long)]
+    pub(super) offline: bool,
 
     /// Use Grok's native inline terminal mode instead of the alternate screen.
     #[arg(long)]
@@ -128,6 +215,9 @@ pub(super) fn normalize_compound_short_flags(
                 Some("-nc") => OsString::from("--no-context-files"),
                 Some("-ne") => OsString::from("--no-extensions"),
                 Some("-nt") => OsString::from("--no-tools"),
+                Some("-nbt") => OsString::from("--no-builtin-tools"),
+                Some("-xt") => OsString::from("--exclude-tools"),
+                Some("-na") => OsString::from("--no-approve"),
                 _ => arg,
             }
         })
@@ -141,6 +231,30 @@ pub(super) fn pi_args_with_startup_flags(
 ) -> Vec<String> {
     if args.continue_last_session {
         pi_args.push("--continue".to_string());
+    }
+    if let Some(provider) = &args.provider {
+        pi_args.extend(["--provider".to_string(), provider.clone()]);
+    }
+    if let Some(model) = &args.model {
+        pi_args.extend(["--model".to_string(), model.clone()]);
+    }
+    if let Some(models) = &args.models {
+        pi_args.extend(["--models".to_string(), models.clone()]);
+    }
+    if let Some(thinking) = &args.thinking {
+        pi_args.extend(["--thinking".to_string(), thinking.clone()]);
+    }
+    if let Some(session) = &args.session {
+        pi_args.extend(["--session".to_string(), session.clone()]);
+    }
+    if let Some(session_id) = &args.session_id {
+        pi_args.extend(["--session-id".to_string(), session_id.clone()]);
+    }
+    if let Some(fork) = &args.fork {
+        pi_args.extend(["--fork".to_string(), fork.clone()]);
+    }
+    if let Some(session_dir) = &args.session_dir {
+        pi_args.extend(["--session-dir".to_string(), session_dir.clone()]);
     }
     if let Some(system_prompt) = &args.system_prompt {
         pi_args.extend(["--system-prompt".to_string(), system_prompt.clone()]);
@@ -170,14 +284,32 @@ pub(super) fn pi_args_with_startup_flags(
     if args.no_extensions {
         pi_args.push("--no-extensions".to_string());
     }
+    if let Some(tools) = &args.tools {
+        pi_args.extend(["--tools".to_string(), tools.clone()]);
+    }
+    if let Some(exclude_tools) = &args.exclude_tools {
+        pi_args.extend(["--exclude-tools".to_string(), exclude_tools.clone()]);
+    }
     if args.no_tools {
         pi_args.push("--no-tools".to_string());
+    }
+    if args.no_builtin_tools {
+        pi_args.push("--no-builtin-tools".to_string());
     }
     if args.no_session {
         pi_args.push("--no-session".to_string());
     }
     if let Some(name) = &args.name {
         pi_args.extend(["--name".to_string(), name.clone()]);
+    }
+    if args.approve {
+        pi_args.push("--approve".to_string());
+    }
+    if args.no_approve {
+        pi_args.push("--no-approve".to_string());
+    }
+    if args.offline {
+        pi_args.push("--offline".to_string());
     }
     pi_args
 }
@@ -212,6 +344,22 @@ mod tests {
         let args = Args::try_parse_from(normalize_compound_short_flags(
             [
                 "grok-pi",
+                "--provider",
+                "openai",
+                "--model",
+                "openai/gpt-4o",
+                "--models",
+                "openai/*,anthropic/*",
+                "--thinking",
+                "high",
+                "--session",
+                "sess-abc",
+                "--session-id",
+                "exact-id",
+                "--fork",
+                "fork-src",
+                "--session-dir",
+                "/tmp/sessions",
                 "--system-prompt",
                 "base prompt",
                 "--append-system-prompt",
@@ -225,10 +373,17 @@ mod tests {
                 "--extension",
                 "second.ts",
                 "-ne",
+                "-t",
+                "read,bash",
+                "-xt",
+                "write",
                 "-nt",
+                "-nbt",
                 "--no-session",
                 "-n",
                 "named-session",
+                "-a",
+                "--offline",
             ]
             .into_iter()
             .map(OsString::from),
@@ -242,6 +397,22 @@ mod tests {
                 Some(Path::new("/tmp/bridge.ts")),
             ),
             vec![
+                "--provider",
+                "openai",
+                "--model",
+                "openai/gpt-4o",
+                "--models",
+                "openai/*,anthropic/*",
+                "--thinking",
+                "high",
+                "--session",
+                "sess-abc",
+                "--session-id",
+                "exact-id",
+                "--fork",
+                "fork-src",
+                "--session-dir",
+                "/tmp/sessions",
                 "--system-prompt",
                 "base prompt",
                 "--append-system-prompt",
@@ -257,11 +428,31 @@ mod tests {
                 "--extension",
                 "/tmp/bridge.ts",
                 "--no-extensions",
+                "--tools",
+                "read,bash",
+                "--exclude-tools",
+                "write",
                 "--no-tools",
+                "--no-builtin-tools",
                 "--no-session",
                 "--name",
                 "named-session",
+                "--approve",
+                "--offline",
             ]
+        );
+    }
+
+    #[test]
+    fn no_approve_short_flag_is_forwarded_to_pi() {
+        let args = Args::try_parse_from(normalize_compound_short_flags(
+            ["grok-pi", "-na"].into_iter().map(OsString::from),
+        ))
+        .unwrap();
+        assert!(args.no_approve);
+        assert_eq!(
+            pi_args_with_startup_flags(args.pi_args.clone(), &args, None),
+            vec!["--no-approve"]
         );
     }
 
@@ -269,14 +460,18 @@ mod tests {
     fn compound_short_flags_after_double_dash_are_not_rewritten() {
         assert_eq!(
             normalize_compound_short_flags(
-                ["grok-pi", "--", "-ns", "-nc", "-ne", "-nt"]
-                    .into_iter()
-                    .map(OsString::from),
-            ),
-            ["grok-pi", "--", "-ns", "-nc", "-ne", "-nt"]
+                [
+                    "grok-pi", "--", "-ns", "-nc", "-ne", "-nt", "-nbt", "-xt", "-na"
+                ]
                 .into_iter()
-                .map(OsString::from)
-                .collect::<Vec<_>>(),
+                .map(OsString::from),
+            ),
+            [
+                "grok-pi", "--", "-ns", "-nc", "-ne", "-nt", "-nbt", "-xt", "-na"
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>(),
         );
     }
 }

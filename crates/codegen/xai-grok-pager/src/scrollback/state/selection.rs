@@ -505,6 +505,46 @@ impl ScrollbackState {
         }
     }
 
+    /// Toggle expansion for the configured tool-call scope only.
+    ///
+    /// The scan determines one target state, then the update batches cache
+    /// invalidation and generation work into a single pass.
+    pub fn toggle_tool_output_expansion(&mut self, scope: ToolOutputExpansionScope) {
+        let matches_scope = |entry: &ScrollbackEntry| match scope {
+            ToolOutputExpansionScope::WriteEdit => {
+                matches!(entry.block, RenderBlock::ToolCall(ToolCallBlock::Edit(_)))
+            }
+            ToolOutputExpansionScope::AllTools => entry.block.is_tool_call(),
+        };
+        let any_collapsed = self.entries.values().any(|entry| {
+            matches_scope(entry)
+                && entry.is_foldable()
+                && entry.display_mode == DisplayMode::Collapsed
+        });
+        let target_mode = if any_collapsed {
+            DisplayMode::Expanded
+        } else {
+            DisplayMode::Collapsed
+        };
+
+        let mut changed = false;
+        for (id, entry) in &mut self.entries {
+            if matches_scope(entry) && entry.is_foldable() && entry.display_mode != target_mode {
+                entry.display_mode = target_mode;
+                entry.display_mode_pinned = false;
+                entry.invalidate_cache();
+                self.dirty_heights.insert(*id);
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+        self.expanded_groups.clear();
+        self.gaps_may_be_dirty = true;
+        self.bump_generation();
+    }
+
     /// Toggle expand/collapse for all thinking blocks only.
     ///
     /// If ANY thinking block is collapsed, expand all thinking blocks.
@@ -1323,6 +1363,36 @@ mod tests {
         h.frame();
         assert!(h.is_follow(), "G re-engages follow");
         h.assert_at_bottom("back at the tail after G");
+    }
+
+    #[test]
+    fn toggle_tool_output_expansion_only_changes_tool_calls() {
+        let mut h = ScrollTestHarness::new(80, 40);
+        let thinking_id = h.push_thinking("thought");
+        let tool_id = h.push_tool("tool");
+        h.frame();
+
+        h.state
+            .toggle_tool_output_expansion(ToolOutputExpansionScope::AllTools);
+
+        assert_eq!(
+            h.state.get_by_id(tool_id).unwrap().display_mode,
+            DisplayMode::Collapsed,
+            "first Ctrl+O-style toggle collapses expanded tool output"
+        );
+        assert_eq!(
+            h.state.get_by_id(thinking_id).unwrap().display_mode,
+            DisplayMode::Truncated,
+            "Ctrl+O-style toggle must not alter thinking visibility"
+        );
+
+        h.state
+            .toggle_tool_output_expansion(ToolOutputExpansionScope::AllTools);
+        assert_eq!(
+            h.state.get_by_id(tool_id).unwrap().display_mode,
+            DisplayMode::Expanded,
+            "second toggle restores tool output"
+        );
     }
 
     #[test]

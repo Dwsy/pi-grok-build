@@ -1,7 +1,7 @@
 //! Individual setting setters with persistence effects and toasts.
 
 use super::ui::{refresh_open_settings_modals, save_success_toast};
-use crate::app::actions::Effect;
+use crate::app::actions::{Effect, PiBuiltinTool};
 use crate::app::app_view::{ActiveView, AppView};
 use agent_client_protocol as acp;
 
@@ -499,6 +499,37 @@ pub(in crate::app::dispatch) fn set_collapsed_edit_blocks(
         key: "collapsed_edit_blocks",
         value: crate::settings::SettingValue::Bool(new),
         rollback_value: crate::settings::SettingValue::Bool(prev),
+    }]
+}
+
+/// Set grok-pi's Ctrl+O expansion scope. SHELL-owned: persists to
+/// `[ui].ctrl_o_tool_expansion` and is read on the hot key path.
+pub(in crate::app::dispatch) fn set_ctrl_o_tool_expansion(
+    app: &mut AppView,
+    new: String,
+) -> Vec<Effect> {
+    let canonical = match new.as_str() {
+        "write_edit" => "write_edit",
+        "all_tools" => "all_tools",
+        _ => return vec![],
+    };
+    let prev = match app.current_ui.ctrl_o_tool_expansion.as_deref() {
+        Some("all_tools") => "all_tools",
+        _ => "write_edit",
+    };
+    if prev == canonical {
+        return vec![];
+    }
+    app.current_ui.ctrl_o_tool_expansion = Some(canonical.to_string());
+    refresh_open_settings_modals(app);
+    app.show_toast(&format!(
+        "Ctrl+O tool expansion: {}",
+        canonical.replace('_', " ")
+    ));
+    vec![Effect::PersistSetting {
+        key: "ctrl_o_tool_expansion",
+        value: crate::settings::SettingValue::Enum(canonical),
+        rollback_value: crate::settings::SettingValue::Enum(prev),
     }]
 }
 
@@ -1976,6 +2007,48 @@ pub(in crate::app::dispatch) fn clear_recap_model(app: &mut AppView) -> Vec<Effe
         key: "recap_model",
         value: crate::settings::SettingValue::String(String::new()),
         rollback_value: crate::settings::SettingValue::String(prev_id_str),
+    }]
+}
+
+/// Persist a Pi built-in tool preference for the next grok-pi session.
+pub(in crate::app::dispatch) fn set_pi_builtin_tool(
+    app: &mut AppView,
+    tool: PiBuiltinTool,
+    enabled: bool,
+) -> Vec<Effect> {
+    let previous_tools = app.current_ui.pi_builtin_tools.clone();
+    let current = match tool {
+        PiBuiltinTool::Read => &mut app.current_ui.pi_builtin_tools.read,
+        PiBuiltinTool::Bash => &mut app.current_ui.pi_builtin_tools.bash,
+        PiBuiltinTool::Edit => &mut app.current_ui.pi_builtin_tools.edit,
+        PiBuiltinTool::Write => &mut app.current_ui.pi_builtin_tools.write,
+        PiBuiltinTool::Grep => &mut app.current_ui.pi_builtin_tools.grep,
+        PiBuiltinTool::Find => &mut app.current_ui.pi_builtin_tools.find,
+        PiBuiltinTool::Ls => &mut app.current_ui.pi_builtin_tools.ls,
+    };
+    if *current == enabled {
+        return vec![];
+    }
+    *current = enabled;
+    let selected_tools = app.current_ui.pi_builtin_tools.clone();
+    refresh_open_settings_modals(app);
+    app.show_toast(&format!(
+        "\u{2713} Pi {}: {} (next session)",
+        match tool {
+            PiBuiltinTool::Read => "read",
+            PiBuiltinTool::Bash => "bash",
+            PiBuiltinTool::Edit => "edit",
+            PiBuiltinTool::Write => "write",
+            PiBuiltinTool::Grep => "grep",
+            PiBuiltinTool::Find => "find",
+            PiBuiltinTool::Ls => "ls",
+        },
+        if enabled { "on" } else { "off" },
+    ));
+    vec![Effect::PersistSetting {
+        key: "pi_builtin_tools",
+        value: crate::settings::SettingValue::PiBuiltinTools(selected_tools),
+        rollback_value: crate::settings::SettingValue::PiBuiltinTools(previous_tools),
     }]
 }
 

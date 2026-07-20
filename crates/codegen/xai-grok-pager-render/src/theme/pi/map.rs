@@ -212,9 +212,7 @@ fn derive_canvas(
     selected_bg: Color,
 ) -> Color {
     if let Some(page) = export_page_bg {
-        if !matches!(page, Color::Reset) {
-            return page;
-        }
+        return page;
     }
 
     // Prefer tool pending / selected as structural surface samples.
@@ -275,5 +273,30 @@ mod tests {
         let theme = map_pi_theme(&doc).unwrap();
         assert!(!theme.is_dark());
         assert!(matches!(theme.bg_base, Color::Rgb(_, _, _)));
+    }
+
+    fn assert_transparent_canvas(theme: Theme) {
+        assert_eq!(theme.bg_base, Color::Reset);
+        assert_eq!(theme.bg_dark, Color::Reset);
+        assert_eq!(theme.bg_light, Color::Reset);
+        assert_ne!(theme.bg_highlight, Color::Reset);
+        assert_ne!(theme.md_code_bg, Color::Reset);
+        assert_ne!(theme.diff_insert_bg, Color::Reset);
+    }
+
+    #[test]
+    fn maps_transparent_dark_page_background_to_terminal_default() {
+        let doc =
+            load_from_str(include_str!("../../../assets/pi-themes/transparent.json")).unwrap();
+        assert_transparent_canvas(map_pi_theme(&doc).unwrap());
+    }
+
+    #[test]
+    fn maps_transparent_light_page_background_to_terminal_default() {
+        let doc = load_from_str(include_str!(
+            "../../../assets/pi-themes/transparent-light.json"
+        ))
+        .unwrap();
+        assert_transparent_canvas(map_pi_theme(&doc).unwrap());
     }
 }

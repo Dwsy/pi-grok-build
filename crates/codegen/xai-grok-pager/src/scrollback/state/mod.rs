@@ -35,6 +35,13 @@ use crate::appearance::AppearanceConfig;
 use crate::render::Renderable;
 use crate::theme::Theme;
 
+/// Scope selected by grok-pi's Ctrl+O setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolOutputExpansionScope {
+    WriteEdit,
+    AllTools,
+}
+
 /// Unified scrollback state for the v3 pager.
 #[derive(Debug)]
 pub struct ScrollbackState {

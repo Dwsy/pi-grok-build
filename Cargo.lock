@@ -13432,6 +13432,7 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-util",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "xai-acp-lib",

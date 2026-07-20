@@ -833,6 +833,34 @@ pub(super) fn action_for_bool(key: SettingKey, new: bool) -> Option<Action> {
         "compact_mode" => Some(Action::SetCompactMode(new)),
         "show_timestamps" => Some(Action::SetTimestamps(new)),
         "show_timeline" => Some(Action::SetTimeline(new)),
+        "pi_builtin_tools.read" => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Read,
+            enabled: new,
+        }),
+        "pi_builtin_tools.bash" => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Bash,
+            enabled: new,
+        }),
+        "pi_builtin_tools.edit" => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Edit,
+            enabled: new,
+        }),
+        "pi_builtin_tools.write" => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Write,
+            enabled: new,
+        }),
+        "pi_builtin_tools.grep" => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Grep,
+            enabled: new,
+        }),
+        "pi_builtin_tools.find" => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Find,
+            enabled: new,
+        }),
+        "pi_builtin_tools.ls" => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::Ls,
+            enabled: new,
+        }),
         "simple_mode" => Some(Action::SetSimpleMode(new)),
         "contextual_hints.undo" => Some(Action::SetContextualHintUndo(new)),
         "contextual_hints.plan_mode" => Some(Action::SetContextualHintPlanMode(new)),
@@ -919,6 +947,7 @@ pub(super) fn action_for_enum_commit(key: SettingKey, choice: &'static str) -> O
             "off" => Some(Action::SetPlanMode(crate::app::actions::PlanModeKind::Off)),
             _ => None,
         },
+        "ctrl_o_tool_expansion" => Some(Action::SetCtrlOToolExpansion(choice.to_string())),
         "hunk_tracker_mode" => Some(Action::SetHunkTrackerMode(choice.to_string())),
         "screen_mode" => Some(Action::SetScreenMode(choice.to_string())),
         "voice_capture_mode" => Some(Action::SetVoiceCaptureMode(choice.to_string())),

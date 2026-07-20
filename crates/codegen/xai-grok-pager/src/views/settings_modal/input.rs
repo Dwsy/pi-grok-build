@@ -686,6 +686,9 @@ fn handle_browse(state: &mut SettingsModalState, key: &KeyEvent) -> SettingsKeyO
             }
         }
         KeyCode::Enter => {
+            if matches!(state.focused_setting(), Some(("recap_model", _))) {
+                return SettingsKeyOutcome::Action(Action::OpenRecapModelPicker);
+            }
             // Group row → open its sub-sheet of child toggles.
             if state.try_enter_picking_group() {
                 return SettingsKeyOutcome::Changed;

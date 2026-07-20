@@ -900,6 +900,42 @@ fn slash_model_no_args_opens_model_picker() {
     ));
 }
 #[test]
+fn recap_model_setting_opens_native_model_picker() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let model_id = acp::ModelId::new("test-provider::test-model");
+    app.agents
+        .get_mut(&id)
+        .expect("agent")
+        .session
+        .models
+        .available
+        .insert(
+            model_id.clone(),
+            acp::ModelInfo::new(model_id, "Test Model"),
+        );
+
+    let effects = dispatch(Action::OpenRecapModelPicker, &mut app);
+
+    assert!(effects.is_empty());
+    let Some(crate::views::modal::ActiveModal::ArgPicker {
+        command,
+        selection,
+        items,
+        ..
+    }) = &app.agents[&id].active_modal
+    else {
+        panic!("expected native model picker");
+    };
+    assert_eq!(command, "model");
+    assert_eq!(
+        *selection,
+        crate::views::modal::ArgPickerSelection::SetRecapModel
+    );
+    assert_eq!(items[0].display, "(no override)");
+}
+
+#[test]
 fn slash_hooks_opens_modal() {
     let mut app = test_app_with_agent();
     app.appearance.disable_plugins = false;

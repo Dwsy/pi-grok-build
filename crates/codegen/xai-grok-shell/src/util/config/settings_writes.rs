@@ -1,5 +1,6 @@
 use super::persist::update_config;
 use anyhow::Result;
+use xai_grok_shared::ui_config::PiBuiltinTools;
 
 // ---------------------------------------------------------------------------
 // Settings helpers — typed disk-write wrappers for each setting.
@@ -167,6 +168,12 @@ pub async fn set_progress_bar(value: bool) -> Result<()> {
     .await
 }
 
+/// Persist the `grok-pi` F2 selection of Pi built-in tools. Pi applies this
+/// only in its external profile, so normal Grok sessions are unaffected.
+pub async fn set_pi_builtin_tools(value: PiBuiltinTools) -> Result<()> {
+    update_config(|cfg| cfg.ui.pi_builtin_tools = value).await
+}
+
 /// Bounds for [`set_max_thoughts_width`]. Mirrored from the pager's
 /// registry consts; a CI test pins the agreement.
 const MAX_THOUGHTS_WIDTH_SHELL_MIN: i64 = 40;
@@ -244,6 +251,11 @@ pub async fn set_group_tool_verbs(value: bool) -> Result<()> {
 /// Persist `[ui].collapsed_edit_blocks` via `update_config`.
 pub async fn set_collapsed_edit_blocks(value: bool) -> Result<()> {
     update_config(|cfg| cfg.ui.collapsed_edit_blocks = Some(value)).await
+}
+
+/// Persist `[ui].ctrl_o_tool_expansion` (`write_edit` | `all_tools`).
+pub async fn set_ctrl_o_tool_expansion(value: String) -> Result<()> {
+    update_config(|cfg| cfg.ui.ctrl_o_tool_expansion = Some(value)).await
 }
 
 /// Persist `[ui].keep_text_selection` (`flash` | `hold` | `word_select`).

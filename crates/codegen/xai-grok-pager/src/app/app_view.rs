@@ -18,7 +18,7 @@ use crate::scrollback::render::ScratchBuffer;
 use crate::views::prompt_widget::PromptWidget;
 use crate::views::welcome::WelcomePromptFocus;
 use agent_client_protocol as acp;
-use crossterm::event::{Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use indexmap::IndexMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1824,6 +1824,12 @@ impl AppView {
             _ => None,
         }
     }
+    pub fn active_agent_mut(&mut self) -> Option<&mut AgentView> {
+        match self.active_view {
+            ActiveView::Agent(id) => self.agents.get_mut(&id),
+            _ => None,
+        }
+    }
     /// Session ID of the active agent, if one exists and has an established session.
     pub fn active_session_id(&self) -> Option<&str> {
         match self.active_view {
@@ -2071,6 +2077,27 @@ impl AppView {
             }
         }
         self.refresh_external_ui_surface()
+    }
+
+    /// Project Pi's session name onto the native prompt-border inline title.
+    ///
+    /// Pi owns the session and its name (auto-generated or via rename), so the
+    /// name arriving over `pi/ui/title` is the authoritative session title. We
+    /// store it in the active agent's `display_name` — the field the prompt
+    /// border reads (see agent_view/render.rs) — reusing the existing native
+    /// surface rather than adding a second title channel. Sanitised here because
+    /// the prompt widget renders `display_name` verbatim. Returns whether the
+    /// stored title changed (drives a redraw).
+    pub fn set_external_session_title(&mut self, title: &str) -> bool {
+        let clean = crate::views::session_title::sanitize_display_text(title.trim());
+        let next = (!clean.trim().is_empty()).then(|| clean.into_owned());
+        match self.active_agent_mut() {
+            Some(agent) if agent.display_name != next => {
+                agent.display_name = next;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Set or clear one Pi extension widget. The content remains owned and
@@ -2962,7 +2989,25 @@ impl AppView {
                     return outcome;
                 }
                 let prompt_paging = !overlay_active && !self.screen_mode.is_minimal();
-let pi_double_esc = self.external_agent
+                let ctrl_o_scope = match self.current_ui.ctrl_o_tool_expansion.as_deref() {
+                    Some("all_tools") => {
+                        crate::scrollback::state::ToolOutputExpansionScope::AllTools
+                    }
+                    _ => crate::scrollback::state::ToolOutputExpansionScope::WriteEdit,
+                };
+                if self.external_agent
+                    && !self.screen_mode.is_minimal()
+                    && key_event.is_some_and(|key| {
+                        key.code == KeyCode::Char('o')
+                            && key.modifiers == KeyModifiers::CONTROL
+                            && key.kind != KeyEventKind::Release
+                    })
+                    && let Some(agent) = self.agents.get_mut(&id)
+                {
+                    agent.scrollback.toggle_tool_output_expansion(ctrl_o_scope);
+                    return InputOutcome::Changed;
+                }
+                let pi_double_esc = self.external_agent
                     && key_event
                         .is_some_and(|key| key.code == KeyCode::Esc && key.modifiers.is_empty())
                     && self.agents.get(&id).is_some_and(|agent| {
@@ -7581,6 +7626,87 @@ pub(crate) mod tests {
     /// In minimal mode Ctrl+O routes to `Action::OpenTranscriptPager` (unless
     /// interject owns the chord AND would consume the press — see the
     /// predicate test above).
+    #[test]
+    fn external_ctrl_o_defaults_to_write_edit() {
+        let mut app = test_app_with_agent();
+        let id = super::super::agent::AgentId(0);
+        app.external_agent = true;
+        let agent = app.agents.get_mut(&id).unwrap();
+        let edit_id = agent
+            .scrollback
+            .push_block(crate::scrollback::RenderBlock::edit_with_hunks(
+                "x.rs",
+                vec![],
+            ));
+        let execute_id =
+            agent
+                .scrollback
+                .push_block(crate::scrollback::RenderBlock::execute_with_output(
+                    "echo tool",
+                    "tool output",
+                    None::<String>,
+                ));
+
+        let out = app.handle_input(&key_event(KeyCode::Char('o'), KeyModifiers::CONTROL));
+
+        assert!(matches!(out, InputOutcome::Changed));
+        let scrollback = &app.agents[&id].scrollback;
+        assert_eq!(
+            scrollback.get_by_id(edit_id).unwrap().display_mode,
+            crate::scrollback::DisplayMode::Collapsed
+        );
+        assert_eq!(
+            scrollback.get_by_id(execute_id).unwrap().display_mode,
+            crate::scrollback::DisplayMode::Expanded
+        );
+    }
+
+    #[test]
+    fn external_ctrl_o_all_tools_expands_every_tool() {
+        let mut app = test_app_with_agent();
+        let id = super::super::agent::AgentId(0);
+        app.external_agent = true;
+        app.current_ui.ctrl_o_tool_expansion = Some("all_tools".to_string());
+        let agent = app.agents.get_mut(&id).unwrap();
+        let edit_id = agent
+            .scrollback
+            .push_block(crate::scrollback::RenderBlock::edit_with_hunks(
+                "x.rs",
+                vec![],
+            ));
+        let execute_id =
+            agent
+                .scrollback
+                .push_block(crate::scrollback::RenderBlock::execute_with_output(
+                    "echo tool",
+                    "tool output",
+                    None::<String>,
+                ));
+        agent
+            .scrollback
+            .get_by_id_mut(edit_id)
+            .unwrap()
+            .set_display_mode(crate::scrollback::DisplayMode::Collapsed);
+        agent
+            .scrollback
+            .get_by_id_mut(execute_id)
+            .unwrap()
+            .set_display_mode(crate::scrollback::DisplayMode::Collapsed);
+
+        let out = app.handle_input(&key_event(KeyCode::Char('o'), KeyModifiers::CONTROL));
+
+        assert!(matches!(out, InputOutcome::Changed));
+        let scrollback = &app.agents[&id].scrollback;
+        assert_eq!(
+            scrollback.get_by_id(edit_id).unwrap().display_mode,
+            crate::scrollback::DisplayMode::Expanded
+        );
+        assert_eq!(
+            scrollback.get_by_id(execute_id).unwrap().display_mode,
+            crate::scrollback::DisplayMode::Expanded
+        );
+    }
+
     #[test]
     fn minimal_ctrl_o_opens_transcript_pager() {
         let mut app = test_app_with_agent();

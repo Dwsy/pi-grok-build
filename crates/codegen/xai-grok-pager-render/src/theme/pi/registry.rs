@@ -13,6 +13,9 @@ pub const PI_THEME_PREFIX: &str = "pi:";
 
 const BUILTIN_DARK: &str = include_str!("../../../assets/pi-themes/dark.json");
 const BUILTIN_LIGHT: &str = include_str!("../../../assets/pi-themes/light.json");
+const BUILTIN_TRANSPARENT: &str = include_str!("../../../assets/pi-themes/transparent.json");
+const BUILTIN_TRANSPARENT_LIGHT: &str =
+    include_str!("../../../assets/pi-themes/transparent-light.json");
 
 /// Metadata for a registered Pi theme (palette may be loaded lazily).
 #[derive(Debug, Clone)]
@@ -86,6 +89,8 @@ pub fn ensure_builtins() {
     }
     register_builtin(&mut guard, BUILTIN_DARK);
     register_builtin(&mut guard, BUILTIN_LIGHT);
+    register_builtin(&mut guard, BUILTIN_TRANSPARENT);
+    register_builtin(&mut guard, BUILTIN_TRANSPARENT_LIGHT);
     guard.initialized = true;
 }
 
@@ -271,6 +276,8 @@ mod tests {
         let names: Vec<_> = list.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"dark"));
         assert!(names.contains(&"light"));
+        assert!(names.contains(&"transparent"));
+        assert!(names.contains(&"transparent-light"));
         let (id, theme) = load_palette("pi:dark").unwrap();
         assert_eq!(id, "pi:dark");
         assert!(theme.is_dark());

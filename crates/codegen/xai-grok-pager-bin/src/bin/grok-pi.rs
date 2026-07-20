@@ -14,6 +14,8 @@ mod cli;
 mod context_extension;
 #[path = "grok_pi/native_commands_extension.rs"]
 mod native_commands_extension;
+#[path = "grok_pi/pi_version.rs"]
+mod pi_version;
 #[path = "grok_pi/recap_extension.rs"]
 mod recap_extension;
 #[path = "grok_pi/remote_tui_extension.rs"]
@@ -44,6 +46,7 @@ use bash_extension::write_bash_extension;
 use cli::{Args, Command, normalize_compound_short_flags, pi_args_with_startup_flags};
 use context_extension::write_context_extension;
 use native_commands_extension::write_native_commands_extension;
+use pi_version::ensure_compatible_pi_host;
 use recap_extension::write_recap_extension;
 use remote_tui_extension::write_remote_tui_extension;
 use session_paths::pi_session_dir;
@@ -302,6 +305,9 @@ async fn run(mut args: Args) -> Result<()> {
             env.push(("PI_GROK_REMOTE_TUI_ROWS".to_string(), rows.to_string()));
         }
     }
+    // Fail fast with OS-aware install hints before spawning the RPC host.
+    let _pi_version = ensure_compatible_pi_host(&args.pi_bin)
+        .context("Pi host version check failed")?;
     let process = PiRpc::spawn(SpawnConfig {
         program: args.pi_bin,
         prefix_args: args.pi_prefix_args,

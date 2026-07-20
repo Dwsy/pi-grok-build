@@ -5,6 +5,10 @@ use xai_grok_config_types::DisplayRefreshSettings;
 #[serde(default)]
 pub struct UiConfig {
     pub max_thoughts_width: u16,
+    /// Pi built-in tool preferences for the grok-pi external profile. The
+    /// default preserves Pi's own default tool set; F2 writes this as a group.
+    #[serde(default, skip_serializing_if = "PiBuiltinTools::is_default")]
+    pub pi_builtin_tools: PiBuiltinTools,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     /// Model ID to use for the secondary agent when forking.
@@ -148,6 +152,10 @@ pub struct UiConfig {
     /// Written by the pager's settings modal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collapsed_edit_blocks: Option<bool>,
+    /// Scope toggled by Ctrl+O in a grok-pi session: `write_edit` (default)
+    /// expands write and edit output; `all_tools` expands every tool output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctrl_o_tool_expansion: Option<String>,
     /// Next-prompt suggestions (tab autocomplete ghost text) after each turn.
     /// `None` = on (client default). Written by the pager's settings modal;
     /// the `GROK_PROMPT_SUGGESTIONS` env var overrides at runtime.
@@ -226,6 +234,40 @@ impl ContextualHints {
 
 const DEFAULT_MAX_THOUGHTS_WIDTH: u16 = 120;
 
+/// Per-tool grok-pi preferences. These are applied by the bundled Pi
+/// extension at session startup, not by the Pager itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PiBuiltinTools {
+    pub read: bool,
+    pub bash: bool,
+    pub edit: bool,
+    pub write: bool,
+    pub grep: bool,
+    pub find: bool,
+    pub ls: bool,
+}
+
+impl PiBuiltinTools {
+    pub fn is_default(&self) -> bool {
+        self.read && self.bash && self.edit && self.write && !self.grep && !self.find && !self.ls
+    }
+}
+
+impl Default for PiBuiltinTools {
+    fn default() -> Self {
+        Self {
+            read: true,
+            bash: true,
+            edit: true,
+            write: true,
+            grep: false,
+            find: false,
+            ls: false,
+        }
+    }
+}
+
 fn deserialize_keep_text_selection<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -250,6 +292,7 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             max_thoughts_width: DEFAULT_MAX_THOUGHTS_WIDTH,
+            pi_builtin_tools: PiBuiltinTools::default(),
             theme: None,
             fork_secondary_model: xai_grok_models::default_model().to_string(),
             recap_model: String::new(),
@@ -284,6 +327,7 @@ impl Default for UiConfig {
             show_thinking_blocks: None,
             group_tool_verbs: None,
             collapsed_edit_blocks: None,
+            ctrl_o_tool_expansion: None,
             prompt_suggestions: None,
             cursor_blink: None,
             screen_mode: None,
