@@ -2033,27 +2033,32 @@ badge: "",
                 mw::push_vim_nav_search_hint(&mut picker_shortcuts, state.search_active);
                 // Model picker is shorter than generic arg pickers (theme, etc.).
                 let is_model_picker = matches!(command.as_str(), "model" | "m");
+                let sizing = ModalSizing {
+                    width_pct: if is_model_list { 0.55 } else { 0.50 },
+                    max_width: if is_model_list { 88 } else { 80 },
+                    min_width: 44,
+                    // Keep the model list at roughly 70% of the terminal height,
+                    // including when compact prompt mode is enabled.
+                    v_margin: if is_model_list {
+                        area.height.saturating_mul(15).saturating_add(99) / 100
+                    } else if is_model_picker {
+                        8
+                    } else {
+                        4
+                    },
+                    h_pad: 2,
+                    v_pad: 1,
+                    footer_lines: 2,
+                };
                 let modal_config = ModalWindowConfig {
                     title,
                     tabs: None,
                     shortcuts: &picker_shortcuts,
-                    sizing: ModalSizing {
-                        width_pct: if is_model_list { 0.55 } else { 0.50 },
-                        max_width: if is_model_list { 88 } else { 80 },
-                        min_width: 44,
-                        // Leave room for the bottom detail pane on the model list.
-                        v_margin: if is_model_list {
-                            4
-                        } else if is_model_picker {
-                            8
-                        } else {
-                            4
-                        },
-                        h_pad: 2,
-                        v_pad: 1,
-                        footer_lines: 2,
-                    }
-                    .with_compact(compact),
+                    sizing: if is_model_list {
+                        sizing
+                    } else {
+                        sizing.with_compact(compact)
+                    },
                     fold_info: None,
                 };
                 if let Some(mca) = mw::render_modal_window(buf, area, window, &modal_config, &theme)
