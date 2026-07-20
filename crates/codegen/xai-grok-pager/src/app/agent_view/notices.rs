@@ -254,16 +254,13 @@ impl AgentView {
         widgets_above_editor: &[String],
         widgets_below_editor: &[String],
         statuses: &[String],
-        above_full_bleed: bool,
     ) -> bool {
         let changed = self.external_widgets_above_editor != widgets_above_editor
             || self.external_widgets_below_editor != widgets_below_editor
-            || self.external_statuses != statuses
-            || self.external_widgets_above_full_bleed != above_full_bleed;
+            || self.external_statuses != statuses;
         self.external_widgets_above_editor = widgets_above_editor.to_vec();
         self.external_widgets_below_editor = widgets_below_editor.to_vec();
         self.external_statuses = statuses.to_vec();
-        self.external_widgets_above_full_bleed = above_full_bleed;
         self.subagent_views
             .values_mut()
             .fold(changed, |changed, child| {
@@ -271,7 +268,6 @@ impl AgentView {
                     widgets_above_editor,
                     widgets_below_editor,
                     statuses,
-                    above_full_bleed,
                 ) || changed
             })
     }

@@ -459,6 +459,7 @@ fn render_mcps(
                 summary_lines: &no_lines,
                 dimmed: false,
                 indent: indents[i],
+                label_color: None,
                 badge: badges[i].as_str(),
                 badge_color: badge_colors[i],
                 collapsible: collapsibles[i],

@@ -724,7 +724,11 @@ pub(crate) fn execute(
                     }
                 });
         }
-        Effect::FetchExternalSessionCatalog { cwd, all } => {
+        Effect::FetchExternalSessionCatalog {
+            cwd,
+            all,
+            use_psm_index,
+        } => {
             let tx = acp_tx.clone();
             tasks.spawn(async move {
                 let request = acp::ExtRequest::new(
@@ -732,6 +736,7 @@ pub(crate) fn execute(
                     serde_json::value::to_raw_value(&serde_json::json!({
                         "cwd": cwd.to_string_lossy(),
                         "scope": if all { "all" } else { "current" },
+                        "usePsmIndex": use_psm_index,
                     }))
                     .expect("serialize Pi session catalog request")
                     .into(),
@@ -839,10 +844,15 @@ pub(crate) fn execute(
                             .get("leafId")
                             .and_then(|v| v.as_str())
                             .map(str::to_owned);
+                        let editor_text = payload
+                            .get("editorText")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned);
                         TaskResult::SessionTreeNavigated {
                             agent_id,
                             session_id,
                             leaf_id,
+                            editor_text,
                         }
                     }
                     Err(error) => {

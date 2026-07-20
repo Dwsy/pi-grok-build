@@ -1169,7 +1169,6 @@ pub struct AgentView {
     pub(crate) external_widgets_above_editor: Vec<String>,
     /// When true, above-editor external widgets bleed past outer hpad so they
     /// match Pi interactive full-terminal width (Remote TUI).
-    pub(crate) external_widgets_above_full_bleed: bool,
     /// Pi RPC widgets placed below the native editor.
     pub(crate) external_widgets_below_editor: Vec<String>,
     /// Pi RPC keyed statuses, rendered by the native status bar.

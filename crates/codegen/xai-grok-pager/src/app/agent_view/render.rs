@@ -1934,23 +1934,12 @@ impl AgentView {
             if index >= layout.external_widgets_above_editor.height as usize {
                 break;
             }
-            // Remote TUI bleeds to the full terminal row (Pi interactive is full-width).
-            // Other above-editor widgets stay inside the padded content column.
-            let row = if self.external_widgets_above_full_bleed {
-                Rect::new(
-                    area.x,
-                    layout.external_widgets_above_editor.y + index as u16,
-                    area.width,
-                    1,
-                )
-            } else {
-                Rect::new(
-                    layout.external_widgets_above_editor.x,
-                    layout.external_widgets_above_editor.y + index as u16,
-                    layout.external_widgets_above_editor.width,
-                    1,
-                )
-            };
+            let row = Rect::new(
+                layout.external_widgets_above_editor.x,
+                layout.external_widgets_above_editor.y + index as u16,
+                layout.external_widgets_above_editor.width,
+                1,
+            );
             buf.set_style(row, Style::default().bg(theme.bg_base));
             let styled = if line.contains('\u{1b}') {
                 crate::views::agent_status::ansi_remote_tui_line(line, &theme)

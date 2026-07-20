@@ -799,6 +799,7 @@ pub(in crate::app::dispatch) fn action_for_reset(
             tool: crate::app::actions::PiBuiltinTool::Ls,
             enabled: *b,
         }),
+        ("psm_resume_index", SettingValue::Bool(b)) => Some(Action::SetPsmResumeIndex(*b)),
         ("page_flip_on_send", SettingValue::Bool(b)) => Some(Action::SetPageFlipOnSend(*b)),
         ("simple_mode", SettingValue::Bool(b)) => Some(Action::SetSimpleMode(*b)),
         ("contextual_hints.undo", SettingValue::Bool(b)) => Some(Action::SetContextualHintUndo(*b)),
@@ -1010,6 +1011,7 @@ pub(in crate::app::dispatch) fn apply_setting_rollback(
         ("pi_builtin_tools", SettingValue::PiBuiltinTools(value)) => {
             app.current_ui.pi_builtin_tools = value.clone()
         }
+        ("psm_resume_index", SettingValue::Bool(b)) => app.current_ui.psm_resume_index = *b,
         ("page_flip_on_send", SettingValue::Bool(b)) => set_page_flip_on_send_inner(app, *b),
         ("simple_mode", SettingValue::Bool(b)) => set_simple_mode_inner(app, *b),
         ("contextual_hints.undo", SettingValue::Bool(b)) => {

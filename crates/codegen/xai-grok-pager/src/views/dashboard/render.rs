@@ -1223,6 +1223,7 @@ fn render_location_picker(
                 summary_lines: &[],
                 dimmed: false,
                 indent: 0,
+                label_color: None,
                 badge: badge.as_str(),
                 badge_color: (!badge.is_empty()).then_some(theme.accent_user),
                 collapsible: false,

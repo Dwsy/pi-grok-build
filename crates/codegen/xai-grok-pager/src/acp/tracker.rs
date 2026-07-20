@@ -1670,10 +1670,20 @@ fn tool_call_to_block(tc: &acp::ToolCall, session_cwd: Option<&Path>) -> RenderB
             RenderBlock::ToolCall(ToolCallBlock::WebSearch(block))
         }
         acp::ToolKind::Search => {
-            let pattern = extract_raw_field(tc, "pattern")
+            let mut pattern = extract_raw_field(tc, "pattern")
                 .or_else(|| extract_raw_field(tc, "glob_pattern"))
                 .unwrap_or_else(|| tc.title.clone());
-            let meta = extract_search_meta(tc);
+            let mut meta = extract_search_meta(tc);
+            // Pi `find` is a file-glob search, not a regex search. The native
+            // Search card represents that as a trivial pattern plus `glob`;
+            // normalize it here at the renderer boundary so the card reads
+            // `Search *.rs` instead of `Search "*.rs" in *.rs`.
+            if meta.output_mode == SearchOutputMode::FilesWithMatches
+                && let Some(glob) = meta.glob.clone()
+            {
+                pattern = ".".to_string();
+                meta.glob = Some(glob);
+            }
             let grep = extract_grep_output(&tc.raw_output).unwrap_or_default();
             let mut block = SearchToolCallBlock::new(pattern);
             block.meta = meta;
@@ -1707,11 +1717,18 @@ fn tool_call_to_block(tc: &acp::ToolCall, session_cwd: Option<&Path>) -> RenderB
             }
             RenderBlock::ToolCall(ToolCallBlock::WebFetch(block))
         }
-        _ if extract_raw_field(tc, "target_directory").is_some() => {
-            let path = extract_raw_field(tc, "target_directory").unwrap();
+        _ if is_list_dir_tool_call(tc) => {
+            let path = extract_raw_field(tc, "target_directory")
+                .or_else(|| extract_raw_field(tc, "path"))
+                .unwrap_or_else(|| ".".to_string());
             let mut block = ListDirToolCallBlock::new(make_relative_path(&path));
             if let Some(content) = extract_listdir_content(&tc.raw_output) {
                 block = block.with_output(content);
+            } else {
+                let text = content_text(tc);
+                if !text.is_empty() {
+                    block = block.with_output(text);
+                }
             }
             if !success {
                 block = block.with_error("List directory failed");
@@ -2061,6 +2078,16 @@ fn is_bg_tool(tc: &acp::ToolCall) -> bool {
 /// rather than a targeted replacement (search_replace / edit).
 ///
 /// Detection: a Write-family `rawInput.variant` tag.
+fn is_list_dir_tool_call(tc: &acp::ToolCall) -> bool {
+    let name = tc.title.trim().to_ascii_lowercase();
+    matches!(name.as_str(), "ls" | "list_dir" | "listdir" | "list_directory")
+        || extract_raw_field(tc, "target_directory").is_some()
+        || matches!(
+            tc.raw_output.as_ref().and_then(|raw| raw.get("type")).and_then(|value| value.as_str()),
+            Some("ListDir")
+        )
+}
+
 fn is_write_tool(tc: &acp::ToolCall) -> bool {
     if is_write_variant(
         tc.raw_input
@@ -3781,6 +3808,38 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn pi_find_and_ls_select_native_render_blocks() {
+        let find = acp::ToolCall::new(acp::ToolCallId::new("find-1"), "find")
+            .kind(acp::ToolKind::Search)
+            .status(acp::ToolCallStatus::Completed)
+            .raw_input(Some(serde_json::json!({
+                "pattern": "*.rs",
+                "glob_pattern": "*.rs",
+                "output_mode": "files_with_matches"
+            })));
+        let find_block = tool_call_to_block(&find, None);
+        let RenderBlock::ToolCall(ToolCallBlock::Search(search)) = find_block else {
+            panic!("Pi find must use the native Search block");
+        };
+        assert_eq!(search.pattern, ".");
+        assert_eq!(search.meta.glob.as_deref(), Some("*.rs"));
+
+        let ls = acp::ToolCall::new(acp::ToolCallId::new("ls-1"), "ls")
+            .kind(acp::ToolKind::Other)
+            .status(acp::ToolCallStatus::Completed)
+            .raw_input(Some(serde_json::json!({ "path": "src" })))
+            .content(vec![acp::ToolCallContent::from(
+                acp::ContentBlock::Text(acp::TextContent::new("main.rs")),
+            )]);
+        let ls_block = tool_call_to_block(&ls, None);
+        let RenderBlock::ToolCall(ToolCallBlock::ListDir(list_dir)) = ls_block else {
+            panic!("Pi ls must use the native ListDir block");
+        };
+        assert_eq!(list_dir.path, "src");
+        assert_eq!(list_dir.output, "main.rs");
+    }
+
     /// ScrollbackState with an explicit `expanded_by_default` shape override
     /// (flag-independent: the `Some` beats the `collapsed_edit_blocks` cache).
     fn edit_config_scrollback(expanded_by_default: bool) -> ScrollbackState {

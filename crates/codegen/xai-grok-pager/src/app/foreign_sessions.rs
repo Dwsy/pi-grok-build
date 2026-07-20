@@ -436,6 +436,11 @@ pub(crate) fn map_summary(summary: ForeignSessionSummary) -> SessionPickerEntry 
     SessionPickerEntry {
         id: summary.native_id,
         summary: summary.title,
+        name: None,
+        first_message: None,
+        session_path: None,
+        total_tokens: None,
+        total_cost: None,
         updated_at,
         created_at: updated_at,
         cwd: cwd.clone(),
@@ -545,6 +550,11 @@ mod tests {
         SessionPickerEntry {
             id: id.into(),
             summary: id.into(),
+            name: None,
+            first_message: None,
+            session_path: None,
+            total_tokens: None,
+            total_cost: None,
             updated_at: timestamp,
             created_at: timestamp,
             cwd: "/repo".into(),

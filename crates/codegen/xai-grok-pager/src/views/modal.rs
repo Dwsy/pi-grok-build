@@ -1219,6 +1219,7 @@ pub fn render_doc_picker_overlay(
                 summary_lines: &[],
                 dimmed: false,
                 indent: 0,
+                label_color: None,
                 badge: "",
                 badge_color: None,
                 collapsible: false,

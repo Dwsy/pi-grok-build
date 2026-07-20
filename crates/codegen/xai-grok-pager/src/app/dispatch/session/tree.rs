@@ -160,10 +160,16 @@ pub(in crate::app::dispatch) fn handle_session_tree_navigated(
     agent_id: AgentId,
     session_id: String,
     leaf_id: Option<String>,
+    editor_text: Option<String>,
 ) -> Vec<Effect> {
     let Some(agent) = app.agents.get_mut(&agent_id) else {
         return vec![];
     };
+    if let Some(editor_text) = editor_text.filter(|text| !text.is_empty())
+        && agent.prompt.text().trim().is_empty()
+    {
+        agent.prompt.set_text(&editor_text);
+    }
     while agent.scrollback.in_batch() {
         agent.scrollback.end_batch();
     }

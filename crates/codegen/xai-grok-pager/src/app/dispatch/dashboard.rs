@@ -215,6 +215,7 @@ app.dashboard_sessions_loading = true;
         return vec![Effect::FetchExternalSessionCatalog {
             cwd: app.cwd.clone(),
             all: false,
+            use_psm_index: app.current_ui.psm_resume_index,
         }];
     }
     vec![Effect::FetchDashboardSessions]

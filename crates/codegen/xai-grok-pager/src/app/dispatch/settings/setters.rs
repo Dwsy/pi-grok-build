@@ -2052,6 +2052,25 @@ pub(in crate::app::dispatch) fn set_pi_builtin_tool(
     }]
 }
 
+/// Persist the optional PSM SQLite catalog setting.
+pub(in crate::app::dispatch) fn set_psm_resume_index(
+    app: &mut AppView,
+    enabled: bool,
+) -> Vec<Effect> {
+    let previous = app.current_ui.psm_resume_index;
+    if previous == enabled {
+        return vec![];
+    }
+    app.current_ui.psm_resume_index = enabled;
+    refresh_open_settings_modals(app);
+    app.show_toast(&save_success_toast("PSM resume index", enabled));
+    vec![Effect::PersistSetting {
+        key: "psm_resume_index",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
 /// State-only mutation for auto session-recap toggle.
 pub(super) fn set_session_recap_inner(app: &mut AppView, enabled: bool) {
     app.current_ui.session_recap = Some(enabled);

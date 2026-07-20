@@ -1700,6 +1700,19 @@ pub fn default_settings() -> Vec<SettingMeta> {
             hidden_in_minimal: false,
         },
         SettingMeta {
+            key: "psm_resume_index",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "PSM resume index",
+            description: "Use Pi Session Manager's local SQLite index to speed up Pi session catalogs. Falls back to Pi JSONL when PSM is unavailable.",
+            keywords: &["pi", "psm", "resume", "session", "sqlite", "index"],
+            kind: SettingKind::Bool {
+                default: ui_default.psm_resume_index,
+            },
+            restart_required: false,
+            hidden_in_minimal: false,
+        },
+        SettingMeta {
             key: "pi_config",
             category: SettingCategory::Agent,
             owner: SettingOwner::Shell,

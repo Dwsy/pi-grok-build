@@ -1821,6 +1821,78 @@ mod tests {
         assert_eq!(layout.external_widgets_below_editor.height, 1);
     }
     #[test]
+    fn external_widget_rows_follow_compact_outer_padding() {
+        let area = Rect::new(0, 0, 80, 40);
+        let layout_cfg = LayoutConfig::default();
+        let scrollbar_cfg = ScrollbarConfig::default();
+        let normal = AgentViewLayout::compute(
+            area,
+            &layout_cfg,
+            &scrollbar_cfg,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            false,
+        );
+        let compact = AgentViewLayout::compute(
+            area,
+            &layout_cfg,
+            &scrollbar_cfg,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            true,
+        );
+
+        assert_eq!(
+            normal.external_widgets_above_editor.x,
+            area.x + layout_cfg.outer_hpad_left
+        );
+        assert_eq!(
+            compact.external_widgets_above_editor.x,
+            area.x + LayoutConfig::MIN_HPAD
+        );
+        assert_ne!(
+            normal.external_widgets_above_editor.x,
+            compact.external_widgets_above_editor.x
+        );
+        assert_eq!(
+            normal.external_widgets_above_editor.width,
+            normal.prompt.width
+        );
+        assert_eq!(
+            compact.external_widgets_above_editor.width,
+            compact.prompt.width
+        );
+    }
+
+    #[test]
     fn plugin_cta_row_present_above_prompt() {
         let area = Rect::new(0, 0, 80, 40);
         let layout = layout_with_cta(area, 1);

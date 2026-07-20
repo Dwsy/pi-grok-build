@@ -1259,6 +1259,7 @@ fn dispatch_refresh_external_session_catalog_welcome(app: &mut AppView) -> Vec<E
     vec![Effect::FetchExternalSessionCatalog {
         cwd: app.cwd.clone(),
         all: false,
+        use_psm_index: app.current_ui.psm_resume_index,
     }]
 }
 
@@ -1294,6 +1295,7 @@ pub(in crate::app::dispatch) fn dispatch_refresh_external_session_catalog(
     vec![Effect::FetchExternalSessionCatalog {
         cwd: agent.session.cwd.clone(),
         all: window.active_tab == 1,
+        use_psm_index: app.current_ui.psm_resume_index,
     }]
 }
 /// The picker (modal `/resume` or welcome screen) was dismissed without a

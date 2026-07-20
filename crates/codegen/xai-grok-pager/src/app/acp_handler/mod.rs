@@ -788,12 +788,29 @@ fn handle_pi_ui_session_catalog(notif: &acp::ExtNotification, app: &mut AppView)
             Some(crate::app::app_view::SessionPickerEntry {
                 id,
                 summary,
+                name: session
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                first_message: session
+                    .get("firstMessage")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                session_path: session
+                    .get("sessionPath")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+                total_tokens: session.get("totalTokens").and_then(serde_json::Value::as_u64),
+                total_cost: session.get("totalCost").and_then(serde_json::Value::as_f64),
                 updated_at: timestamp(session.get("updatedAt")),
                 created_at: timestamp(session.get("createdAt")),
                 cwd: cwd.clone(),
                 hostname: None,
                 source: "pi".to_owned(),
-                model_id: None,
+                model_id: session
+                    .get("modelId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
                 num_messages: session
                     .get("messageCount")
                     .and_then(serde_json::Value::as_u64)

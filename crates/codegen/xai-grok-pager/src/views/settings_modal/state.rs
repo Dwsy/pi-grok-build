@@ -861,6 +861,7 @@ pub(super) fn action_for_bool(key: SettingKey, new: bool) -> Option<Action> {
             tool: crate::app::actions::PiBuiltinTool::Ls,
             enabled: new,
         }),
+        "psm_resume_index" => Some(Action::SetPsmResumeIndex(new)),
         "simple_mode" => Some(Action::SetSimpleMode(new)),
         "contextual_hints.undo" => Some(Action::SetContextualHintUndo(new)),
         "contextual_hints.plan_mode" => Some(Action::SetContextualHintPlanMode(new)),

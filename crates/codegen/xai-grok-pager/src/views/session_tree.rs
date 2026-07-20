@@ -104,17 +104,7 @@ impl SessionTreeState {
         state.status = None;
         state.leaf_id = leaf_id.clone();
         state.nodes = nodes;
-        // Prefer current leaf if visible after default filter.
-        let selected = leaf_id
-            .as_deref()
-            .and_then(|leaf| {
-                state
-                    .visible_rows()
-                    .into_iter()
-                    .position(|row| state.nodes[row.node_index].id == leaf)
-            })
-            .unwrap_or(0);
-        state.selected = selected;
+        state.selected = state.nearest_visible_index(leaf_id.as_deref());
         state.ensure_visible(12);
         state
     }
@@ -125,21 +115,37 @@ impl SessionTreeState {
         self.leaf_id = leaf_id;
         self.loading = false;
         self.status = None;
-        if let Some(id) = prev_id {
-            if let Some(index) = self
-                .visible_rows()
-                .into_iter()
-                .position(|row| self.nodes[row.node_index].id == id)
-            {
-                self.selected = index;
-            } else {
-                self.selected = 0;
-            }
-        } else {
-            self.selected = 0;
-        }
+        self.selected = self.nearest_visible_index(prev_id.as_deref().or(self.leaf_id.as_deref()));
         self.clamp_selected();
         self.ensure_visible(12);
+    }
+
+    /// Match Pi TreeSelector: use the requested node if visible; otherwise walk
+    /// toward the root and finally select the last visible entry.
+    fn nearest_visible_index(&self, entry_id: Option<&str>) -> usize {
+        let rows = self.visible_rows();
+        if rows.is_empty() {
+            return 0;
+        }
+        let mut current = entry_id;
+        let mut visited = HashSet::new();
+        while let Some(id) = current {
+            if !visited.insert(id) {
+                break;
+            }
+            if let Some(index) = rows
+                .iter()
+                .position(|row| self.nodes[row.node_index].id == id)
+            {
+                return index;
+            }
+            current = self
+                .nodes
+                .iter()
+                .find(|node| node.id == id)
+                .and_then(|node| node.parent_id.as_deref());
+        }
+        rows.len() - 1
     }
 
     /// Pi TreeSelector filter + fold + visual recompute.
@@ -382,27 +388,27 @@ impl SessionTreeState {
     }
 
     pub fn cycle_filter_forward(&mut self) {
+        let selected_id = self.selected_id();
         self.filter = self.filter.cycle_forward();
         self.folded.clear();
-        self.selected = 0;
+        self.selected = self.nearest_visible_index(selected_id.as_deref());
         self.scroll = 0;
-        self.clamp_selected();
     }
 
     pub fn cycle_filter_backward(&mut self) {
+        let selected_id = self.selected_id();
         self.filter = self.filter.cycle_backward();
         self.folded.clear();
-        self.selected = 0;
+        self.selected = self.nearest_visible_index(selected_id.as_deref());
         self.scroll = 0;
-        self.clamp_selected();
     }
 
     pub fn set_filter(&mut self, filter: SessionTreeFilter) {
+        let selected_id = self.selected_id();
         self.filter = filter;
         self.folded.clear();
-        self.selected = 0;
+        self.selected = self.nearest_visible_index(selected_id.as_deref());
         self.scroll = 0;
-        self.clamp_selected();
     }
 
     /// Foldable when at least one currently-visible row treats `entry_id`
@@ -954,6 +960,48 @@ mod tests {
             child_ids: Vec::new(),
             has_text,
         }
+    }
+
+    #[test]
+    fn replace_nodes_selects_current_leaf() {
+        let mut state = SessionTreeState::loading();
+        state.replace_nodes(
+            vec![
+                node("u", None, 0, "user", "message", true),
+                node("a", Some("u"), 1, "assistant", "message", true),
+            ],
+            Some("a".into()),
+        );
+
+        assert_eq!(state.selected_id().as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn filter_selection_walks_to_visible_ancestor() {
+        let state = SessionTreeState::with_nodes(
+            vec![
+                node("u", None, 0, "user", "message", true),
+                node("a", Some("u"), 1, "assistant", "message", true),
+            ],
+            Some("a".into()),
+        );
+        let mut state = state;
+        state.set_filter(SessionTreeFilter::UserOnly);
+
+        assert_eq!(state.selected_id().as_deref(), Some("u"));
+    }
+
+    #[test]
+    fn missing_leaf_falls_back_to_last_visible_entry() {
+        let mut state = SessionTreeState::loading();
+        state.set_filter(SessionTreeFilter::LabeledOnly);
+        let mut first = node("first", None, 0, "user", "message", true);
+        first.label = Some("first".into());
+        let mut last = node("last", None, 0, "user", "message", true);
+        last.label = Some("last".into());
+        state.replace_nodes(vec![first, last], Some("missing".into()));
+
+        assert_eq!(state.selected_id().as_deref(), Some("last"));
     }
 
     #[test]

@@ -675,6 +675,8 @@ pub enum Action {
         tool: PiBuiltinTool,
         enabled: bool,
     },
+    /// Enable PSM's optional SQLite catalog source for Pi `/resume`.
+    SetPsmResumeIndex(bool),
     /// Commit the `show_tips` preference. Persisted to `[cli].show_tips`.
     /// Restart-required — tips are resolved once at startup.
     SetShowTips(bool),
@@ -1518,7 +1520,11 @@ pub enum Effect {
     },
     /// Ask an external ACP agent to lazily publish one scoped session catalog
     /// when the native session picker opens or its tab changes.
-    FetchExternalSessionCatalog { cwd: std::path::PathBuf, all: bool },
+    FetchExternalSessionCatalog {
+        cwd: std::path::PathBuf,
+        all: bool,
+        use_psm_index: bool,
+    },
     /// Fetch Pi `get_tree` for the active agent and open ArgPicker.
     FetchSessionTree {
         agent_id: crate::app::agent::AgentId,
@@ -2315,6 +2321,7 @@ pub enum TaskResult {
         agent_id: crate::app::agent::AgentId,
         session_id: String,
         leaf_id: Option<String>,
+        editor_text: Option<String>,
     },
     /// Pi tree navigation failed; keep current view.
     SessionTreeNavigateFailed {

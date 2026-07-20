@@ -426,10 +426,19 @@ impl VoiceState {
     }
 }
 /// Entry in the session picker list on the welcome screen.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SessionPickerEntry {
     pub id: String,
     pub summary: String,
+    /// User-assigned Pi session name, when present. Native sessions leave this empty.
+    pub name: Option<String>,
+    /// Pi's first user message, retained separately from a user-assigned name.
+    pub first_message: Option<String>,
+    /// Backing Pi JSONL path, shown in expanded session details.
+    pub session_path: Option<String>,
+    /// Aggregated persisted assistant usage. Absent for non-Pi or older sessions.
+    pub total_tokens: Option<u64>,
+    pub total_cost: Option<f64>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub cwd: String,
@@ -1999,6 +2008,9 @@ impl AppView {
         {
             let picker_changed = self.session_picker_entries.as_ref() != Some(&entries)
                 || self.session_picker_loading;
+            if picker_changed {
+                self.session_picker_state.expanded.clear();
+            }
             self.session_picker_entries = Some(entries.clone());
             self.session_picker_loading = false;
             return changed || picker_changed;
@@ -2011,6 +2023,7 @@ impl AppView {
             return changed;
         };
         let Some(crate::views::modal::ActiveModal::SessionPicker {
+            state,
             entries: picker_entries,
             loading,
             source_filter,
@@ -2031,6 +2044,9 @@ impl AppView {
             return changed;
         }
         let picker_changed = picker_entries.as_ref() != Some(&entries) || *loading;
+        if picker_changed {
+            state.expanded.clear();
+        }
         *picker_entries = Some(entries);
         *loading = false;
         changed || picker_changed
@@ -2295,15 +2311,11 @@ impl AppView {
             &self.external_ui.widgets,
             ExternalWidgetPlacement::BelowEditor,
         );
-        // Remote TUI projects full-terminal frames (like Pi interactive). Bleed
-        // past Pager outer hpad so width matches host COLUMNS, not inner area.
-        let above_full_bleed = self.external_ui.widgets.contains_key("remote_tui");
         self.agents.values_mut().fold(false, |changed, agent| {
             agent.set_external_ui_surface(
                 &widgets_above_editor,
                 &widgets_below_editor,
                 &statuses,
-                above_full_bleed,
             ) || changed
         })
     }
@@ -3599,7 +3611,7 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
             filter_label: (!ctx.chat_mode).then(|| source_filter.label()),
             filter_key_hint: (!ctx.chat_mode).then_some("f"),
             filter_active: !ctx.chat_mode && source_filter.is_active(),
-            action_keys: &[],
+            action_keys: &[('s', "sort")],
             disable_search: false,
             compact_bottom_bar: false,
             search_only_on_slash: false,
@@ -3610,6 +3622,18 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                 && (key!('c', CONTROL).matches(key) || key!('d', CONTROL).matches(key))
             {
                 return InputOutcome::Action(Action::Quit);
+            }
+            if !ctx.sp_state.search_active
+                && key.kind == KeyEventKind::Press
+                && key.modifiers.is_empty()
+                && matches!(key.code, crossterm::event::KeyCode::Char('s'))
+                && let Some(entries) = ctx.sp_entries.as_mut()
+            {
+                ctx.sp_state.session_sort = ctx.sp_state.session_sort.next();
+                crate::views::session_picker::sort_session_entries(entries, ctx.sp_state.session_sort);
+                ctx.sp_state.selected = 0;
+                ctx.sp_state.scroll_offset = None;
+                return InputOutcome::Changed;
             }
             if let Some(selection) = session_picker_worktree_selection(
                 key,
@@ -7787,6 +7811,11 @@ pub(crate) mod tests {
         SessionPickerEntry {
             id: id.into(),
             summary: id.into(),
+            name: None,
+            first_message: None,
+            session_path: None,
+            total_tokens: None,
+            total_cost: None,
             updated_at: chrono::Utc::now(),
             created_at: chrono::Utc::now(),
             cwd: "/tmp/repo".into(),
@@ -11580,6 +11609,11 @@ pub(crate) mod tests {
         let conversation_entry = SessionPickerEntry {
             id: "conv-welcome-f".into(),
             summary: "chat".into(),
+            name: None,
+            first_message: None,
+            session_path: None,
+            total_tokens: None,
+            total_cost: None,
             updated_at: chrono::Utc::now(),
             created_at: chrono::Utc::now(),
             cwd: String::new(),

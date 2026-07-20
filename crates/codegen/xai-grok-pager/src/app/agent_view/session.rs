@@ -217,7 +217,6 @@ impl AgentView {
             last_word_select_probe: None,
             sticky_toast: None,
             external_widgets_above_editor: Vec::new(),
-            external_widgets_above_full_bleed: false,
             external_widgets_below_editor: Vec::new(),
             external_statuses: Vec::new(),
             mode_switch_banner: None,

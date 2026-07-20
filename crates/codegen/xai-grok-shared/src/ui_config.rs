@@ -9,6 +9,10 @@ pub struct UiConfig {
     /// default preserves Pi's own default tool set; F2 writes this as a group.
     #[serde(default, skip_serializing_if = "PiBuiltinTools::is_default")]
     pub pi_builtin_tools: PiBuiltinTools,
+    /// Use PSM's local SQLite session index for external Pi `/resume` catalogs.
+    /// Disabled by default; the adapter still falls back to Pi JSONL on failure.
+    #[serde(default)]
+    pub psm_resume_index: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     /// Model ID to use for the secondary agent when forking.
@@ -293,6 +297,7 @@ impl Default for UiConfig {
         Self {
             max_thoughts_width: DEFAULT_MAX_THOUGHTS_WIDTH,
             pi_builtin_tools: PiBuiltinTools::default(),
+            psm_resume_index: false,
             theme: None,
             fork_secondary_model: xai_grok_models::default_model().to_string(),
             recap_model: String::new(),

@@ -493,6 +493,7 @@ pub fn current_value_for(
         "pi_builtin_tools.grep" => Some(SettingValue::Bool(ui.pi_builtin_tools.grep)),
         "pi_builtin_tools.find" => Some(SettingValue::Bool(ui.pi_builtin_tools.find)),
         "pi_builtin_tools.ls" => Some(SettingValue::Bool(ui.pi_builtin_tools.ls)),
+        "psm_resume_index" => Some(SettingValue::Bool(ui.psm_resume_index)),
         // Cache is the send-path source of truth (same pattern as group_tool_verbs).
         "page_flip_on_send" => Some(SettingValue::Bool(
             crate::appearance::cache::load_page_flip_on_send(),

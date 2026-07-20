@@ -2356,6 +2356,7 @@ presenter.request_presentation(&mut app, terminal, false);
                         Effect::FetchExternalSessionCatalog {
                             cwd: app.cwd.clone(),
                             all: false,
+                            use_psm_index: app.current_ui.psm_resume_index,
                         }
                     } else {
                         Effect::FetchDashboardSessions

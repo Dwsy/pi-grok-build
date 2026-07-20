@@ -2043,6 +2043,11 @@ fn session_picker_entry_maps_to_dormant_roster_row() {
     let entry = SessionPickerEntry {
         id: "sess-1".to_string(),
         summary: "Wire up dashboard".to_string(),
+        name: None,
+        first_message: None,
+        session_path: None,
+        total_tokens: None,
+        total_cost: None,
         updated_at: updated,
         created_at: updated,
         cwd: "/repo/app".to_string(),

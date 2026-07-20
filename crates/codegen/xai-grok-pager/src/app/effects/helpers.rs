@@ -573,6 +573,11 @@ pub(super) fn parse_session_picker_entries(
             Some(SessionPickerEntry {
                 id,
                 summary: display,
+                name: None,
+                first_message: None,
+                session_path: None,
+                total_tokens: None,
+                total_cost: None,
                 updated_at,
                 created_at,
                 cwd: cwd_str,
@@ -1151,6 +1156,14 @@ pub(crate) async fn persist_setting(
                 return Err(kind_mismatch("pi_builtin_tools", "PiBuiltinTools", &value));
             };
             xai_grok_shell::util::config::set_pi_builtin_tools(tools)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "psm_resume_index" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("psm_resume_index", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_psm_resume_index(b)
                 .await
                 .map_err(|e| e.to_string())
         }

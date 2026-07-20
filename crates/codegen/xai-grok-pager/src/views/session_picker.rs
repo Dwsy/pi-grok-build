@@ -90,7 +90,9 @@ pub struct SessionEntryData {
     pub field_data: Vec<(String, String)>,
     /// Short snippet preview for content search hits (always visible).
     pub snippet_preview: Option<String>,
+    pub label_color: Option<ratatui::style::Color>,
     pub badge: &'static str,
+    pub badge_color: Option<ratatui::style::Color>,
     pub collapsible: bool,
 }
 
@@ -326,6 +328,23 @@ pub(crate) fn effective_filter_query<'a>(
 /// When the query is empty, all entries match the text filter. The
 /// `source_filter` is always applied (entries whose `source` field
 /// does not pass [`SourceFilter::matches`] are excluded).
+pub(crate) fn sort_session_entries(
+    entries: &mut [SessionPickerEntry],
+    mode: crate::views::picker::SessionSortMode,
+) {
+    match mode {
+        crate::views::picker::SessionSortMode::Recent => {
+            entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_active_at.unwrap_or(entry.updated_at)));
+        }
+        crate::views::picker::SessionSortMode::Created => {
+            entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at));
+        }
+        crate::views::picker::SessionSortMode::Name => {
+            entries.sort_by_key(|entry| entry.summary.to_lowercase());
+        }
+    }
+}
+
 pub(crate) fn filter_session_entries(
     entries: Option<&[SessionPickerEntry]>,
     query: &str,
@@ -605,11 +624,26 @@ pub(crate) fn build_session_entry_data(
             let is_selected = !state.selection_hidden && fi == state.selected;
             let is_foreign = crate::app::is_foreign_picker_source(&entry.source);
             let is_expanded = !is_foreign && state.expanded.contains(&orig_idx);
+            let is_named = entry.name.as_deref().is_some_and(|name| !name.trim().is_empty());
 
             let mut field_data: Vec<(String, String)> = Vec::new();
             if is_expanded {
                 field_data.push(("ID".into(), entry.id.clone()));
+                if let Some(ref name) = entry.name {
+                    field_data.push(("Name".into(), name.clone()));
+                }
+                if let Some(first_message) = entry.first_message.as_deref() {
+                    let first_prompt = first_message.lines().collect::<Vec<_>>().join(" ");
+                    let max_width = content_width.saturating_sub(18) as usize;
+                    field_data.push((
+                        "First prompt".into(),
+                        truncate_str(&first_prompt, max_width),
+                    ));
+                }
                 field_data.push(("CWD".into(), entry.cwd.clone()));
+                if let Some(ref session_path) = entry.session_path {
+                    field_data.push(("Path".into(), session_path.clone()));
+                }
                 if let Some(ref model) = entry.model_id {
                     field_data.push(("Model".into(), model.clone()));
                 }
@@ -626,6 +660,12 @@ pub(crate) fn build_session_entry_data(
                 }
                 if entry.num_messages > 0 {
                     field_data.push(("Messages".into(), entry.num_messages.to_string()));
+                }
+                if let Some(total_tokens) = entry.total_tokens {
+                    field_data.push(("Tokens".into(), format_token_count(total_tokens)));
+                }
+                if let Some(total_cost) = entry.total_cost {
+                    field_data.push(("Cost".into(), format_cost(total_cost)));
                 }
                 if let Some(ref detail) = entry.card_detail {
                     field_data.push((
@@ -647,7 +687,9 @@ pub(crate) fn build_session_entry_data(
                 is_expanded,
                 field_data,
                 snippet_preview: None,
+                label_color: is_named.then_some(ratatui::style::Color::Yellow),
                 badge: crate::app::badge_for_picker_source(&entry.source),
+                badge_color: None,
                 collapsible: !is_foreign,
             }
         })
@@ -703,8 +745,9 @@ pub(crate) fn build_grouped_picker_entries<'a>(
                 summary_lines: &[],
                 dimmed: false,
                 indent: 1,
+                label_color: b.label_color,
                 badge: b.badge,
-                badge_color: None,
+                badge_color: b.badge_color,
                 collapsible: b.collapsible,
                 underline_last_desc: false,
             }));
@@ -787,7 +830,9 @@ pub(crate) fn build_content_entry_data(
                 is_expanded,
                 field_data,
                 snippet_preview,
+                label_color: None,
                 badge: "",
+                badge_color: None,
                 collapsible: true,
             }
         })
@@ -822,6 +867,20 @@ pub(crate) fn build_content_header_label(
 // ---------------------------------------------------------------------------
 
 /// Format a timestamp as a human-readable relative time.
+fn format_token_count(tokens: u64) -> String {
+    if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
+fn format_cost(cost: f64) -> String {
+    let formatted = format!("{cost:.2}");
+    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
+    format!("${trimmed}")
+}
+
 pub(crate) fn format_time_ago(dt: chrono::DateTime<chrono::Utc>) -> String {
     let now = chrono::Utc::now();
     let duration = now.signed_duration_since(dt);
@@ -945,6 +1004,11 @@ mod tests {
         SessionPickerEntry {
             id: id.into(),
             summary: id.into(),
+            name: None,
+            first_message: None,
+            session_path: None,
+            total_tokens: None,
+            total_cost: None,
             updated_at: chrono::Utc::now(),
             created_at: chrono::Utc::now(),
             cwd: format!("/{repo}"),
@@ -1386,6 +1450,36 @@ mod tests {
         assert!(!built[0].collapsible);
         assert!(!built[0].is_expanded);
         assert!(built[0].field_data.is_empty());
+    }
+
+    #[test]
+    fn named_pi_entry_exposes_persisted_metadata() {
+        let mut entry = make_entry("pi-session", "repo");
+        entry.source = "pi".into();
+        entry.summary = "Release checklist".into();
+        entry.name = Some("Release checklist".into());
+        entry.first_message = Some("Prepare the release".into());
+        entry.session_path = Some("/sessions/release.jsonl".into());
+        entry.model_id = Some("openai::gpt-test".into());
+        entry.total_tokens = Some(1_200);
+        entry.total_cost = Some(0.42);
+        let mut state = PickerState::default();
+        state.expanded.insert(0);
+
+        let built = build_session_entry_data(&[entry], &[0], &state, 100);
+
+        assert_eq!(built[0].badge, "pi");
+        assert_eq!(built[0].label_color, Some(ratatui::style::Color::Yellow));
+        assert_eq!(built[0].badge_color, None);
+        assert!(built[0]
+            .field_data
+            .contains(&("Path".into(), "/sessions/release.jsonl".into())));
+        assert!(built[0]
+            .field_data
+            .contains(&("Tokens".into(), "1.2k".into())));
+        assert!(built[0]
+            .field_data
+            .contains(&("Cost".into(), "$0.42".into())));
     }
 
     #[test]

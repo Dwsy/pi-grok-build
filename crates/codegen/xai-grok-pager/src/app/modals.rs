@@ -1092,10 +1092,12 @@ impl AgentView {
                     filter_label: (!chat_mode && !external_picker).then(|| source_filter.label()),
                     filter_key_hint: (!chat_mode && !external_picker).then_some("f"),
                     filter_active: !chat_mode && !external_picker && source_filter.is_active(),
-                    action_keys: if chat_mode || external_picker || focused_is_foreign {
+                    action_keys: if external_picker {
+                        &[('s', "sort")]
+                    } else if chat_mode || focused_is_foreign {
                         &[]
                     } else {
-                        &[('d', "delete")]
+                        &[('d', "delete"), ('s', "sort")]
                     },
                     disable_search: false,
                     compact_bottom_bar: false,
@@ -1138,6 +1140,20 @@ impl AgentView {
                             *pending_delete = None;
                         }
                     }
+                }
+
+                if let crossterm::event::Event::Key(key) = ev
+                    && !state.search_active
+                    && key.kind == KeyEventKind::Press
+                    && key.modifiers.is_empty()
+                    && matches!(key.code, crossterm::event::KeyCode::Char('s'))
+                    && let Some(entries) = entries.as_mut()
+                {
+                    state.session_sort = state.session_sort.next();
+                    crate::views::session_picker::sort_session_entries(entries, state.session_sort);
+                    state.selected = 0;
+                    state.scroll_offset = None;
+                    return InputOutcome::Changed;
                 }
 
                 if let crossterm::event::Event::Key(key) = ev
@@ -1426,6 +1442,7 @@ impl AgentView {
                         expanded: false,
                         dimmed: false,
                         indent: 0,
+                        label_color: None,
                         badge: "",
                         badge_color: None,
                         collapsible: false,
@@ -1920,7 +1937,8 @@ impl AgentView {
                                 summary_lines: &[],
                                 dimmed: false,
                                 indent: 0,
-                                badge: "",
+                                                                label_color: None,
+badge: "",
                                 badge_color: None,
                                 collapsible: false,
                                 underline_last_desc: false,
@@ -2002,7 +2020,8 @@ impl AgentView {
                             summary_lines: &[],
                             dimmed: false,
                             indent: 0,
-                            badge: "",
+                                                        label_color: None,
+badge: "",
                             badge_color: None,
                             collapsible: false,
                             underline_last_desc: false,
@@ -2088,7 +2107,8 @@ impl AgentView {
                             summary_lines: &[],
                             dimmed: false,
                             indent: 0,
-                            badge: "",
+                                                        label_color: None,
+badge: "",
                             badge_color: None,
                             collapsible: false,
                             underline_last_desc: false,
@@ -2226,20 +2246,23 @@ impl AgentView {
                         clickable: false,
                         id: 0,
                     }];
-                    if !external {
-                        shortcuts.extend([
-                            Shortcut {
-                                label: "e expand",
-                                clickable: false,
-                                id: 0,
-                            },
-                            Shortcut {
-                                label: "/ search",
-                                clickable: false,
-                                id: 0,
-                            },
-                        ]);
-                    }
+                    shortcuts.extend([
+                        Shortcut {
+                            label: "e/Shift+e expand",
+                            clickable: false,
+                            id: 0,
+                        },
+                        Shortcut {
+                            label: "s sort",
+                            clickable: false,
+                            id: 0,
+                        },
+                        Shortcut {
+                            label: "/ search",
+                            clickable: false,
+                            id: 0,
+                        },
+                    ]);
                     if !chat_mode && !external {
                         shortcuts.push(Shortcut {
                             label: "f filter",
@@ -2266,14 +2289,15 @@ impl AgentView {
                     title: "Resume session",
                     tabs: external.then_some(&external_tabs),
                     shortcuts: &session_shortcuts,
-                    // Match model picker: taller outer margin → shorter popup.
+                    // Keep the welcome picker’s full catalogue controls, but
+                    // leave a modest frame around the in-session surface.
                     sizing: ModalSizing {
-                        width_pct: 0.65,
-                        max_width: 120,
+                        width_pct: 0.85,
+                        max_width: 180,
                         min_width: 48,
-                        v_margin: 8,
-                        h_pad: 2,
-                        v_pad: 1,
+                        v_margin: 3,
+                        h_pad: 1,
+                        v_pad: 0,
                         footer_lines: 2,
                     }
                     .with_compact(compact),
@@ -2433,7 +2457,8 @@ impl AgentView {
                             summary_lines: &[],
                             dimmed: false,
                             indent: 1,
-                            badge: if has_snippet { "match" } else { "" },
+                                                        label_color: None,
+badge: if has_snippet { "match" } else { "" },
                             badge_color: Some(theme.accent_user),
                             collapsible: true,
                             underline_last_desc: false,
@@ -3064,6 +3089,11 @@ mod session_picker_delete_tests {
         SessionPickerEntry {
             id: id.into(),
             summary: id.into(),
+            name: None,
+            first_message: None,
+            session_path: None,
+            total_tokens: None,
+            total_cost: None,
             updated_at: chrono::Utc::now(),
             created_at: chrono::Utc::now(),
             cwd: "/repo".into(),

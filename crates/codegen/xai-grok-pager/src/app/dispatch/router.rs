@@ -86,8 +86,8 @@ use super::settings::setters::{
     set_default_model, set_default_selected_permission, set_display_refresh_auto_cadence,
     set_fork_secondary_model, set_group_tool_verbs, set_hunk_tracker_mode, set_invert_scroll,
     set_keep_text_selection, set_max_thoughts_width, set_multiline_mode, set_page_flip_on_send,
-    set_pi_builtin_tool, set_progress_bar, set_prompt_suggestions, set_recap_model,
-    set_remember_tool_approvals, set_render_mermaid, set_respect_manual_folds, set_screen_mode,
+    set_pi_builtin_tool, set_progress_bar, set_prompt_suggestions, set_psm_resume_index,
+    set_recap_model, set_remember_tool_approvals, set_render_mermaid, set_respect_manual_folds, set_screen_mode,
     set_scroll_lines, set_scroll_mode, set_scroll_speed, set_session_recap,
     set_show_thinking_blocks, set_show_tips, set_simple_mode, set_theme, set_timeline,
     set_timestamps, set_vim_mode, set_voice_capture_mode, set_voice_stt_language,
@@ -243,9 +243,8 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::ExpandSessionCard { source, session_id } => {
             let native_source = matches!(source.as_str(), "local" | "remote" | "both");
             let conversation_source = source == "conversation";
-            if session_picker_external_filter_active(app)
-                || crate::app::foreign_sessions::is_foreign_picker_source(&source)
-                || (!native_source && !conversation_source)
+            if crate::app::foreign_sessions::is_foreign_picker_source(&source)
+                || (!native_source && !conversation_source && source != "pi")
             {
                 return vec![];
             }
@@ -509,6 +508,36 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             vec![]
         }
         Action::ToggleExpandAll => {
+            use crate::views::modal::ActiveModal;
+            if let Some(agent) = get_active_agent_mut(app)
+                && let Some(ActiveModal::SessionPicker {
+                    state,
+                    entries: Some(entries),
+                    ..
+                }) = agent.active_modal.as_mut()
+            {
+                let all_expanded = (0..entries.len()).all(|index| state.expanded.contains(&index));
+                if all_expanded {
+                    state.expanded.clear();
+                } else {
+                    state.expanded.extend(0..entries.len());
+                }
+                state.scroll_offset = None;
+                return vec![];
+            }
+            if matches!(app.active_view, crate::app::app_view::ActiveView::Welcome)
+                && let Some(entries) = app.session_picker_entries.as_ref()
+            {
+                let all_expanded = (0..entries.len())
+                    .all(|index| app.session_picker_state.expanded.contains(&index));
+                if all_expanded {
+                    app.session_picker_state.expanded.clear();
+                } else {
+                    app.session_picker_state.expanded.extend(0..entries.len());
+                }
+                app.session_picker_state.scroll_offset = None;
+                return vec![];
+            }
             with_scrollback(app, |s| s.toggle_expand_all());
             vec![]
         }
@@ -1030,6 +1059,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::SetSessionRecap(v) => set_session_recap(app, v),
         Action::SetProgressBar(v) => set_progress_bar(app, v),
         Action::SetPiBuiltinTool { tool, enabled } => set_pi_builtin_tool(app, tool, enabled),
+        Action::SetPsmResumeIndex(enabled) => set_psm_resume_index(app, enabled),
         Action::SetMaxThoughtsWidth(v) => set_max_thoughts_width(app, v),
         Action::SetShowTips(v) => set_show_tips(app, v),
         Action::SetAutoUpdate(v) => set_auto_update(app, v),

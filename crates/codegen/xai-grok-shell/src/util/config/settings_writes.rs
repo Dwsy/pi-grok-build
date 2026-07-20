@@ -174,6 +174,11 @@ pub async fn set_pi_builtin_tools(value: PiBuiltinTools) -> Result<()> {
     update_config(|cfg| cfg.ui.pi_builtin_tools = value).await
 }
 
+/// Persist the optional PSM SQLite session-index preference for grok-pi.
+pub async fn set_psm_resume_index(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.psm_resume_index = value).await
+}
+
 /// Bounds for [`set_max_thoughts_width`]. Mirrored from the pager's
 /// registry consts; a CI test pins the agreement.
 const MAX_THOUGHTS_WIDTH_SHELL_MIN: i64 = 40;

@@ -726,6 +726,11 @@ fn make_picker_entry(id: &str, cwd: &str) -> crate::app::app_view::SessionPicker
     crate::app::app_view::SessionPickerEntry {
         id: id.into(),
         summary: id.into(),
+        name: None,
+        first_message: None,
+        session_path: None,
+        total_tokens: None,
+        total_cost: None,
         updated_at: chrono::Utc::now(),
         created_at: chrono::Utc::now(),
         cwd: cwd.into(),
