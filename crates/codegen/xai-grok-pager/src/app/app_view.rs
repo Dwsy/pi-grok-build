@@ -2681,18 +2681,31 @@ impl AppView {
         // forward keys to the Pi process host instead of editing the prompt.
         if self.external_agent
             && let Some(id) = self.external_ui.remote_tui_id.clone()
-            && let Some(key) = key_event
         {
-            if key.code == KeyCode::Esc {
-                // Prefer cancel over raw Esc input to avoid race with done().
-                self.pending_effects
-                    .push(crate::app::actions::Effect::RemoteTuiCancel { id });
-                return InputOutcome::Changed;
-            }
-            if let Some(data) = Self::remote_tui_key_sequence(key) {
+            // Bracketed paste: forward as a Pi-TUI paste sequence so remote
+            // input components treat it as a paste (newlines insert instead
+            // of submitting). Without this, Event::Paste falls through to the
+            // local prompt editor.
+            if let Event::Paste(text) = ev
+                && !text.is_empty()
+            {
+                let data = format!("\u{001b}[200~{}\u{001b}[201~", text);
                 self.pending_effects
                     .push(crate::app::actions::Effect::RemoteTuiInput { id, data });
                 return InputOutcome::Changed;
+            }
+            if let Some(key) = key_event {
+                if key.code == KeyCode::Esc {
+                    // Prefer cancel over raw Esc input to avoid race with done().
+                    self.pending_effects
+                        .push(crate::app::actions::Effect::RemoteTuiCancel { id });
+                    return InputOutcome::Changed;
+                }
+                if let Some(data) = Self::remote_tui_key_sequence(key) {
+                    self.pending_effects
+                        .push(crate::app::actions::Effect::RemoteTuiInput { id, data });
+                    return InputOutcome::Changed;
+                }
             }
         }
         if let Event::Resize(_, rows) = ev {
@@ -6210,6 +6223,42 @@ pub(crate) mod tests {
         assert!(app.apply_remote_tui("close", Some("sess-1".into()), None, None));
         assert!(app.external_ui.remote_tui_id.is_none());
         assert!(!app.external_ui.widgets.contains_key("remote_tui"));
+    }
+
+    #[test]
+    fn remote_tui_forwards_paste_as_bracketed_sequence_not_local_prompt() {
+        let mut app = test_app_with_agent();
+        let id = super::super::agent::AgentId(0);
+        app.external_agent = true;
+        assert!(app.apply_remote_tui("open", Some("sess-1".into()), None, None));
+
+        let outcome = app.handle_input(&Event::Paste("hello\nworld".to_owned()));
+        assert!(matches!(outcome, InputOutcome::Changed));
+        assert!(
+            app.pending_effects.iter().any(|effect| matches!(
+                effect,
+                crate::app::actions::Effect::RemoteTuiInput { id, data }
+                    if id == "sess-1" && data == "\u{1b}[200~hello\nworld\u{1b}[201~"
+            )),
+            "paste must be forwarded to the remote host as a Pi-TUI paste sequence"
+        );
+        assert!(
+            app.agents[&id].prompt.text().is_empty(),
+            "paste must not land in the local prompt while remote TUI is open"
+        );
+
+        // After the remote session closes, paste targets the local prompt again.
+        assert!(app.apply_remote_tui("close", Some("sess-1".into()), None, None));
+        app.pending_effects.clear();
+        let _ = app.handle_input(&Event::Paste("local".to_owned()));
+        assert!(
+            app.pending_effects.iter().all(|effect| !matches!(
+                effect,
+                crate::app::actions::Effect::RemoteTuiInput { .. }
+            )),
+            "no remote forwarding after the session closes"
+        );
+        assert_eq!(app.agents[&id].prompt.text(), "local");
     }
 
     #[test]
