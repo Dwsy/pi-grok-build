@@ -41,10 +41,21 @@ mod tests {
         assert!(source.contains("{ messages: [userMessage] }"));
         assert!(source.contains("parsed.thinkingLevel"));
         assert!(source.contains("reasoning:"));
-        assert!(source.contains("response.errorMessage || \"model error\""));
+        assert!(source
+            .contains("response.stopReason === \"aborted\" || response.stopReason === \"error\""));
         assert!(source.contains("operating-system language"));
         assert!(source.contains("Do not switch to English"));
         assert!(!source.contains("serializeConversation"));
         assert!(file.path().extension().and_then(|e| e.to_str()) == Some("ts"));
+    }
+
+    #[test]
+    fn recap_extension_only_persists_successful_summaries() {
+        let file = write_recap_extension().expect("temp extension");
+        let source = std::fs::read_to_string(file.path()).expect("read extension");
+        assert!(source.contains("function emitSummary(summary: string, auto: boolean)"));
+        assert!(source.contains("ok: true,"));
+        assert!(!source.contains("ok: false"));
+        assert!(!source.contains("reason: payload.reason"));
     }
 }

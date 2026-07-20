@@ -218,23 +218,17 @@ function resolveModel(ctx: ExtensionCommandContext, modelRef: string | undefined
 export default function (pi: ExtensionAPI) {
 	// sendMessage lives on ExtensionAPI (pi), not command ctx — same as
 	// pi-grok-subagents bridge. Command ctx only has session controls.
-	function emit(payload: {
-		ok: boolean;
-		summary?: string;
-		auto: boolean;
-		reason?: string;
-	}) {
+	function emitSummary(summary: string, auto: boolean) {
 		pi.sendMessage(
 			{
 				customType: BRIDGE_TYPE,
-				content: payload.summary ?? payload.reason ?? "",
+				content: summary,
 				display: false,
 				details: {
 					version: 1,
-					ok: payload.ok,
-					auto: payload.auto,
-					summary: payload.summary ?? "",
-					reason: payload.reason,
+					ok: true,
+					auto,
+					summary,
 				},
 			},
 			{ triggerTurn: false },
@@ -250,46 +244,21 @@ export default function (pi: ExtensionAPI) {
 			try {
 				const branch = ctx.sessionManager.getBranch() as Array<Record<string, unknown>>;
 				const mainTurns = countMainTurns(branch);
-				if (mainTurns === 0) {
-					emit({ ok: false, auto, reason: "no main turns yet" });
-					return;
-				}
-				if (auto && mainTurns < AUTO_MIN_TURNS) {
-					emit({ ok: false, auto, reason: "fewer than 3 turns" });
-					return;
-				}
+				if (mainTurns === 0) return;
+				if (auto && mainTurns < AUTO_MIN_TURNS) return;
 				const completedAt = lastCompletedTurnAt(branch);
-				if (auto && (!completedAt || Date.now() - completedAt < AUTO_MIN_IDLE_MS)) {
-					emit({ ok: false, auto, reason: "last turn completed less than 3 minutes ago" });
-					return;
-				}
+				if (auto && (!completedAt || Date.now() - completedAt < AUTO_MIN_IDLE_MS)) return;
 				const recappedTurns = lastSuccessfulRecapTurnCount(branch);
-				if (auto && recappedTurns !== undefined && mainTurns <= recappedTurns) {
-					emit({ ok: false, auto, reason: "no new turns since last recap" });
-					return;
-				}
+				if (auto && recappedTurns !== undefined && mainTurns <= recappedTurns) return;
 
 				const model = resolveModel(ctx, parsed.model);
-				if (!model) {
-					emit({ ok: false, auto, reason: "no model selected" });
-					return;
-				}
+				if (!model) return;
 
 				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-				if (!auth.ok || !auth.apiKey) {
-					emit({
-						ok: false,
-						auto,
-						reason: auth.ok ? `no API key for ${model.provider}` : auth.error,
-					});
-					return;
-				}
+				if (!auth.ok || !auth.apiKey) return;
 
 				const conversation = buildRecapContext(branch);
-				if (!conversation) {
-					emit({ ok: false, auto, reason: "no recap context" });
-					return;
-				}
+				if (!conversation) return;
 				const userMessage: Message = {
 					role: "user",
 					content: [
@@ -317,35 +286,21 @@ export default function (pi: ExtensionAPI) {
 					},
 				);
 
-				if (response.stopReason === "aborted") {
-					emit({ ok: false, auto, reason: "aborted" });
-					return;
-				}
-				if (response.stopReason === "error") {
-					emit({ ok: false, auto, reason: response.errorMessage || "model error" });
-					return;
-				}
+				if (response.stopReason === "aborted" || response.stopReason === "error") return;
 
 				const raw = (response.content ?? [])
 					.filter((c): c is { type: "text"; text: string } => c.type === "text")
 					.map((c) => c.text)
 					.join("\n");
 				const summary = cleanRecapText(raw);
-				if (!summary) {
-					emit({ ok: false, auto, reason: "empty summary" });
-					return;
-				}
+				if (!summary) return;
 
 				// Auto long-tail: suppress display (mirror shell behavior).
-				if (auto && (raw.length > 800 || summary.length > 600)) {
-					emit({ ok: false, auto, reason: "auto long-tail suppressed" });
-					return;
-				}
+				if (auto && (raw.length > 800 || summary.length > 600)) return;
 
-				emit({ ok: true, auto, summary });
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				emit({ ok: false, auto, reason: message });
+				emitSummary(summary, auto);
+			} catch {
+				return;
 			}
 		},
 	});

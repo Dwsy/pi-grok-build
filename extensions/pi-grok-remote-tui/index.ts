@@ -75,7 +75,9 @@ function resolveViewport(): { width: number; rows: number } {
   const linesEnv = Number(process.env.LINES);
   const stdoutCols = Number(process.stdout?.columns);
   const stdoutRows = Number(process.stdout?.rows);
-  // Prefer explicit host size from grok-pi (COLUMNS / PI_GROK_REMOTE_TUI_WIDTH).
+  // The Pager projects the frame into its padded editor row. Pass the actual
+  // terminal width so Pi components wrap before Pager applies its native
+  // compact/non-compact outer padding.
   const width = [envWidth, columnsEnv, stdoutCols].find((n) => Number.isFinite(n) && n > 0) ?? 80;
   const rows = [envRows, linesEnv, stdoutRows].find((n) => Number.isFinite(n) && n > 0) ?? 24;
   return { width: Math.max(40, Math.floor(width)), rows: Math.max(8, Math.floor(rows)) };

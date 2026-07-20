@@ -231,15 +231,24 @@ export default function piGrokSubagents(pi: ExtensionAPI): void {
       payload,
     };
     nextSequence += 1;
-    pi.sendMessage(
-      {
-        customType: BRIDGE_TYPE,
-        content: "",
-        display: false,
-        details: envelope,
-      },
-      { triggerTurn: false },
-    );
+    if (replay) {
+      // Replay runs during session_start. Keep the existing message shape for
+      // the adapter, but do not append replay records to the active session.
+      pi.sendMessage(
+        {
+          customType: BRIDGE_TYPE,
+          content: "",
+          display: false,
+          details: envelope,
+        },
+        { triggerTurn: false },
+      );
+      return;
+    }
+    // Live bridge traffic is session/TUI state, not an LLM message. Using
+    // sendMessage() here would steer the parent while it is streaming, even
+    // with triggerTurn:false, causing child deltas to create phantom turns.
+    pi.appendEntry(BRIDGE_TYPE, envelope);
   }
 
   function persistedRecord(entry: unknown): PersistedRecord | undefined {
