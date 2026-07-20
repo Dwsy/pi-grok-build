@@ -3633,6 +3633,7 @@ pub(crate) fn execute(
             session_id,
             auto,
             model,
+            thinking_level,
         } => {
             let tx = acp_tx.clone();
             tasks
@@ -3643,6 +3644,11 @@ pub(crate) fn execute(
                     });
                     if let Some(model) = model.filter(|m| !m.trim().is_empty()) {
                         params["model"] = serde_json::Value::String(model);
+                    }
+                    if let Some(thinking_level) =
+                        thinking_level.filter(|level| !level.trim().is_empty())
+                    {
+                        params["thinkingLevel"] = serde_json::Value::String(thinking_level);
                     }
                     let request = acp::ExtRequest::new(
                         "x.ai/recap",

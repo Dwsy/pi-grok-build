@@ -616,7 +616,7 @@ fn handle_ext_notification(notif: &acp::ExtNotification, app: &mut AppView) -> b
         "pi/ui/notify" => handle_pi_ui_notify(notif, app),
         "pi/ui/status" => handle_pi_ui_status(notif, app),
         "pi/ui/widget" => handle_pi_ui_widget(notif, app),
-        "pi/ui/title" => handle_pi_ui_title(notif),
+        "pi/ui/title" => handle_pi_ui_title(notif, app),
         "pi/ui/editor_text" => handle_pi_ui_editor_text(notif, app),
         "pi/ui/session_catalog" => handle_pi_ui_session_catalog(notif, app),
         "pi/ui/cancel_interaction" => handle_pi_ui_cancel_interaction(notif, app),
@@ -733,7 +733,7 @@ fn handle_pi_ui_remote_tui(notif: &acp::ExtNotification, app: &mut AppView) -> b
     app.apply_remote_tui(op, id, lines, title)
 }
 
-fn handle_pi_ui_title(notif: &acp::ExtNotification) -> bool {
+fn handle_pi_ui_title(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
     let Some(params) = pi_ui_params(notif) else {
         return false;
     };
@@ -741,6 +741,8 @@ fn handle_pi_ui_title(notif: &acp::ExtNotification) -> bool {
         return false;
     };
     super::set_terminal_title(title);
+    // Also surface Pi's session name in the native prompt-border inline title.
+    app.set_external_session_title(title);
     true
 }
 

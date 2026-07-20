@@ -54,6 +54,7 @@ Pi 内置 Bash 没有 Grok `run_terminal_command` 的后台任务协议。Pager 
 
 ## Notes
 
+- 2026-07-20：后台任务完成消息此前固定 `triggerTurn:false` 且正文为空。Pager 可收到 task completion，但 Pi agent 不会被唤起或获得失败上下文。失败（非显式 kill）现在会把命令、输出、exit code/signal 作为 custom message 注入 Pi；idle 时立即触发下一轮，streaming 时按 follow-up 队列投递。成功仍静默，只投影 Pager。
 - `pi-grok-cli` 的 `Shell` shim 仅展示 `createBashToolDefinition` 委托方式，不含后台任务实现，且不会被复制。
 - `pi-interactive-shell` 依赖 PTY 与 `ctx.ui.custom()`，不适用于 Pi RPC，明确排除。
 - 后台启动生命周期从同步 tool result details 投影，以避免在 Pi streaming 时 custom message 排队导致任务卡延迟；完成 custom message 会先补入累计 stdout，再发送完成通知。
@@ -67,3 +68,4 @@ Pi 内置 Bash 没有 Grok `run_terminal_command` 的后台任务协议。Pager 
 - **[2026-07-18]**: Phase 2 完成，备注: 私有 Bash extension、NamedTempFile 注入和原生 task lifecycle 投影已落盘。
 - **[2026-07-18]**: 状态变更 → completed，备注: adapter 68 项测试、grok-pi bin 10 项测试、cargo check，以及 Pi runtime/Bun smoke 均通过。
 - **[2026-07-18]**: 后续 `Send to Background` 工作调整前台所有权：不再由 Pi 内建 Bash 直接 spawn，改为 extension 托管 child 并复用 `createBashToolDefinition`；详见 `docs/issues/pager/20260718-补齐 grok-pi 工具卡 Send to Background.md`。
+- **[2026-07-20]**: 修复后台 Bash 失败的 agent 通知：失败任务的 custom message 进入 Pi 上下文并触发后续 turn；成功与显式 kill 继续静默。

@@ -16,7 +16,7 @@ use super::agent_view::{AgentView, active_contexts_for_pane, apply_settings_outc
 use super::app_view::InputOutcome;
 
 use crate::theme::Theme;
-use crate::views::modal::{self, ActiveModal};
+use crate::views::modal::{self, ActiveModal, ArgPickerSelection};
 
 impl AgentView {
     /// `suggest_args` falls back to model rows when the query is not in effort
@@ -600,15 +600,22 @@ impl AgentView {
             FilterChanged,
         }
 
-        let (command_clone, in_effort_phase, entry_count) = match self.active_modal.as_ref() {
-            Some(ActiveModal::ArgPicker {
-                command,
-                args_query,
-                items,
-                ..
-            }) => (command.clone(), !args_query.is_empty(), items.len()),
-            _ => return InputOutcome::Changed,
-        };
+        let (command_clone, in_effort_phase, entry_count, selection) =
+            match self.active_modal.as_ref() {
+                Some(ActiveModal::ArgPicker {
+                    command,
+                    args_query,
+                    items,
+                    selection,
+                    ..
+                }) => (
+                    command.clone(),
+                    !args_query.is_empty(),
+                    items.len(),
+                    *selection,
+                ),
+                _ => return InputOutcome::Changed,
+            };
 
         let config = PickerConfig {
             title: None,
@@ -713,6 +720,20 @@ impl AgentView {
                 InputOutcome::Changed
             }
             ArgPickerStep::Selected(item) => {
+                if selection == ArgPickerSelection::SetRecapModel {
+                    if item.insert_text.is_empty() {
+                        self.active_modal = None;
+                        return InputOutcome::Action(Action::ClearRecapModel);
+                    }
+                    let Some(model_id) = crate::slash::commands::model::resolve_model_for_arg_item(
+                        &self.session.models,
+                        &item,
+                    ) else {
+                        return InputOutcome::Changed;
+                    };
+                    self.active_modal = None;
+                    return InputOutcome::Action(Action::SetRecapModel(model_id));
+                }
                 let chains_to_effort = matches!(command_clone.as_str(), "model" | "m")
                     && item.insert_text.ends_with(char::is_whitespace);
                 if chains_to_effort {
@@ -956,6 +977,7 @@ impl AgentView {
                                             state: crate::views::picker::PickerState::input_active(
                                             ),
                                             previous_palette: prev,
+                                            selection: ArgPickerSelection::RunCommand,
                                             window:
                                                 crate::views::modal_window::ModalWindowState::new(),
                                         });

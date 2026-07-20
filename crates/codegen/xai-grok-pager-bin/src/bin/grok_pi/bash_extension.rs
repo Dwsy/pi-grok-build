@@ -64,6 +64,10 @@ mod tests {
         assert!(source.contains("name: \"kill_task\""));
         assert!(source.contains("PI_GROK_BASH_CONTROL_META"));
         assert!(source.contains("pi-grok-background-bash/v1"));
+        assert!(source.contains("Background Bash task failed:"));
+        assert!(source.contains(
+            "failed ? { triggerTurn: true, deliverAs: \"followUp\" } : { triggerTurn: false }"
+        ));
         assert_eq!(
             extension
                 .source_path()

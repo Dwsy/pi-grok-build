@@ -2242,10 +2242,15 @@ impl PiAgent {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(ToOwned::to_owned);
+        let thinking_level = string(&params, &["thinkingLevel", "thinking_level"])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
         let language = system_language_tag();
         let payload = json!({
             "auto": auto,
             "model": model,
+            "thinkingLevel": thinking_level,
             "language": language,
         });
         let args = payload.to_string();

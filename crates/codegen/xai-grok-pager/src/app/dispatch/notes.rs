@@ -428,21 +428,37 @@ pub(super) fn dispatch_send_recap(app: &mut AppView, auto: bool) -> Vec<Effect> 
             .note_auto_recap_attempt();
     }
 
+    // An empty recap_model means "no override": use the active session model.
+    // This is also the value persisted by the main model selector, so recap
+    // must not require a second model configuration just to run.
     let model = app.current_ui.recap_model.trim();
+    let model = if model.is_empty() {
+        agent.session.models.current_model_id_str().unwrap_or("")
+    } else {
+        model
+    };
     if model.is_empty() {
         if !auto {
             if let Some(pending_id) = agent.pending_recap_entry.take() {
                 agent.scrollback.remove_entry(pending_id);
             }
-            agent.show_toast("Choose a recap model in F2 settings");
+            agent.show_toast("No active model selected");
         }
         return vec![];
     }
+
+    let thinking_level = agent
+        .session
+        .models
+        .reasoning_effort
+        .filter(|effort| *effort != xai_grok_shell::sampling::types::ReasoningEffort::None)
+        .map(|effort| effort.as_str().to_string());
 
     vec![Effect::SendRecap {
         session_id,
         auto,
         model: Some(model.to_string()),
+        thinking_level,
     }]
 }
 

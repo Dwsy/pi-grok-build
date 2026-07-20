@@ -2747,6 +2747,7 @@
     "crates/codegen/xai-grok-pager/src/app/mod.rs",
     "crates/codegen/xai-grok-pager/src/app/modals.rs",
     "crates/codegen/xai-grok-pager/src/lib.rs",
+    "crates/codegen/xai-grok-pager-minimal/src/welcome.rs",
     "crates/codegen/xai-grok-pager/src/scrollback/blocks/context_info.rs",
     "crates/codegen/xai-grok-pager/src/settings/defs.rs",
     "crates/codegen/xai-grok-pager/src/slash/acp_command.rs",

@@ -27,7 +27,7 @@ tags: ["workhub", "recap", "settings", "extension"]
 |---|---|
 | composition | 注入 `__pi_grok_recap` extension（`complete` + `sendMessage` custom） |
 | adapter | `initialize.meta.sessionRecap=true`；`x.ai/recap` → bridge command；custom `pi-grok-recap/v1` → `SessionRecap` / `SessionRecapUnavailable` |
-| pager | F2：`session_recap` 开关 + 必填 `recap_model`；失焦期间 poll 预生成；未配置时 auto 静默跳过、manual 明确提示 |
+| pager | F2：`session_recap` 开关 + 可选 `recap_model` 覆盖；未配置时复用当前会话模型；recap 模型选择复用原生 `/model` picker，不自绘 DynamicEnum 列表；失焦期间 poll 预生成 |
 | extension gate | auto 仅在 ≥3 user turns、最后完成 turn ≥3 分钟、且上次成功 recap 后出现新 user turn时生成；manual 只要求有 user turn |
 | 输入预算 | 仅保留最新 compaction summary + 最近有效 turns 的紧凑文本，按字符上限截断；不发送整段历史/思考/完整工具结果 |
 | 语言 | macOS 优先读 `AppleLanguages`，再回退 locale 环境变量；instruction 强制使用系统语言 |
@@ -35,7 +35,7 @@ tags: ["workhub", "recap", "settings", "extension"]
 ## 验收
 
 - [x] `/recap` 路径：`Action::SendRecap` → `x.ai/recap` → `__pi_grok_recap` → `SessionRecap`
-- [x] F2：`session_recap` 开关（auto）+ `recap_model`（必须显式配置，不回退会话模型）
+- [x] F2：`session_recap` 开关（auto）+ 可选 `recap_model` 覆盖（空值回退当前会话模型）
 - [x] auto gate：≥3 turn + 距最后完成 turn ≥3 分钟 + 当前失焦
 - [x] 后台生成：失焦期间预生成，回焦只展示已经生成的 recap
 - [x] 去重：成功 recap 后没有新 user turn时不再自动生成
@@ -50,6 +50,7 @@ tags: ["workhub", "recap", "settings", "extension"]
 - [x] `cargo build -p xai-grok-pager-bin --bin grok-pi` PASS
 - [x] `cargo test -p xai-grok-pager-bin --bin grok-pi recap_extension` PASS
 - [x] 修复 external 路径 `session_recap_available` 默认 false 导致 `/recap` 隐藏
+- [x] `recap_model` F2 入口复用原生 `/model` picker，并将选择定向持久化为 recap model
 - [ ] 手测：冷启动可见 `/recap`、F2 关 auto、换模型、中文 locale
 
 ## 非目标

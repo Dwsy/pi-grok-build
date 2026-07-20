@@ -94,6 +94,18 @@ pub enum SwitchModelError {
     /// Any other failure (network, auth, server error, etc.).
     Other(String),
 }
+/// Pi built-in tools selectable from the grok-pi F2 settings group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PiBuiltinTool {
+    Read,
+    Bash,
+    Edit,
+    Write,
+    Grep,
+    Find,
+    Ls,
+}
+
 /// Synchronous, side-effect-free user intent.
 ///
 /// Produced by [`super::input`] from key/mouse events.
@@ -570,6 +582,8 @@ pub enum Action {
     /// summary. SHELL-owned: updates the process-wide cache mirror and
     /// persists to `[ui].collapsed_edit_blocks` via `Effect::PersistSetting`.
     SetCollapsedEditBlocks(bool),
+    /// Set the grok-pi Ctrl+O tool expansion scope (`write_edit` or `all_tools`).
+    SetCtrlOToolExpansion(String),
     /// Set whether the predicted-next-prompt ghost text (tab autocomplete)
     /// is offered after each turn. SHELL-owned: updates the process-wide
     /// cache mirror and persists to `[ui].prompt_suggestions` via
@@ -650,10 +664,17 @@ pub enum Action {
     ClearRecapModel,
     /// Open the model picker for the active agent.
     OpenModelPicker,
+    /// Open the native model picker to select the dedicated recap model.
+    OpenRecapModelPicker,
     /// Commit auto session-recap toggle (`[ui].session_recap`).
     SetSessionRecap(bool),
     /// Commit OSC 9;4 terminal-tab progress indicators (`[ui].progress_bar`).
     SetProgressBar(bool),
+    /// Persist a Pi built-in tool preference for the next grok-pi session.
+    SetPiBuiltinTool {
+        tool: PiBuiltinTool,
+        enabled: bool,
+    },
     /// Commit the `show_tips` preference. Persisted to `[cli].show_tips`.
     /// Restart-required — tips are resolved once at startup.
     SetShowTips(bool),
@@ -1999,6 +2020,8 @@ pub enum Effect {
         auto: bool,
         /// Optional model override (`provider/id` or bare id). Empty = session model.
         model: Option<String>,
+        /// Current session reasoning level; omitted for off/unsupported models.
+        thinking_level: Option<String>,
     },
     /// Send a mid-turn interjection via x.ai/interject ext method.
     SendInterject {

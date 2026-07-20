@@ -159,8 +159,36 @@ fn manual_recap_without_dedicated_model_skips_request_and_explains_configuration
     assert!(agent.pending_recap_entry.is_none());
     assert_eq!(
         agent.toast.as_ref().map(|(message, _)| message.as_str()),
-        Some("Choose a recap model in F2 settings")
+        Some("No active model selected")
     );
+}
+
+#[test]
+fn manual_recap_uses_active_model_without_dedicated_override() {
+    let mut app = test_app_with_agent();
+    app.session_recap_available = true;
+    let id = AgentId(0);
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.session.models.current = Some(acp::ModelId::new("provider::active-model"));
+        agent.session.models.reasoning_effort =
+            Some(xai_grok_shell::sampling::types::ReasoningEffort::Medium);
+        agent
+            .scrollback
+            .push_block(RenderBlock::user_prompt("hello"));
+    }
+
+    let effects = dispatch(Action::SendRecap { auto: false }, &mut app);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::SendRecap {
+            auto: false,
+            model: Some(model),
+            thinking_level: Some(level),
+            ..
+        }] if model == "provider::active-model" && level == "medium"
+    ));
 }
 
 #[test]

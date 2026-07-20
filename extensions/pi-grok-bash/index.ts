@@ -180,20 +180,24 @@ function waitForCompletion(task: BackgroundTask, timeoutMs: number | undefined, 
 }
 
 function emitCompleted(pi: ExtensionAPI, task: BackgroundTask) {
+	const snapshot = taskSnapshot(task);
+	const failed = !snapshot.explicitly_killed && (snapshot.exit_code !== 0 || Boolean(snapshot.signal));
 	pi.sendMessage(
 		{
 			customType: BRIDGE_TYPE,
-			content: "",
+			content: failed
+				? `Background Bash task failed: ${task.command}\n\n${snapshot.output || "(no output)"}\n\nExit code: ${snapshot.exit_code ?? "none"}${snapshot.signal ? `; signal: ${snapshot.signal}` : ""}`
+				: "",
 			display: false,
 			details: {
 				version: 1,
 				event: "completed",
 				taskId: task.taskId,
 				toolCallId: task.toolCallId,
-				taskSnapshot: taskSnapshot(task),
+				taskSnapshot: snapshot,
 			},
 		},
-		{ triggerTurn: false },
+		failed ? { triggerTurn: true, deliverAs: "followUp" } : { triggerTurn: false },
 	);
 }
 

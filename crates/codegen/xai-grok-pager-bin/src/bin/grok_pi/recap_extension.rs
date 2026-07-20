@@ -36,7 +36,11 @@ mod tests {
         assert!(source.contains("MAX_RECAP_CONTEXT_CHARS = 12_000"));
         assert!(source.contains("lastSuccessfulRecapTurnCount"));
         assert!(source.contains("if (!modelRef || !modelRef.trim()) return undefined"));
+        assert!(source.contains("const canonicalSeparator = raw.indexOf(\"::\")"));
+        assert!(source.contains("`${m.provider}::${m.id}` === raw"));
         assert!(source.contains("{ messages: [userMessage] }"));
+        assert!(source.contains("parsed.thinkingLevel"));
+        assert!(source.contains("reasoning:"));
         assert!(source.contains("response.errorMessage || \"model error\""));
         assert!(source.contains("operating-system language"));
         assert!(source.contains("Do not switch to English"));

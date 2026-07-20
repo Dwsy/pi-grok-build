@@ -264,6 +264,7 @@ def main() -> int:
         "crates/codegen/xai-grok-pager/src/app/dispatch/router.rs",
         "crates/codegen/xai-grok-pager/src/app/modals.rs",
         "crates/codegen/xai-grok-pager/src/lib.rs",
+        "crates/codegen/xai-grok-pager-minimal/src/welcome.rs",
         "crates/codegen/xai-grok-pager/src/settings/defs.rs",
         "crates/codegen/xai-grok-pager/src/views/modal.rs",
         "crates/codegen/xai-grok-pager/src/views/mod.rs",

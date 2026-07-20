@@ -241,6 +241,14 @@ mod notification_list_tests {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgPickerSelection {
+    /// Execute the owning slash command with the selected argument.
+    RunCommand,
+    /// Persist the selected model as the dedicated session-recap model.
+    SetRecapModel,
+}
+
 pub enum ActiveModal {
     /// Confirmation for leaving a dirty queued-prompt edit.
     EditConfirm {
@@ -271,6 +279,8 @@ pub enum ActiveModal {
         state: crate::views::picker::PickerState,
         /// Previous command palette state (if opened from palette). Restored on Esc.
         previous_palette: Option<PaletteSnapshot>,
+        /// Determines what accepting a picker item does.
+        selection: ArgPickerSelection,
         /// Shared modal window chrome state.
         window: ModalWindowState,
     },
@@ -799,6 +809,7 @@ fn format_default_for_prompt(
         }
         SettingValue::String(s) => format!("\"{s}\""),
         SettingValue::Int(i) => i.to_string(),
+        SettingValue::PiBuiltinTools(_) => "Pi built-in tools".to_owned(),
     }
 }
 /// A clickable button region from the rendered modal.

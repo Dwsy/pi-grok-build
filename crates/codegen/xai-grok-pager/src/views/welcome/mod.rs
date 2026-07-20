@@ -481,10 +481,17 @@ pub(super) fn render_version_badge(
     Paragraph::new(version_line).render(version_area, buf);
 }
 
+/// Optional external title and version for branded welcome surfaces.
+///
+/// External hosts supply both values through [`ExternalWelcomeBrand`], keeping
+/// the fullscreen and minimal welcome renderers in sync while preserving their
+/// distinct native defaults when no external host is active.
+pub fn external_welcome_brand() -> Option<(&'static str, &'static str)> {
+    logo::welcome_brand_override().map(|brand| (brand.title, brand.version))
+}
+
 fn hero_inline_brand() -> (&'static str, &'static str) {
-    logo::welcome_brand_override().map_or(("Grok Build Beta", xai_grok_version::VERSION), |brand| {
-        (brand.title, brand.version)
-    })
+    external_welcome_brand().unwrap_or(("Grok Build Beta", xai_grok_version::VERSION))
 }
 
 /// Render the prompt box and version line (shared across welcome states).
@@ -3262,7 +3269,7 @@ mod tests {
     }
 
     #[test]
-    fn hero_inline_brand_uses_external_override() {
+    fn external_welcome_brand_is_shared_with_minimal_mode() {
         struct Reset;
         impl Drop for Reset {
             fn drop(&mut self) {
@@ -3276,6 +3283,7 @@ mod tests {
             version: "0.0.5",
         }));
 
+        assert_eq!(external_welcome_brand(), Some(("grok-pi", "0.0.5")));
         assert_eq!(hero_inline_brand(), ("grok-pi", "0.0.5"));
     }
 

@@ -1031,6 +1031,14 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "ctrl_o_tool_expansion" => {
+            let SettingValue::Enum(value) = value else {
+                return Err(kind_mismatch("ctrl_o_tool_expansion", "Enum", &value));
+            };
+            xai_grok_shell::util::config::set_ctrl_o_tool_expansion(value.to_string())
+                .await
+                .map_err(|e| e.to_string())
+        }
         "prompt_suggestions" => {
             let SettingValue::Bool(b) = value else {
                 return Err(kind_mismatch("prompt_suggestions", "Bool", &value));
@@ -1135,6 +1143,14 @@ pub(crate) async fn persist_setting(
                 return Err(kind_mismatch("recap_model", "String", &value));
             };
             xai_grok_shell::util::config::set_recap_model(s)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "pi_builtin_tools" => {
+            let SettingValue::PiBuiltinTools(tools) = value else {
+                return Err(kind_mismatch("pi_builtin_tools", "PiBuiltinTools", &value));
+            };
+            xai_grok_shell::util::config::set_pi_builtin_tools(tools)
                 .await
                 .map_err(|e| e.to_string())
         }

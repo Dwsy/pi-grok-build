@@ -6,7 +6,7 @@
  * message (`display: false`) that the adapter projects to Grok SessionRecap.
  *
  * Invoked only via `/__pi_grok_recap` (hidden from slash UI by adapter filter).
- * Args: JSON one-liner `{ auto, model?, language? }`.
+ * Args: JSON one-liner `{ auto, model?, thinkingLevel?, language? }`.
  */
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -23,6 +23,7 @@ const MAX_EARLIER_SUMMARY_CHARS = 3_000;
 type RecapArgs = {
 	auto?: boolean;
 	model?: string;
+	thinkingLevel?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	language?: string;
 };
 
@@ -183,11 +184,16 @@ function resolveModel(ctx: ExtensionCommandContext, modelRef: string | undefined
 	if (!modelRef || !modelRef.trim()) return undefined;
 	const sessionModel = ctx.model;
 	const raw = modelRef.trim();
-	// Accept "provider/id" or bare id (prefer session provider).
+	// Accept the ACP catalog key (`provider::id`), the config-friendly
+	// `provider/id` form, or a bare id (preferring the session provider).
+	const canonicalSeparator = raw.indexOf("::");
 	const slash = raw.indexOf("/");
 	let provider: string | undefined;
 	let id: string;
-	if (slash > 0) {
+	if (canonicalSeparator > 0) {
+		provider = raw.slice(0, canonicalSeparator);
+		id = raw.slice(canonicalSeparator + 2);
+	} else if (slash > 0) {
 		provider = raw.slice(0, slash);
 		id = raw.slice(slash + 1);
 	} else {
@@ -201,7 +207,12 @@ function resolveModel(ctx: ExtensionCommandContext, modelRef: string | undefined
 	// Last resort: scan all models by id. Never fall back to the active session
 	// model: recap uses only the model explicitly configured in F2.
 	const all = ctx.modelRegistry.getAll();
-	return all.find((m) => m.id === id || `${m.provider}/${m.id}` === raw);
+	return all.find(
+		(m) =>
+			m.id === id ||
+			`${m.provider}/${m.id}` === raw ||
+			`${m.provider}::${m.id}` === raw,
+	);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -297,6 +308,12 @@ export default function (pi: ExtensionAPI) {
 						apiKey: auth.apiKey,
 						headers: auth.headers,
 						env: auth.env,
+						reasoning:
+							model.reasoning && parsed.thinkingLevel && parsed.thinkingLevel !== "max"
+								? parsed.thinkingLevel
+								: model.reasoning && parsed.thinkingLevel === "max"
+									? "xhigh"
+									: undefined,
 					},
 				);
 

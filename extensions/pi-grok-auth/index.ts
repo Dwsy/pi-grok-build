@@ -1,11 +1,12 @@
 /**
  * Default-on Pi auth for grok-pi (min Pi 0.80.10).
  *
- * Uses system Pi APIs:
- * - ctx.modelRegistry is a facade; ModelRuntime is at modelRegistry.runtime
- * - modelRuntime.login(providerId, method, { signal, prompt, notify })
- * - OAuthSelectorComponent(mode, providers, onSelect, onCancel, initialSearch?)
- * - Remote TUI: extension monkey-patch of ctx.ui.custom (RPC stub alone is not enough)
+ * Mirrors interactive-mode /login flow:
+ * 1) Select authentication method (account vs API key)
+ * 2) Select provider for that method
+ * 3) LoginDialog + modelRuntime.login(...)
+ *
+ * Remote TUI: extension monkey-patch of ctx.ui.custom (RPC stub alone is not enough).
  */
 
 import * as path from "node:path";
@@ -16,11 +17,17 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 
 type AuthType = "oauth" | "api_key";
 
+type AuthMethod = {
+	name?: string;
+	loginLabel?: string;
+	login?: unknown;
+};
+
 type ProviderOption = {
 	id: string;
 	name: string;
 	authType: AuthType;
-	method?: unknown;
+	method?: AuthMethod;
 	status?: { type: AuthType; source?: string };
 };
 
@@ -28,7 +35,7 @@ type ModelRuntimeLike = {
 	getProviders: () => Array<{
 		id: string;
 		name: string;
-		auth?: { oauth?: unknown; apiKey?: unknown };
+		auth?: { oauth?: AuthMethod; apiKey?: AuthMethod };
 	}>;
 	getProvider?: (id: string) => { name?: string } | undefined;
 	getProviderAuthStatus: (id: string) => {
@@ -37,7 +44,9 @@ type ModelRuntimeLike = {
 		label?: string;
 	};
 	isUsingOAuth?: (id: string) => boolean;
-	listCredentials: () => Promise<Array<{ providerId: string; type: AuthType }>> | Array<{ providerId: string; type: AuthType }>;
+	listCredentials:
+		| (() => Promise<Array<{ providerId: string; type: AuthType }>>)
+		| (() => Array<{ providerId: string; type: AuthType }>);
 	login: (
 		providerId: string,
 		method: AuthType,
@@ -171,7 +180,7 @@ async function loadComponents(): Promise<{
 	};
 }
 
-function loginProviders(runtime: ModelRuntimeLike): ProviderOption[] {
+function loginProviders(runtime: ModelRuntimeLike, authType?: AuthType): ProviderOption[] {
 	const options: ProviderOption[] = [];
 	for (const provider of runtime.getProviders()) {
 		const authStatus = runtime.getProviderAuthStatus(provider.id);
@@ -182,7 +191,7 @@ function loginProviders(runtime: ModelRuntimeLike): ProviderOption[] {
 				}
 			: undefined;
 
-		if (provider.auth?.oauth) {
+		if ((!authType || authType === "oauth") && provider.auth?.oauth) {
 			options.push({
 				id: provider.id,
 				name: provider.name,
@@ -191,7 +200,7 @@ function loginProviders(runtime: ModelRuntimeLike): ProviderOption[] {
 				status,
 			});
 		}
-		if (provider.auth?.apiKey) {
+		if ((!authType || authType === "api_key") && provider.auth?.apiKey) {
 			options.push({
 				id: provider.id,
 				name: provider.name,
@@ -202,6 +211,14 @@ function loginProviders(runtime: ModelRuntimeLike): ProviderOption[] {
 		}
 	}
 	return options.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function findLoginProviderOptions(runtime: ModelRuntimeLike, providerRef: string): ProviderOption[] {
+	const query = providerRef.trim().toLowerCase();
+	if (!query) return loginProviders(runtime);
+	return loginProviders(runtime).filter(
+		(p) => p.id.toLowerCase() === query || p.name.toLowerCase() === query,
+	);
 }
 
 async function logoutProviders(runtime: ModelRuntimeLike): Promise<ProviderOption[]> {
@@ -249,6 +266,12 @@ async function prepareUi(ctx: ExtensionCommandContext, command: string): Promise
 	return true;
 }
 
+function oauthLabelFor(options?: ProviderOption[]): string {
+	const oauth = options?.find((p) => p.authType === "oauth");
+	const custom = oauth?.method?.loginLabel;
+	return typeof custom === "string" && custom.trim() ? custom : "Sign in with an account";
+}
+
 export default function piGrokAuth(pi: ExtensionAPI) {
 	if (process.env.PI_GROK !== "1") return;
 
@@ -263,7 +286,6 @@ export default function piGrokAuth(pi: ExtensionAPI) {
 				const { OAuthSelectorComponent, LoginDialogComponent, ExtensionSelectorComponent } =
 					await loadComponents();
 
-				// Warm provider/auth snapshot (0.80 ModelRuntime).
 				await runtime.getAvailable?.();
 
 				const selectOption = async (prompt: {
@@ -286,6 +308,29 @@ export default function piGrokAuth(pi: ExtensionAPI) {
 					await ensurePiTheme();
 					ensureRemoteTuiHost(ctx.ui);
 
+					// Ambient/non-login methods: info only (matches interactive-mode).
+					if (provider.authType === "api_key" && provider.method && !provider.method.login) {
+						const { ran } = await openCustom<void>(ctx, (tui, _theme, _kb, done) => {
+							const dialog = new LoginDialogComponent(
+								tui,
+								provider.id,
+								() => done(undefined),
+								provider.name,
+								`${provider.name} setup`,
+							);
+							dialog.showInfo?.(
+								`${provider.method?.name ?? "Authentication"} is configured outside pi.`,
+								[],
+								true,
+							);
+							return dialog;
+						});
+						if (!ran) {
+							ctx.ui.notify("/login: Remote TUI custom() unavailable. Try /remote-tui.", "error");
+						}
+						return;
+					}
+
 					const { ran } = await openCustom<boolean>(ctx, (tui, _theme, _kb, done) => {
 						const dialog = new LoginDialogComponent(
 							tui,
@@ -299,13 +344,10 @@ export default function piGrokAuth(pi: ExtensionAPI) {
 								await runtime.login(provider.id, provider.authType, {
 									signal: dialog.signal,
 									prompt: async (prompt) => {
-										if (prompt.type === "select") {
-											return selectOption(prompt);
-										}
+										if (prompt.type === "select") return selectOption(prompt);
 										if (prompt.type === "manual_code") {
 											return dialog.showManualInput(prompt.message);
 										}
-										// text | secret
 										return dialog.showPrompt(prompt.message, prompt.placeholder);
 									},
 									notify: (event) => {
@@ -341,47 +383,128 @@ export default function piGrokAuth(pi: ExtensionAPI) {
 
 					await registry.refresh?.();
 					await runtime.getAvailable?.();
-					ctx.ui.notify(`Logged in to ${provider.name}`, "success");
+					const msg =
+						provider.authType === "oauth"
+							? `Logged in to ${provider.name}`
+							: `Saved API key for ${provider.name}`;
+					ctx.ui.notify(msg, "success");
 				};
 
-				const all = loginProviders(runtime);
-				const query = args.trim().toLowerCase();
-				const matches = query
-					? all.filter(
-							(p) => p.id.toLowerCase() === query || p.name.toLowerCase() === query,
-						)
-					: all;
+				const showProviderSelector = async (
+					authType: AuthType | undefined,
+					initialSearch?: string,
+					onCancelBackToAuthType = false,
+				) => {
+					const providers = loginProviders(runtime, authType);
+					if (providers.length === 0) {
+						const message =
+							authType === "oauth"
+								? "No subscription providers available."
+								: authType === "api_key"
+									? "No API key providers available."
+									: "No login providers available.";
+						ctx.ui.notify(message, "warning");
+						return;
+					}
 
-				if (matches.length === 0) {
-					ctx.ui.notify(
-						query ? `No login provider matching "${args.trim()}"` : "No login providers available.",
-						"warning",
+					const { ran } = await openCustom<void>(ctx, (_tui, _theme, _kb, done) => {
+						return new OAuthSelectorComponent(
+							"login",
+							providers,
+							(providerId, selectedAuthType) => {
+								done(undefined);
+								const provider = providers.find(
+									(p) => p.id === providerId && p.authType === selectedAuthType,
+								);
+								if (provider) void authenticate(provider);
+							},
+							() => {
+								done(undefined);
+								if (onCancelBackToAuthType) {
+									void showAuthTypeSelector();
+								}
+							},
+							initialSearch,
+						);
+					});
+					if (!ran) {
+						ctx.ui.notify("/login: Remote TUI custom() unavailable. Try /remote-tui.", "error");
+					}
+				};
+
+				const showAuthTypeSelector = async (scopedProviders?: ProviderOption[]) => {
+					const subscriptionLabel = oauthLabelFor(scopedProviders);
+					const apiKeyLabel = "Sign in with an API key";
+					const available = scopedProviders
+						? new Set(scopedProviders.map((p) => p.authType))
+						: new Set<AuthType>(["oauth", "api_key"]);
+
+					const options: string[] = [];
+					if (available.has("oauth")) options.push(subscriptionLabel);
+					if (available.has("api_key")) options.push(apiKeyLabel);
+
+					if (options.length === 0) {
+						ctx.ui.notify("No login methods available.", "warning");
+						return;
+					}
+
+					// Single method for a scoped provider → go straight to login.
+					if (scopedProviders && options.length === 1) {
+						const only = scopedProviders[0];
+						if (only) await authenticate(only);
+						return;
+					}
+
+					const title = scopedProviders?.[0]
+						? `Select authentication method for ${scopedProviders[0].name}:`
+						: "Select authentication method:";
+
+					const { ran, value } = await openCustom<string | undefined>(
+						ctx,
+						(_tui, _theme, _kb, done) =>
+							new ExtensionSelectorComponent(title, options, done, () => done(undefined)),
 					);
+					if (!ran) {
+						ctx.ui.notify("/login: Remote TUI custom() unavailable. Try /remote-tui.", "error");
+						return;
+					}
+					if (!value) return;
+
+					const authType: AuthType = value === subscriptionLabel ? "oauth" : "api_key";
+					if (scopedProviders) {
+						const provider = scopedProviders.find((p) => p.authType === authType);
+						if (provider) await authenticate(provider);
+						return;
+					}
+					await showProviderSelector(authType, undefined, true);
+				};
+
+				// --- match interactive-mode handleLoginCommand ---
+				const providerRef = args.trim();
+				if (!providerRef) {
+					await showAuthTypeSelector();
 					return;
 				}
 
+				const matches = findLoginProviderOptions(runtime, providerRef);
 				if (matches.length === 1) {
 					await authenticate(matches[0]!);
 					return;
 				}
-
-				const { ran } = await openCustom<void>(ctx, (_tui, _theme, _kb, done) => {
-					return new OAuthSelectorComponent(
-						"login",
-						matches,
-						(providerId, authType) => {
-							done(undefined);
-							const provider = matches.find((p) => p.id === providerId && p.authType === authType);
-							if (provider) void authenticate(provider);
-						},
-						() => done(undefined),
-						query || undefined,
-					);
-				});
-
-				if (!ran) {
-					ctx.ui.notify("/login: Remote TUI custom() unavailable. Try /remote-tui.", "error");
+				if (matches.length > 1) {
+					const providerIds = new Set(matches.map((p) => p.id));
+					if (providerIds.size === 1) {
+						// Same provider, multiple auth methods → method picker.
+						await showAuthTypeSelector(matches);
+						return;
+					}
 				}
+				if (matches.length === 0) {
+					ctx.ui.notify(`No login provider matching "${providerRef}"`, "warning");
+					return;
+				}
+				// Ambiguous ref across providers → provider list pre-filtered by search.
+				await showProviderSelector(undefined, providerRef, false);
 			} catch (error: unknown) {
 				ctx.ui.notify(`/login failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 			}

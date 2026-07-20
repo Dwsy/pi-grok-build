@@ -106,10 +106,18 @@ GROK_PI_INSTALL_DIR=/opt/grok-pi curl -fsSL https://github.com/Dwsy/grok-pi/rele
 $env:GROK_PI_VERSION='v0.0.1'; irm https://github.com/Dwsy/grok-pi/releases/download/v0.0.1/install.ps1 | iex
 ```
 
-The installer reports any required `PATH` update. `grok-pi` needs a `pi` executable on your system — install Pi, then run `grok-pi`:
+The installer reports any required `PATH` update. `grok-pi` needs **Pi >= 0.80.10** and probes the host at startup; missing/too-old installs get OS-aware install hints.
 
 ```bash
+# macOS / Linux
+curl -fsSL https://pi.dev/install.sh | sh
+
+# Windows PowerShell
+powershell -c "irm https://pi.dev/install.ps1 | iex"
+
+# npm alternative
 npm install --global @earendil-works/pi-coding-agent
+
 grok-pi --pi-bin pi --pi-cwd /path/to/project -- --no-session
 ```
 
