@@ -16,12 +16,14 @@ import {
   existsSync,
   openSync,
   readFileSync,
+  realpathSync,
   unlinkSync,
   watch,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
@@ -31,6 +33,36 @@ import {
   TUI_KEYBINDINGS,
   type Component,
 } from "@earendil-works/pi-tui";
+
+function hostUrl(relativePath: string): string {
+  const hostDistDir = dirname(realpathSync(process.argv[1]!));
+  return new URL(relativePath, pathToFileURL(hostDistDir).href + "/").href;
+}
+
+/** Pi interactive components (OAuthSelector/LoginDialog) touch global theme in constructors. */
+let themeReady: Promise<void> | null = null;
+async function ensurePiTheme(): Promise<void> {
+  if (themeReady) return themeReady;
+  themeReady = (async () => {
+    const mod = (await import(hostUrl("modes/interactive/theme/theme.js"))) as {
+      theme?: { name?: string };
+      initTheme?: (name?: string, enableWatcher?: boolean) => void;
+    };
+    try {
+      void mod.theme?.name;
+    } catch {
+      if (typeof mod.initTheme !== "function") {
+        throw new Error("Pi theme.initTheme missing");
+      }
+      mod.initTheme(undefined, false);
+      void mod.theme?.name;
+    }
+  })().catch((error) => {
+    themeReady = null;
+    throw error;
+  });
+  return themeReady;
+}
 
 const WIDGET_KEY = "remote_tui";
 const META_NAME = "pi-grok-remote-tui-active.json";
@@ -309,14 +341,17 @@ function installCustomPatch(ui: {
         }, 50);
       }
 
-      Promise.resolve(
-        (factory as (tui: unknown, theme: unknown, kb: unknown, done: (r: unknown) => void) => unknown)(
-          tuiStub,
-          themeStub,
-          keybindings,
-          close,
-        ),
-      )
+      // Mirror remote-tui-host.ts: initTheme before factory — OAuthSelector/LoginDialog
+      // call theme.fg in their constructors (SessionSelector mostly defers to render).
+      void ensurePiTheme()
+        .then(() =>
+          (factory as (tui: unknown, theme: unknown, kb: unknown, done: (r: unknown) => void) => unknown)(
+            tuiStub,
+            themeStub,
+            keybindings,
+            close,
+          ),
+        )
         .then((created) => {
           if (closed) {
             try {
@@ -337,7 +372,7 @@ function installCustomPatch(ui: {
           closed = true;
           host.closed = true;
           cleanup();
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         });
     });
   };
@@ -346,6 +381,15 @@ function installCustomPatch(ui: {
   ui.custom = hostCustom as typeof ui.custom;
   patchedUIs.add(ui as object);
 }
+
+/** Other host-injected extensions (auth login/logout) re-bind after RPC ui swaps. */
+function ensureRemoteTuiHost(ui: Parameters<typeof installCustomPatch>[0]): void {
+  installCustomPatch(ui);
+}
+
+(globalThis as typeof globalThis & {
+  __piGrokEnsureRemoteTuiHost?: typeof ensureRemoteTuiHost;
+}).__piGrokEnsureRemoteTuiHost = ensureRemoteTuiHost;
 
 const ITEMS = [
   { value: "alpha", label: "Alpha", description: "first choice" },
@@ -404,7 +448,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("session_start", (_event, ctx) => {
-    installCustomPatch(ctx.ui as Parameters<typeof installCustomPatch>[0]);
+    ensureRemoteTuiHost(ctx.ui as Parameters<typeof installCustomPatch>[0]);
   });
 
   // Also patch immediately if UI already bound (command registration time).
@@ -414,7 +458,7 @@ export default function (pi: ExtensionAPI) {
     description: "[experimental] Remote TUI probe (extension host, no Pi source patch)",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       // Always re-check: RPC rebinds uiContext after extension load / session_start.
-      installCustomPatch(ctx.ui as Parameters<typeof installCustomPatch>[0]);
+      ensureRemoteTuiHost(ctx.ui as Parameters<typeof installCustomPatch>[0]);
 
       const started = Date.now();
       let factoryRan = false;

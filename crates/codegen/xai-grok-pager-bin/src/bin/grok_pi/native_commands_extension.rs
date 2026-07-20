@@ -4,10 +4,8 @@ use tempfile::NamedTempFile;
 
 /// Materialize experimental Pi-native slash commands for the RPC host.
 ///
-/// The extension uses Pi's own interactive selector components through the
-/// existing experimental Remote TUI projection. It never creates a second
-/// terminal renderer, and commands unavailable from public Pi RPC report their
-/// protocol boundary instead of reimplementing Grok behavior.
+/// Opt-in via `PI_GROK_NATIVE_COMMANDS`. Uses Pi interactive selectors through
+/// Remote TUI. Auth (`/login` / `/logout`) is a separate default-on package.
 pub(super) fn write_native_commands_extension() -> Result<NamedTempFile> {
     let mut file = tempfile::Builder::new()
         .prefix("pi-grok-native-commands-")
@@ -37,10 +35,12 @@ mod tests {
         assert!(source.contains("registerCommand(\"pi-model\""));
         assert!(source.contains("registerCommand(\"pi-resume\""));
         assert!(source.contains("registerCommand(\"pi-reload\""));
-        assert!(source.contains("registerCommand(\"pi-login\""));
-        assert!(source.contains("registerCommand(\"pi-logout\""));
-        assert!(source.contains("OAuthSelectorComponent"));
-        assert!(source.contains("LoginDialogComponent"));
+        assert!(!source.contains("registerCommand(\"pi-login\""));
+        assert!(!source.contains("registerCommand(\"pi-logout\""));
+        assert!(source.contains("registerCommand(\"pi-export\""));
+        assert!(source.contains("registerCommand(\"pi-share\""));
+        assert!(source.contains("exportSessionToHtml"));
+        assert!(source.contains("getShareViewerUrl"));
         assert!(source.contains("ModelSelectorComponent"));
         assert!(source.contains("SessionSelectorComponent"));
         assert_eq!(

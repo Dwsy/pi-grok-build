@@ -4,6 +4,8 @@
 //! production TUI composition package. The Pi crate is a protocol adapter only;
 //! every terminal surface is created and rendered by `xai-grok-pager`.
 
+#[path = "grok_pi/auth_extension.rs"]
+mod auth_extension;
 #[path = "grok_pi/bash_extension.rs"]
 mod bash_extension;
 #[path = "grok_pi/cli.rs"]
@@ -20,6 +22,8 @@ mod remote_tui_extension;
 mod session_paths;
 #[path = "grok_pi/subagent_extension.rs"]
 mod subagent_extension;
+#[path = "grok_pi/tools_extension.rs"]
+mod tools_extension;
 #[path = "grok_pi/tree_bridge.rs"]
 mod tree_bridge;
 
@@ -35,6 +39,7 @@ use xai_grok_pager::{
     app::{ExternalRunConfig, PagerArgs, run_external},
 };
 
+use auth_extension::write_auth_extension;
 use bash_extension::write_bash_extension;
 use cli::{Args, Command, normalize_compound_short_flags, pi_args_with_startup_flags};
 use context_extension::write_context_extension;
@@ -43,6 +48,7 @@ use recap_extension::write_recap_extension;
 use remote_tui_extension::write_remote_tui_extension;
 use session_paths::pi_session_dir;
 use subagent_extension::write_subagent_extension;
+use tools_extension::{configured_builtin_tools, has_explicit_tools_arg, write_tools_extension};
 use tree_bridge::write_navigate_tree_extension;
 
 /// Grok pager commands that are meaningful when Pi is the ACP backend.
@@ -119,7 +125,15 @@ fn main() -> Result<()> {
     xai_crash_handler::install_terminal_restore_only();
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let args = Args::parse_from(normalize_compound_short_flags(std::env::args_os()));
+    let mut args = Args::parse_from(normalize_compound_short_flags(std::env::args_os()));
+    // Default host is system `pi` (min 0.80.10). Override with --pi-bin or PI_BIN.
+    if args.pi_bin == "pi" {
+        if let Ok(pi_bin) = std::env::var("PI_BIN") {
+            if !pi_bin.trim().is_empty() {
+                args.pi_bin = pi_bin;
+            }
+        }
+    }
     if args.print_capabilities {
         println!(
             "{}",
@@ -165,7 +179,6 @@ async fn run(mut args: Args) -> Result<()> {
     // so `/theme` can list and apply them as `pi:<name>`.
     let _theme_report = xai_grok_pager::theme::pi::init_discovery(&cwd);
 
-    let pi_session_dir = pi_session_dir(&args.pi_args, &cwd);
     let bridge_extensions_enabled = !args.no_extensions;
     let navigate_tree_extension = bridge_extensions_enabled
         .then(|| write_navigate_tree_extension())
@@ -188,6 +201,12 @@ async fn run(mut args: Args) -> Result<()> {
         .then(|| write_context_extension())
         .transpose()
         .context("failed to create Pi context breakdown extension")?;
+    // Pi auth uses native OAuth/API-key components over Remote TUI and is
+    // default-on (still needs Remote TUI). Broader pi-* selectors stay opt-in.
+    let auth_extension = bridge_extensions_enabled
+        .then(|| write_auth_extension())
+        .transpose()
+        .context("failed to create Pi auth extension")?;
     // Pi's interactive component internals are not a stable extension API.
     // Keep this experiment opt-in so a Pi upgrade cannot block the core RPC host.
     let native_commands_extension = (bridge_extensions_enabled
@@ -201,6 +220,8 @@ async fn run(mut args: Args) -> Result<()> {
     } else {
         None
     };
+    // Resolve session dir after first-class flags are merged so --session-dir
+    // is visible whether it came from clap or from `--` passthrough.
     let mut pi_args = pi_args_with_startup_flags(
         std::mem::take(&mut args.pi_args),
         &args,
@@ -208,6 +229,15 @@ async fn run(mut args: Args) -> Result<()> {
             .as_ref()
             .map(|extension| extension.path()),
     );
+    let pi_session_dir = pi_session_dir(&pi_args, &cwd);
+    // Pi's explicit --tools is an authoritative allowlist. Only apply the F2
+    // preference when the user did not provide one.
+    let tools_extension = (bridge_extensions_enabled && !has_explicit_tools_arg(&pi_args))
+        .then(|| write_tools_extension())
+        .transpose()
+        .context("failed to create Pi tools extension")?;
+    let selected_builtin_tools = tools_extension.as_ref().map(|_| configured_builtin_tools());
+    // remote_tui before auth/native-commands so custom() host exists first.
     for path in [
         subagent_extension
             .as_ref()
@@ -216,15 +246,17 @@ async fn run(mut args: Args) -> Result<()> {
         context_extension
             .as_ref()
             .map(|extension| extension.source_path()),
+        remote_tui_extension
+            .as_ref()
+            .map(|extension| extension.path()),
+        auth_extension.as_ref().map(|extension| extension.path()),
         native_commands_extension
             .as_ref()
             .map(|extension| extension.path()),
         bash_extension
             .as_ref()
             .map(|extension| extension.source_path()),
-        remote_tui_extension
-            .as_ref()
-            .map(|extension| extension.path()),
+        tools_extension.as_ref().map(|extension| extension.path()),
     ]
     .into_iter()
     .flatten()
@@ -236,6 +268,9 @@ async fn run(mut args: Args) -> Result<()> {
     }
     // Identifies this Pi child as running under the grok-pi host for user extensions.
     let mut env = vec![("PI_GROK".to_string(), "1".to_string())];
+    if let Some(selected) = selected_builtin_tools {
+        env.push(("PI_GROK_BUILTIN_TOOLS".to_string(), selected));
+    }
     if subagent_extension.is_some() {
         env.push(("PI_GROK_SUBAGENTS".to_string(), "1".to_string()));
     }
@@ -287,8 +322,10 @@ async fn run(mut args: Args) -> Result<()> {
     let _subagent_extension = subagent_extension;
     let _recap_extension = recap_extension;
     let _context_extension = context_extension;
+    let _auth_extension = auth_extension;
     let _native_commands_extension = native_commands_extension;
     let _remote_tui_extension = remote_tui_extension;
+    let _tools_extension = tools_extension;
     let bootstrap = PiBootstrap::load(&process.rpc)
         .await
         .context("failed to bootstrap Pi RPC state")?;

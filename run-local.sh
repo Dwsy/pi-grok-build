@@ -3,16 +3,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GROK_ROOT="$ROOT"
 BIN="${GROK_PI_BIN:-$GROK_ROOT/target/debug/grok-pi}"
-# Prefer the repo-bundled Pi (pi-main). System `pi` still works for extension-host
-# Remote TUI (no Pi source patch required).
-BUNDLED_PI="$GROK_ROOT/pi-main/packages/coding-agent/dist/cli.js"
-if [[ -n "${PI_BIN:-}" ]]; then
-  :
-elif [[ -x "$BUNDLED_PI" || -f "$BUNDLED_PI" ]]; then
-  PI_BIN="$BUNDLED_PI"
-else
-  PI_BIN="pi"
-fi
+# Default: system `pi` (min 0.80.10). Override with PI_BIN for a custom CLI.
+PI_BIN="${PI_BIN:-pi}"
 
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 <project-directory> [Pi arguments...]" >&2
@@ -28,16 +20,16 @@ if [[ ! -x "$BIN" ]]; then
 fi
 if [[ ! -e "$PI_BIN" ]] && ! command -v "$PI_BIN" >/dev/null 2>&1; then
   echo "error: Pi executable not found: $PI_BIN" >&2
+  echo "install Pi >= 0.80.10 (npm i -g @earendil-works/pi-coding-agent) or set PI_BIN" >&2
   exit 1
 fi
 
 # Remote TUI / Bash default ON inside grok-pi (disable with =0).
-# Shell-level unset is fine; binary treats missing as enabled.
 if [[ "${PI_GROK_REMOTE_TUI:-1}" != "0" ]]; then
   if [[ ! -f "$GROK_ROOT/extensions/pi-grok-remote-tui/index.ts" ]]; then
     echo "warning: Remote TUI enabled but extensions/pi-grok-remote-tui/index.ts missing" >&2
   else
-    echo "Remote TUI: ON (extension host; set PI_GROK_REMOTE_TUI=0 to disable) PI_BIN=$PI_BIN" >&2
+    echo "Remote TUI: ON · PI_BIN=$PI_BIN (min Pi 0.80.10)" >&2
   fi
 fi
 

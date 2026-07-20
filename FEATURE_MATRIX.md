@@ -1,5 +1,8 @@
 # Grok Native TUI × Pi Feature Matrix
 
+
+**Minimum Pi version: 0.80.10** (system `pi` / `@earendil-works/pi-coding-agent`). `pi-main` is an optional git submodule, not required at runtime.
+
 Status definitions: **Native** = implemented by a Grok Pager component; **Adapted** = Pi semantics converted and projected into a Grok native component; **Boundary** = Pi RPC does not expose it or it is bound to a Grok product backend, deliberately not implemented.
 
 ## Terminal and Display
@@ -16,7 +19,7 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | Agent Dashboard | Native+Adapted | Native `/dashboard` · Ctrl+\\ · list/peek/dispatch; idle rows projected via `pi/session/list` → `pi/ui/session_catalog` into the dormant roster; not wired to Grok leader FleetView |
 | Prompt editing | Native | PromptWidget |
 | Multiline / Vim mode | Native | Grok slash/settings |
-| Theme / timestamps / mouse | Native+Adapted | Grok appearance/input; Pi theme JSON mapped to Grok `Theme` via `theme::pi`, `/theme` accepts `pi:<name>`; F2 controls OSC 9;4 terminal-tab progress, off by default |
+| Theme / timestamps / mouse | Native+Adapted | Grok appearance/input; Pi theme JSON mapped to Grok `Theme` via `theme::pi`, `/theme` accepts `pi:<name>`; built-in experimental `pi:transparent` (dark) and `pi:transparent-light` themes leave the main canvas to the terminal default background (for terminal opacity/blur) while retaining opaque selection, code, diff, and tool surfaces; F2 controls OSC 9;4 terminal-tab progress, off by default |
 | Voice dictation | Native+Adapted | Pager-native `/voice` / Ctrl+Space/F8 writes xAI STT text into the PromptWidget; grok-pi explicitly enables this narrow Pager-owned surface. It uses the local Grok login/API-key credential and does not affect Pi model, session, or prompt ownership. |
 | Markdown / code blocks | Native+Adapted | Pi text/reasoning → ACP chunks → `xai-grok-markdown` |
 | Tool cards | Native+Adapted | Pi tool events → ACP `ToolCall`; `read`/`bash`/`edit`/`write`/`grep`/`find`/`ls` projected to native cards |
@@ -57,12 +60,12 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | Session info / context snapshot | Adapted | Grok `x.ai/session/info` ← Pi stats (used/window/counts) + message estimate + injected extension reading system/tool-defs/AGENTS; on bridge failure system/tools fall back to 0 |
 | Session history replay | Adapted | `get_messages` → ACP replay, using Grok scrollback |
 | Continue previous session at startup | Adapted | `grok-pi --continue` / `-c` → Pi `--continue` |
-| Startup resources, prompts, and session options | Adapted | `--system-prompt`, `--append-system-prompt`, `--no-skills`, `--no-context-files`, `--extension`, `--no-extensions`, `--no-tools`, `--no-session`, and `--name` forwarded by `grok-pi` to Pi |
+| Startup resources, prompts, and session options | Adapted | First-class Pi flags forwarded by `grok-pi`: model (`--provider`/`--model`/`--models`/`--thinking`), session (`--session`/`--session-id`/`--session-dir`/`--fork`/`--no-session`/`--name`), prompts (`--system-prompt`/`--append-system-prompt`), resources (`--extension`/`--no-extensions`/`--no-skills`/`--no-context-files`), tools (`--tools`/`--exclude-tools`/`--no-tools`/`--no-builtin-tools`), trust/network (`--approve`/`--no-approve`/`--offline`); remaining args after `--` still passthrough. `--resume` not exposed (Welcome/`/resume`) |
 | Pi extension/prompt/skill commands | Native+Adapted | `get_commands` → Grok slash registry; `source=extension` reaches the Pi command handler directly via private ACP metadata, not the Pager-local or Pi steering/follow-up queue; prompt/skill keep prompt semantics |
 | Pi Config resource management | Native+Rust compatible | F2 or `/pi-config` (alias `/pi-resources`) → Pi resources; Rust reads Pi `settings.json`/`trust.json`, managing extensions/skills/prompts/themes across global and trusted-project overrides. Discovers resources by Pi's auto-expansion entry rules; source tree collapsed by default, GitHub/npm/local identities clearly visible, search expands only matching sources. Native two-pane supports tree expand/collapse, search, keyboard paging/scroll, click and wheel; right pane previews package.json key fields and README; after switching prompts restart or Pi `/reload`; does not include `install/remove/update` |
 | Grok cloud/session history picker | Boundary | depends on Grok session store; Pi profile does not expose `/history` |
 | Pi session tree (`/tree`) | Adapted | Native `SessionTree` modal: filter/search/collapse/detail/copy/tags; Enter/`Shift+Enter` calls `ctx.navigateTree` (can summarize) via injected extension; `session/load` replays; TreeX-style detail panel; does not modify Pi source |
-| Pi HTML export RPC | Boundary | keeps Grok native transcript `/export`; does not create a duplicate command |
+| Pi HTML export / share | Adapted | Grok `/export` stays Markdown transcript; experimental `/pi-export` (HTML or `.jsonl`) and `/pi-share` (private gh gist + pi.dev viewer) hand off to Pi host export-html / share paths via injected extension, no second TUI |
 
 ## Extension UI
 
@@ -80,7 +83,7 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | timeout/cancel | Adapted | Pi timeout revokes the corresponding QuestionView, returning `cancelled:true` |
 | raw terminal hook | Boundary | Pi RPC explicitly does not support it |
 | custom header/footer/component | Boundary | Pi RPC explicitly does not support component factory |
-| Remote TUI (experimental) | Experimental | `PI_GROK_REMOTE_TUI=1`: **does not modify Pi source**; injects extension monkey-patch `ctx.ui.custom` + `setWidget` frame projection; keys via temp keyfile; Pager ANSI parsing; off by default |
+| Remote TUI (experimental) | Experimental | `PI_GROK_REMOTE_TUI` default-on: **does not modify Pi source**; injects extension monkey-patch `ctx.ui.custom` + `setWidget` frame projection; keys via temp keyfile; Pager ANSI parsing. Default-on bare `/login`/`/logout` via `pi-grok-auth` (resume-x style); broader `/pi-*` selectors remain opt-in (`PI_GROK_NATIVE_COMMANDS`) |
 | `rpiv-ask-user-question` (`custom` questionnaire) | Boundary | depends on non-serializable `ctx.ui.custom(factory)`; RPC stub always declines; experimental Remote TUI may attempt it, but adapting the plugin without changes is still not a stable mapping |
 | `rpiv-btw` | Boundary | in-process side model + TUI overlay; should go through native `/btw` + adapter `x.ai/btw` (not yet implemented), not map the juicesharp package |
 

@@ -1,5 +1,8 @@
 # Grok Native TUI × Pi 功能矩阵
 
+
+**最小 Pi 版本：0.80.10**（系统 `pi` / `@earendil-works/pi-coding-agent`）。`pi-main` 为可选 git 子模块，非运行时必需。
+
 状态定义：**原生**＝由 Grok Pager 组件实现；**适配**＝Pi 语义转换后进入 Grok 原生组件；**边界**＝Pi RPC 未暴露或与 Grok 产品后端绑定，刻意不实现。
 
 ## 终端与显示
@@ -16,7 +19,7 @@
 | Agent Dashboard | 原生+适配 | 原生 `/dashboard` · Ctrl+\\ · 列表/peek/dispatch；idle 行经 `pi/session/list` → `pi/ui/session_catalog` 投影到 dormant roster；不接 Grok leader FleetView |
 | Prompt editing | 原生 | PromptWidget |
 | Multiline / Vim mode | 原生 | Grok slash/settings |
-| Theme / timestamps / mouse | 原生+适配 | Grok appearance/input；Pi 主题 JSON 经 `theme::pi` 映射为 Grok `Theme`，`/theme` 可选 `pi:<name>`；F2 可控制 OSC 9;4 terminal-tab progress，默认关闭 |
+| Theme / timestamps / mouse | 原生+适配 | Grok appearance/input；Pi 主题 JSON 经 `theme::pi` 映射为 Grok `Theme`，`/theme` 可选 `pi:<name>`；内置实验性 `pi:transparent`（暗色）与 `pi:transparent-light`（浅色）将主画布交给终端默认背景（用于终端透明度/毛玻璃），同时保留选中态、代码、diff 与工具表面的实色；F2 可控制 OSC 9;4 terminal-tab progress，默认关闭 |
 | Markdown / code blocks | 原生+适配 | Pi text/reasoning → ACP chunks → `xai-grok-markdown` |
 | Tool cards | 原生+适配 | Pi tool events → ACP ToolCall；`read`/`bash`/`edit`/`write`/`grep`/`find`/`ls` 投影到原生卡 |
 | Todo / plan list | 原生+适配 | Pi `@juicesharp/rpiv-todo` 的 `todo` tool `details.tasks` → ACP `Plan` → 原生 TodoPane/badge；scrollback 抑制 `todo` 卡 |
@@ -56,12 +59,12 @@
 | Session info / context snapshot | 适配 | Grok `x.ai/session/info` ← Pi stats（used/window/counts）+ message 估算 + 注入 extension 读 system/tool-defs/AGENTS；bridge 失败时 system/tools 回退 0 |
 | Session history replay | 适配 | `get_messages` → ACP replay，使用 Grok scrollback |
 | 启动时继续上一会话 | 适配 | `grok-pi --continue` / `-c` → Pi `--continue` |
-| 启动资源、提示词与会话选项 | 适配 | `--system-prompt`、`--append-system-prompt`、`--no-skills`、`--no-context-files`、`--extension`、`--no-extensions`、`--no-tools`、`--no-session` 与 `--name` 由 `grok-pi` 转发给 Pi |
+| 启动资源、提示词与会话选项 | 适配 | `grok-pi` 一等转发：模型（`--provider`/`--model`/`--models`/`--thinking`）、会话（`--session`/`--session-id`/`--session-dir`/`--fork`/`--no-session`/`--name`）、提示词（`--system-prompt`/`--append-system-prompt`）、资源（`--extension`/`--no-extensions`/`--no-skills`/`--no-context-files`）、工具（`--tools`/`--exclude-tools`/`--no-tools`/`--no-builtin-tools`）、trust/网络（`--approve`/`--no-approve`/`--offline`）；`--` 后参数仍透传。不暴露 `--resume`（Welcome/`/resume`） |
 | Pi extension/prompt/skill commands | 原生+适配 | `get_commands` → Grok slash registry；`source=extension` 经私有 ACP metadata 直达 Pi command handler，不进入 Pager 本地或 Pi steering/follow-up 队列；prompt/skill 保持 prompt 语义 |
 | Pi Config 资源管理 | 原生+Rust 兼容 | F2 或 `/pi-config`（别名 `/pi-resources`）→ Pi resources；Rust 读取 Pi `settings.json`/`trust.json`，管理 extensions/skills/prompts/themes 的 global 与 trusted-project 覆盖。按 Pi 自动扩展入口规则发现资源；来源树默认折叠，GitHub/npm/local 身份清晰可见，搜索仅展开命中来源。原生双栏支持树展开/折叠、搜索、键盘分页/滚动、点击与滚轮；右栏预览 package.json 关键字段与 README；切换后提示重启或 Pi `/reload`；不含 `install/remove/update`。 |
 | Grok cloud/session history picker | 边界 | 依赖 Grok session store，Pi profile 不暴露 `/history` |
 | Pi session tree (`/tree`) | 适配 | 原生 `SessionTree` modal：筛选/搜索/折叠/详情/复制/标签；Enter/`Shift+Enter` 经注入 extension 调 `ctx.navigateTree`（可 summarize）；`session/load` 回放；TreeX 风格详情面板；不改 Pi 源码 |
-| Pi HTML export RPC | 边界 | 保留 Grok 原生 transcript `/export`，不另造重复命令 |
+| Pi HTML export / share | 适配 | Grok `/export` 仍为 Markdown transcript；实验性 `/pi-export`（HTML 或 `.jsonl`）与 `/pi-share`（私有 gh gist + pi.dev 预览）经注入 extension 交给 Pi host export-html / share 路径，不另造 TUI |
 
 ## Extension UI
 
@@ -79,7 +82,7 @@
 | timeout/cancel | 适配 | Pi timeout 撤销对应 QuestionView，返回 `cancelled:true` |
 | raw terminal hook | 边界 | Pi RPC 明确不支持 |
 | custom header/footer/component | 边界 | Pi RPC 明确不支持 component factory |
-| Remote TUI（实验） | 实验 | `PI_GROK_REMOTE_TUI=1`：**不改 Pi 源码**；注入 extension monkey-patch `ctx.ui.custom` + `setWidget` 帧投影；键经 tmp keyfile；Pager ANSI 解析；默认关 |
+| Remote TUI（实验） | 实验 | `PI_GROK_REMOTE_TUI` 默认开：**不改 Pi 源码**；注入 extension monkey-patch `ctx.ui.custom` + `setWidget` 帧投影；键经 tmp keyfile；Pager ANSI 解析。裸 `/login`/`/logout` 由 `pi-grok-auth` 默认开启（resume-x 风格）；更广的 `/pi-*` 选择器仍需 `PI_GROK_NATIVE_COMMANDS` |
 | `rpiv-ask-user-question` (`custom` 问卷) | 边界 | 依赖不可序列化的 `ctx.ui.custom(factory)`；RPC stub 恒 decline；实验 Remote TUI 可尝试，不改插件仍非稳定适配 |
 | `rpiv-btw` | 边界 | 进程内 side model + TUI overlay；应走原生 `/btw` + adapter `x.ai/btw`（尚未实现），不映射 juicesharp 包 |
 

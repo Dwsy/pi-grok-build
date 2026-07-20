@@ -14,7 +14,8 @@ base     98c3b2438aa922fbbe6178a5c0a4c48f85edc8ce
 - `origin/main` is the Pi-Grok integration branch; `upstream` is read-only Grok Build.
 - Never directly merge an upstream root commit into this repository without a migration plan. Reapply the narrow integration seams and validate them instead.
 - Keep commits focused. Do not stage generated `pi-main` model catalog changes unless they are intentional.
-- The bundled Pi source has its own guidance at [`pi-main/AGENTS.md`](pi-main/AGENTS.md); follow it for all files below `pi-main/`.
+- Pi host default is **system `pi` >= 0.80.10** (`npm i -g @earendil-works/pi-coding-agent`). Override with `--pi-bin` / `PI_BIN`.
+- Optional Pi source checkout is the git submodule [`pi-main`](https://github.com/earendil-works/pi) (not a vendored copy). Follow [`pi-main/AGENTS.md`](pi-main/AGENTS.md) when working inside the submodule.
 
 ## Architecture invariants
 
@@ -35,7 +36,7 @@ Read [`NATIVE_GROK_TUI_ALIGNMENT.md`](NATIVE_GROK_TUI_ALIGNMENT.md) and [`FEATUR
 | Pi data parsers | `crates/codegen/pi-grok-adapter/src/model.rs` |
 | ACP adapter and UI mapping | `crates/codegen/pi-grok-adapter/src/pi_adapter.rs` |
 | Native Pager external-profile seams | `crates/codegen/xai-grok-pager/src/app/` |
-| Bundled Pi RPC facts | `pi-main/packages/coding-agent/src/modes/rpc/` |
+| Pi RPC facts (submodule / installed package) | `pi-main/packages/coding-agent/src/modes/rpc/` or npm package dist |
 | Pi session lifecycle facts | `pi-main/packages/coding-agent/src/core/agent-session.ts` |
 | Architecture and task records | `docs/` |
 
@@ -58,7 +59,7 @@ cargo test -p xai-grok-pager-bin --bin grok-pi
 cargo check -p xai-grok-pager-bin --bin grok-pi
 ```
 
-`./build.sh` builds bundled Pi and `grok-pi` together. It requires Node.js >= 22.19.0 and the repository Rust toolchain.
+`./build.sh` builds `grok-pi` (and optionally the `pi-main` submodule if present). Requires system Pi >= **0.80.10**, Node.js >= 22.19.0, and the repository Rust toolchain.
 
 `./verify.sh` additionally runs architecture, mock, syntax, and Pager checks. Current known infrastructure blockers are documented in [`VERIFICATION.md`](VERIFICATION.md): Python tree-sitter dependencies are not provisioned, and Pager focused lib tests have an upstream cross-crate test-helper configuration issue. Do not claim full verification is green unless those blockers are resolved.
 
