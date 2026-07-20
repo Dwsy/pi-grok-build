@@ -84,12 +84,28 @@ pub fn ansi_status_line(ansi: &str, theme: &Theme) -> Line<'static> {
 pub fn ansi_remote_tui_line(ansi: &str, theme: &Theme) -> Line<'static> {
     use ratatui::style::{Color, Modifier};
 
-    let mut line = ansi
+    // `ansi-to-tui` expands reverse video into a background colour but does
+    // not reliably clear that colour at `ESC[27m`. Pi's Input puts its trailing
+    // padding after that reset, so it otherwise inherits the cursor highlight.
+    // Rewrite reverse video to an ordinary dark background with its matching
+    // background reset before parsing; the mapping below lifts that one cell
+    // into the active theme's highlight.
+    let normalized = ansi
+        .replace("\x1b[7m", "\x1b[48;5;0m")
+        .replace("\x1b[27m", "\x1b[49m");
+    let mut line = normalized
         .as_bytes()
         .into_text()
         .ok()
         .and_then(|text| text.lines.into_iter().next())
         .unwrap_or_else(|| Line::raw(ansi.to_owned()));
+    // Pi's selectable lists use an arrow prefix. ANSI foreground colour alone
+    // is too subtle after theme mapping, so retain the selection state with the
+    // Pager's native highlight background across the selected row.
+    let selected_row = line
+        .spans
+        .iter()
+        .any(|span| span.content.trim_start().starts_with('→'));
 
     for span in &mut line.spans {
         let reversed = span.style.add_modifier.contains(Modifier::REVERSED);
@@ -99,7 +115,7 @@ pub fn ansi_remote_tui_line(ansi: &str, theme: &Theme) -> Line<'static> {
         // Some parsers expand reverse into an explicit dark/light bg pair instead
         // of Modifier::REVERSED. Treat dark fills as field chrome too.
         let dark_fill = match span.style.bg {
-            Some(Color::Black) | Some(Color::DarkGray) => true,
+            Some(Color::Black) | Some(Color::DarkGray) | Some(Color::Indexed(0 | 8)) => true,
             Some(Color::Rgb(r, g, b)) => (u16::from(r) + u16::from(g) + u16::from(b)) < 180,
             _ => false,
         };
@@ -120,10 +136,19 @@ pub fn ansi_remote_tui_line(ansi: &str, theme: &Theme) -> Line<'static> {
             None | Some(Color::Reset) | Some(Color::White) => theme.text_primary,
             Some(Color::Black) | Some(Color::DarkGray) => theme.gray,
             Some(Color::Gray) => theme.text_secondary,
-            _ => theme.text_secondary,
+            // Pi's active theme emits its semantic accents as 24-bit ANSI.
+            // Keep them intact: collapsing RGB to text_secondary made provider
+            // selection, configured-state, and muted labels monochrome.
+            Some(Color::Rgb(r, g, b)) => Color::Rgb(r, g, b),
+            Some(Color::Indexed(index)) => Color::Indexed(index),
+            Some(color) => color,
         });
         // Pin to surface so partial ANSI lines don't leave holes of terminal default.
-        span.style.bg = Some(theme.bg_base);
+        span.style.bg = Some(if selected_row {
+            theme.bg_highlight
+        } else {
+            theme.bg_base
+        });
     }
     line
 }
@@ -426,6 +451,46 @@ mod tests {
                 .iter()
                 .any(|span| { span.content == "a" && span.style.bg == Some(theme.bg_base) })
         );
+    }
+
+    #[test]
+    fn ansi_remote_tui_line_does_not_extend_cursor_background_to_padding() {
+        let theme = Theme::current();
+        let line = ansi_remote_tui_line("> 2222222\x1b[7m \x1b[27m                    ", &theme);
+
+        assert!(line.spans.iter().any(|span| {
+            span.content == " " && span.style.bg == Some(theme.bg_highlight)
+        }));
+        assert!(line.spans.iter().any(|span| {
+            span.content == "                    " && span.style.bg == Some(theme.bg_base)
+        }));
+    }
+
+    #[test]
+    fn ansi_remote_tui_line_highlights_selected_rows() {
+        let theme = Theme::current();
+        let line = ansi_remote_tui_line("\x1b[36m→ selected option\x1b[0m", &theme);
+
+        assert!(line
+            .spans
+            .iter()
+            .all(|span| span.style.bg == Some(theme.bg_highlight)));
+    }
+
+    #[test]
+    fn ansi_remote_tui_line_preserves_pi_rgb_semantic_colors() {
+        let theme = Theme::current();
+        let line = ansi_remote_tui_line(
+            "\x1b[38;2;59;130;246m→ provider\x1b[0m \x1b[38;2;45;212;191m✓ configured\x1b[0m",
+            &theme,
+        );
+
+        assert!(line.spans.iter().any(|span| {
+            span.content == "→ provider" && span.style.fg == Some(Color::Rgb(59, 130, 246))
+        }));
+        assert!(line.spans.iter().any(|span| {
+            span.content == "✓ configured" && span.style.fg == Some(Color::Rgb(45, 212, 191))
+        }));
     }
 
     #[test]
