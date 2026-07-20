@@ -11,6 +11,7 @@ mod model;
 mod pi_adapter;
 mod pi_rpc;
 mod prompt_bridge;
+mod psm_session_catalog;
 mod queue_bridge;
 mod recap_bridge;
 mod subagent_projection;

@@ -11,7 +11,7 @@ use crate::{
         PiCommand, PiHistoryItem, PiModel, PiSessionSwitch, PiSessionTree, PiState, PiToolContent,
         extract_delta, json_text, parse_commands, parse_messages, parse_models,
         parse_session_switch, parse_session_tree, parse_state, scan_local_sessions,
-        scan_local_sessions_for_cwd, string,
+        scan_local_sessions_for_cwd, string, tree_entry_editor_text,
     },
     pi_rpc::PiRpc,
     prompt_bridge::{
@@ -273,12 +273,18 @@ impl PiAgent {
     ///
     /// Pi keeps ownership of the JSONL format and of switching; this read-only
     /// metadata projection only gives the pager a selectable catalog.
-    pub async fn publish_session_catalog(&self, cwd: PathBuf, all: bool) {
+    pub async fn publish_session_catalog(&self, cwd: PathBuf, all: bool, use_psm_index: bool) {
         let session_dir = {
             let state = self.state.borrow();
             catalog_session_dir(&state.bootstrap.state, &state.session_dir)
         };
+        let psm_cwd = cwd.clone();
         let sessions = tokio::task::spawn_blocking(move || {
+            if use_psm_index {
+                if let Some(sessions) = crate::psm_session_catalog::load_catalog(&psm_cwd, all) {
+                    return sessions;
+                }
+            }
             if all {
                 scan_local_sessions(&session_dir)
             } else {
@@ -298,10 +304,16 @@ impl PiAgent {
                 "scope": if all { "all" } else { "current" },
                 "sessions": sessions.into_iter().map(|session| json!({
                     "id": session.id,
-                    "summary": session.name.unwrap_or(session.first_message),
+                    "summary": session.name.as_deref().unwrap_or(&session.first_message),
+                    "name": session.name,
+                    "firstMessage": session.first_message,
+                    "sessionPath": session.path,
                     "cwd": session.cwd,
                     "createdAt": session.created_at,
                     "updatedAt": session.modified_at,
+                    "modelId": session.model_id,
+                    "totalTokens": session.total_tokens,
+                    "totalCost": session.total_cost,
                     "messageCount": session.message_count,
                 })).collect::<Vec<_>>(),
             }),
@@ -376,17 +388,28 @@ impl PiAgent {
     /// worker: long sessions produce trees deep enough to overflow the default
     /// Tokio worker stack even after serde_json recursion limits are disabled.
     async fn fetch_session_tree(&self) -> Result<PiSessionTree> {
+        let (tree, _) = self.fetch_session_tree_with_editor_text(None).await?;
+        Ok(tree)
+    }
+
+    async fn fetch_session_tree_with_editor_text(
+        &self,
+        entry_id: Option<&str>,
+    ) -> Result<(PiSessionTree, Option<String>)> {
+        let entry_id = entry_id.map(str::to_owned);
         let data = self.rpc.request(json!({ "type": "get_tree" })).await?;
-        let tree = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             crate::pi_rpc::with_large_stack(move || {
+                let editor_text = entry_id
+                    .as_deref()
+                    .and_then(|entry_id| tree_entry_editor_text(&data, entry_id));
                 let tree = parse_session_tree(&data);
                 drop(data);
-                tree
+                (tree, editor_text)
             })
         })
         .await
-        .map_err(|error| anyhow!("Pi get_tree worker failed: {error}"))?;
-        Ok(tree)
+        .map_err(|error| anyhow!("Pi get_tree worker failed: {error}"))
     }
 
     /// Run a read-only bridge command without entering `active_prompts`.
@@ -466,10 +489,14 @@ impl PiAgent {
         // Leaf moved inside the same session file. Refresh adapter state only;
         // the pager issues session/load to clear scrollback and re-replay.
         let bootstrap = self.refresh().await.map_err(acp_internal)?;
-        let tree = self.fetch_session_tree().await.map_err(acp_internal)?;
+        let (tree, editor_text) = self
+            .fetch_session_tree_with_editor_text(Some(entry_id))
+            .await
+            .map_err(acp_internal)?;
         Ok(json!({
             "sessionId": bootstrap.state.session_id,
             "leafId": tree.leaf_id,
+            "editorText": editor_text,
             "cancelled": false,
         }))
     }
@@ -1049,6 +1076,12 @@ impl PiAgent {
                 } else if !self.handle_subagent_bridge_message(&event).await? {
                     self.handle_message_end(&event).await;
                 }
+            }
+            // Live subagent bridge traffic is persisted with appendEntry so it
+            // cannot enter Pi's steering/follow-up queues while the parent is
+            // streaming. RPC exposes that append as entry_appended.
+            "entry_appended" => {
+                self.handle_subagent_bridge_message(&event).await?;
             }
             "tool_execution_start" => self.handle_tool_start(&event).await,
             "tool_execution_update" => self.handle_tool_update(&event).await,
@@ -2015,7 +2048,11 @@ impl acp::Agent for PiAgent {
                     .map(PathBuf::from)
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                 let all = string(&params, &["scope"]) == Some("all");
-                self.publish_session_catalog(cwd, all).await;
+                let use_psm_index = params
+                    .get("usePsmIndex")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                self.publish_session_catalog(cwd, all, use_psm_index).await;
                 ext_response(json!({})).map_err(acp_internal)
             }
             // Pi session entry tree (read-only projection of get_tree).

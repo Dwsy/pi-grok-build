@@ -641,21 +641,32 @@ fn ls_tool_output(args: Option<&Value>, result: &Value, is_error: bool) -> Value
 }
 
 /// Parse Pi grep output lines:
-/// - match: `path:line: content`
+/// - direct match: `path:line: content`
+/// - RTK compact match: `line: content` under `> path (N matches):`
 /// - context: `path-line- content` (ignored for match_count)
 fn parse_pi_grep_matches(text: &str) -> (Vec<Value>, usize) {
-    // path -> ordered line matches
     let mut order: Vec<String> = Vec::new();
     let mut by_path: IndexMap<String, Vec<Value>> = IndexMap::new();
     let mut match_count = 0usize;
+    let mut current_path: Option<String> = None;
 
-    for line in text.lines() {
-        let line = line.trim_end();
+    for raw_line in text.lines() {
+        let line = raw_line.trim_end();
         if line.is_empty() {
             continue;
         }
-        // Prefer match lines `path:N: rest` over context `path-N- rest`.
-        if let Some((path, line_number, content)) = split_pi_grep_match_line(line) {
+        if let Some(path) = parse_rtk_grep_header(line) {
+            current_path = Some(path.to_string());
+            continue;
+        }
+        let parsed = split_pi_grep_match_line(line).or_else(|| {
+            current_path.as_deref().and_then(|path| {
+                split_rtk_grep_match_line(line).map(|(line_number, content)| {
+                    (path, line_number, content)
+                })
+            })
+        });
+        if let Some((path, line_number, content)) = parsed {
             match_count += 1;
             if !by_path.contains_key(path) {
                 order.push(path.to_string());
@@ -671,13 +682,26 @@ fn parse_pi_grep_matches(text: &str) -> (Vec<Value>, usize) {
         .into_iter()
         .filter_map(|path| {
             let matches = by_path.swap_remove(&path)?;
-            Some(json!({
-                "path": path,
-                "matches": matches,
-            }))
+            Some(json!({ "path": path, "matches": matches }))
         })
         .collect();
     (file_matches, match_count)
+}
+
+fn parse_rtk_grep_header(line: &str) -> Option<&str> {
+    let header = line.strip_prefix("> ")?.strip_suffix(':')?;
+    let (path, count) = header.rsplit_once(" (")?;
+    count.strip_suffix(" matches)")
+        .or_else(|| count.strip_suffix(" match)"))
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|_| path)
+}
+
+fn split_rtk_grep_match_line(line: &str) -> Option<(usize, &str)> {
+    let line = line.trim_start();
+    let (line_number, content) = line.split_once(':')?;
+    let line_number = line_number.parse().ok()?;
+    Some((line_number, content.trim_start()))
 }
 
 fn split_pi_grep_match_line(line: &str) -> Option<(&str, usize, &str)> {
@@ -1078,5 +1102,29 @@ mod tests {
         assert_eq!(line, 42);
         assert_eq!(content, "let x = 1;");
         assert!(split_pi_grep_match_line("crates/foo/bar.rs-42- context").is_none());
+    }
+
+    #[test]
+    fn pi_rtk_grep_output_projects_matches_under_file_header() {
+        let raw = normalize_tool_raw_output(
+            "grep",
+            Some(&json!({ "pattern": "pi-grok-adapter", "path": "Cargo.toml" })),
+            &json!({
+                "content": [{
+                    "type": "text",
+                    "text": "1 matches in 1 files:\n\n> Cargo.toml (1 matches):\n    6: \"crates/codegen/pi-grok-adapter\",\n"
+                }]
+            }),
+            false,
+        );
+        assert_eq!(raw.get("match_count").and_then(Value::as_u64), Some(1));
+        let file = &raw.get("file_matches").and_then(Value::as_array).unwrap()[0];
+        assert_eq!(file.get("path").and_then(Value::as_str), Some("Cargo.toml"));
+        assert_eq!(
+            file.get("matches").and_then(Value::as_array).unwrap()[0]
+                .get("line_number")
+                .and_then(Value::as_u64),
+            Some(6)
+        );
     }
 }

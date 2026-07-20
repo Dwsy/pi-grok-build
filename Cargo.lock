@@ -7501,6 +7501,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "indexmap",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

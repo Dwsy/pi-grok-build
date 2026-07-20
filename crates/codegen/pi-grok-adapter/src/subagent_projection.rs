@@ -23,16 +23,35 @@ pub(crate) struct BridgeProjection {
     pub operations: Vec<BridgeOperation>,
 }
 
-pub(crate) fn bridge_parent_session_id(event: &Value) -> Result<Option<&str>> {
-    let message = event.get("message").unwrap_or(event);
-    if field_str(message, "role") != Some("custom")
-        || field_str(message, "customType") != Some(BRIDGE_TYPE)
-    {
+fn bridge_candidate(event: &Value) -> &Value {
+    event
+        .get("message")
+        .or_else(|| event.get("entry"))
+        .unwrap_or(event)
+}
+
+fn bridge_details(event: &Value) -> Result<Option<&Value>> {
+    let message = bridge_candidate(event);
+    if field_str(message, "customType") != Some(BRIDGE_TYPE) {
         return Ok(None);
     }
-    let details = message
-        .get("details")
-        .ok_or_else(|| anyhow::anyhow!("subagent bridge custom message has no details"))?;
+    let details_key = if field_str(message, "role") == Some("custom") {
+        "details"
+    } else if field_str(message, "type") == Some("custom") {
+        "data"
+    } else {
+        return Ok(None);
+    };
+    message
+        .get(details_key)
+        .ok_or_else(|| anyhow::anyhow!("subagent bridge custom message has no {details_key}"))
+        .map(Some)
+}
+
+pub(crate) fn bridge_parent_session_id(event: &Value) -> Result<Option<&str>> {
+    let Some(details) = bridge_details(event)? else {
+        return Ok(None);
+    };
     Ok(Some(required_str(details, "parentSessionId")?))
 }
 
@@ -40,15 +59,9 @@ pub(crate) fn parse_bridge_message(
     event: &Value,
     root_session_id: &str,
 ) -> Result<Option<BridgeProjection>> {
-    let message = event.get("message").unwrap_or(event);
-    if field_str(message, "role") != Some("custom")
-        || field_str(message, "customType") != Some(BRIDGE_TYPE)
-    {
+    let Some(details) = bridge_details(event)? else {
         return Ok(None);
-    }
-    let details = message
-        .get("details")
-        .ok_or_else(|| anyhow::anyhow!("subagent bridge custom message has no details"))?;
+    };
     if details.get("version").and_then(Value::as_u64) != Some(1) {
         bail!("unsupported subagent bridge version");
     }
@@ -350,6 +363,31 @@ mod tests {
         assert_eq!(lifecycle["sessionId"], "parent-1");
         assert_eq!(lifecycle["update"]["sessionUpdate"], "subagent_spawned");
         assert_eq!(lifecycle["update"]["child_session_id"], "child-1");
+    }
+
+    #[test]
+    fn appended_bridge_entry_is_projected_like_a_live_custom_message() {
+        let mut event = bridge_message(
+            "child_update",
+            json!({ "update": { "type": "assistant_delta", "text": "hello" } }),
+        );
+        let details = event["message"]["details"].take();
+        event = json!({
+            "type": "entry_appended",
+            "entry": {
+                "type": "custom",
+                "customType": BRIDGE_TYPE,
+                "data": details,
+            },
+        });
+        let projection = parse_bridge_message(&event, "parent-1")
+            .unwrap()
+            .expect("bridge entry");
+        assert_eq!(projection.sequence, 7);
+        assert!(matches!(
+            projection.operations.as_slice(),
+            [BridgeOperation::ChildUpdate { .. }]
+        ));
     }
 
     #[test]

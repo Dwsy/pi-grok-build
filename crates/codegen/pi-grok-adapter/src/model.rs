@@ -11,7 +11,7 @@ use std::{
 /// This mirrors the fields Pi's `SessionManager.listAll()` uses for its native
 /// selector. The adapter reads metadata only; session switching remains an RPC
 /// operation executed by the Pi process.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PiSessionInfo {
     pub path: PathBuf,
     pub id: String,
@@ -21,6 +21,9 @@ pub struct PiSessionInfo {
     pub modified_at: String,
     pub message_count: usize,
     pub first_message: String,
+    pub model_id: Option<String>,
+    pub total_tokens: Option<u64>,
+    pub total_cost: Option<f64>,
 }
 
 /// Pi's `switch_session` response. A cancelled response is successful RPC
@@ -411,6 +414,46 @@ fn format_tool_call(name: &str, args: &Value) -> String {
     }
 }
 
+/// Return the complete text Pi restores into its editor after tree navigation.
+/// Unlike the tree projection, this is called only for the selected entry.
+pub fn tree_entry_editor_text(value: &Value, entry_id: &str) -> Option<String> {
+    let roots = value.get("tree")?.as_array()?;
+    let mut stack: Vec<&Value> = roots.iter().rev().collect();
+    while let Some(node) = stack.pop() {
+        let entry = node.get("entry").unwrap_or(node);
+        if string(entry, &["id"]) == Some(entry_id) {
+            return match string(entry, &["type"]) {
+                Some("message") => {
+                    let message = entry.get("message").unwrap_or(entry);
+                    (string(message, &["role"]) == Some("user"))
+                        .then(|| full_text_content(message.get("content")))
+                        .flatten()
+                }
+                Some("custom_message") => full_text_content(entry.get("content")),
+                _ => None,
+            };
+        }
+        if let Some(children) = node.get("children").and_then(Value::as_array) {
+            stack.extend(children.iter().rev());
+        }
+    }
+    None
+}
+
+fn full_text_content(content: Option<&Value>) -> Option<String> {
+    match content {
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(Value::Array(parts)) => Some(
+            parts
+                .iter()
+                .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|part| string(part, &["text"]))
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
 fn first_text_preview(content: Option<&Value>) -> String {
     // Stop early: tree projection only needs a short preview. Reading full
     // multi-MB assistant/tool payloads is what made /tree hang on large sessions.
@@ -540,6 +583,9 @@ fn parse_session_file(path: &Path) -> Option<PiSessionInfo> {
     let mut name = None;
     let mut message_count = 0;
     let mut first_message = None;
+    let mut model_id = None;
+    let mut total_tokens = None;
+    let mut total_cost = None;
     // Mirror Pi SessionManager.buildSessionInfo: max activity over user/assistant
     // messages, preferring message.timestamp (ms) then entry.timestamp (ISO).
     let mut last_activity_ms: Option<i64> = None;
@@ -566,6 +612,10 @@ fn parse_session_file(path: &Path) -> Option<PiSessionInfo> {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned);
         }
+        if kind == "model_change" {
+            model_id = session_model_id(&value).or(model_id);
+            continue;
+        }
         if kind != "message" {
             continue;
         }
@@ -579,6 +629,21 @@ fn parse_session_file(path: &Path) -> Option<PiSessionInfo> {
         let role = string(message, &["role"]).unwrap_or_default();
         if role == "user" && first_message.is_none() {
             first_message = session_message_text(message);
+        }
+        if role == "assistant" {
+            model_id = session_model_id(message).or(model_id);
+            if let Some(usage) = message.get("usage") {
+                if let Some(tokens) = usage.get("totalTokens").and_then(Value::as_u64) {
+                    total_tokens = Some(total_tokens.unwrap_or(0u64).saturating_add(tokens));
+                }
+                if let Some(cost) = usage
+                    .get("cost")
+                    .and_then(|cost| cost.get("total"))
+                    .and_then(Value::as_f64)
+                {
+                    total_cost = Some(total_cost.unwrap_or(0.0f64) + cost);
+                }
+            }
         }
     }
 
@@ -595,7 +660,18 @@ fn parse_session_file(path: &Path) -> Option<PiSessionInfo> {
         created_at,
         message_count,
         first_message: first_message.unwrap_or_else(|| "(no messages)".to_owned()),
+        model_id,
+        total_tokens,
+        total_cost,
     })
+}
+
+fn session_model_id(value: &Value) -> Option<String> {
+    let model_id = string(value, &["modelId", "model"])?;
+    match string(value, &["provider"]) {
+        Some(provider) if !provider.is_empty() => Some(format!("{provider}::{model_id}")),
+        _ => Some(model_id.to_owned()),
+    }
 }
 
 /// Match Pi `getMessageActivityTime`: only user/assistant messages contribute.
@@ -696,8 +772,20 @@ impl PiModel {
     /// native selector never sends an unsupported token.
     pub fn pi_level_for_acp_effort(&self, effort: &str) -> Option<&'static str> {
         let requested = match effort.to_ascii_lowercase().as_str() {
-            "none" | "off" => "off",
-            "minimal" => "minimal",
+            "none" | "off" => {
+                if self.supports_thinking_level("off") {
+                    "off"
+                } else {
+                    "low"
+                }
+            }
+            "minimal" => {
+                if self.supports_thinking_level("minimal") {
+                    "minimal"
+                } else {
+                    "low"
+                }
+            },
             "low" => "low",
             "medium" => "medium",
             "high" => "high",
@@ -915,6 +1003,9 @@ fn supported_thinking_levels(value: &Value, reasoning: bool) -> Vec<String> {
     }
     let map = value.get("thinkingLevelMap").and_then(Value::as_object);
     let mut levels = Vec::new();
+    // Pi accepts `off` only when the provider/model maps it. Reasoning models
+    // commonly expose low..max without an off level; advertising off causes a
+    // provider 400 when the Pager initializes or switches effort.
     for level in ["off", "minimal", "low", "medium", "high"] {
         let supported = map
             .and_then(|entries| entries.get(level))
@@ -931,6 +1022,9 @@ fn supported_thinking_levels(value: &Value, reasoning: bool) -> Vec<String> {
         if supported {
             levels.push(level.to_string());
         }
+    }
+    if map.is_none() {
+        levels.retain(|level| level != "off");
     }
     levels
 }
@@ -1316,6 +1410,38 @@ mod tests {
     }
 
     #[test]
+    fn tree_entry_editor_text_preserves_full_user_message() {
+        let tree = json!({
+            "tree": [{
+                "entry": {
+                    "type": "message",
+                    "id": "u1",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            { "type": "text", "text": "first line\n" },
+                            { "type": "image", "data": "ignored" },
+                            { "type": "text", "text": "second line" }
+                        ]
+                    }
+                },
+                "children": [{
+                    "entry": {
+                        "type": "custom_message",
+                        "id": "c1",
+                        "content": "custom text"
+                    },
+                    "children": []
+                }]
+            }]
+        });
+
+        assert_eq!(tree_entry_editor_text(&tree, "u1").as_deref(), Some("first line\nsecond line"));
+        assert_eq!(tree_entry_editor_text(&tree, "c1").as_deref(), Some("custom text"));
+        assert_eq!(tree_entry_editor_text(&tree, "missing"), None);
+    }
+
+    #[test]
     fn parse_session_tree_formats_tool_results_from_tool_calls() {
         let tree = parse_session_tree(&json!({
             "leafId": "tr1",
@@ -1393,7 +1519,9 @@ mod tests {
             concat!(
                 "{\"type\":\"session\",\"id\":\"session-1\",\"timestamp\":\"2026-07-01T00:00:00.000Z\",\"cwd\":\"/repo\"}\n",
                 "{\"type\":\"message\",\"id\":\"1\",\"parentId\":null,\"timestamp\":\"2026-07-01T00:00:01.000Z\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n",
-                "{\"type\":\"session_info\",\"id\":\"2\",\"parentId\":\"1\",\"timestamp\":\"2026-07-01T00:00:02.000Z\",\"name\":\"Named session\"}\n"
+                "{\"type\":\"model_change\",\"id\":\"2\",\"parentId\":\"1\",\"timestamp\":\"2026-07-01T00:00:02.000Z\",\"provider\":\"openai\",\"modelId\":\"gpt-test\"}\n",
+                "{\"type\":\"message\",\"id\":\"3\",\"parentId\":\"2\",\"timestamp\":\"2026-07-01T00:00:03.000Z\",\"message\":{\"role\":\"assistant\",\"provider\":\"openai\",\"model\":\"gpt-test\",\"usage\":{\"totalTokens\":1200,\"cost\":{\"total\":0.42}}}}\n",
+                "{\"type\":\"session_info\",\"id\":\"4\",\"parentId\":\"3\",\"timestamp\":\"2026-07-01T00:00:04.000Z\",\"name\":\"Named session\"}\n"
             ),
         )
         .unwrap();
@@ -1404,11 +1532,14 @@ mod tests {
         assert_eq!(sessions[0].id, "session-1");
         assert_eq!(sessions[0].cwd, "/repo");
         assert_eq!(sessions[0].name.as_deref(), Some("Named session"));
-        assert_eq!(sessions[0].message_count, 1);
+        assert_eq!(sessions[0].message_count, 2);
         assert_eq!(sessions[0].first_message, "hello");
+        assert_eq!(sessions[0].model_id.as_deref(), Some("openai::gpt-test"));
+        assert_eq!(sessions[0].total_tokens, Some(1200));
+        assert_eq!(sessions[0].total_cost, Some(0.42));
         // Entry-level ISO becomes modified_at when message.timestamp is absent.
         assert_eq!(sessions[0].created_at, "2026-07-01T00:00:00.000Z");
-        assert_eq!(sessions[0].modified_at, "2026-07-01T00:00:01.000Z");
+        assert_eq!(sessions[0].modified_at, "2026-07-01T00:00:03.000Z");
     }
 
     #[test]
