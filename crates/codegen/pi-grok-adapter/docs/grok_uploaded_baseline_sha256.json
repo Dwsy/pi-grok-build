@@ -2775,6 +2775,8 @@
   ],
   "allowedAddedFiles": [
     "crates/codegen/xai-grok-pager-bin/src/bin/grok-pi.rs",
+    "crates/codegen/xai-grok-pager-bin/src/bin/grok_pi/plan_mode_extension.rs",
+    "extensions/pi-grok-plan-mode/index.ts",
     "crates/codegen/xai-grok-pager/src/app/dispatch/session/tree.rs",
     "crates/codegen/xai-grok-pager/src/slash/commands/tree.rs",
     "crates/codegen/xai-grok-pager/src/views/session_tree.rs",

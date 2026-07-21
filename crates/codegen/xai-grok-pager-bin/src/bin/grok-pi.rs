@@ -14,6 +14,8 @@ mod cli;
 mod context_extension;
 #[path = "grok_pi/native_commands_extension.rs"]
 mod native_commands_extension;
+#[path = "grok_pi/plan_mode_extension.rs"]
+mod plan_mode_extension;
 #[path = "grok_pi/pi_version.rs"]
 mod pi_version;
 #[path = "grok_pi/recap_extension.rs"]
@@ -50,6 +52,7 @@ use bash_extension::write_bash_extension;
 use cli::{Args, Command, normalize_compound_short_flags, pi_args_with_startup_flags};
 use context_extension::write_context_extension;
 use native_commands_extension::write_native_commands_extension;
+use plan_mode_extension::write_plan_mode_extension;
 use pi_version::ensure_compatible_pi_host;
 use recap_extension::write_recap_extension;
 use remote_tui_extension::write_remote_tui_extension;
@@ -230,6 +233,10 @@ async fn run(mut args: Args) -> Result<()> {
     } else {
         None
     };
+    let plan_mode_extension = bridge_extensions_enabled
+        .then(|| write_plan_mode_extension())
+        .transpose()
+        .context("failed to create Pi plan-mode extension")?;
     // Resolve session dir after first-class flags are merged so --session-dir
     // is visible whether it came from clap or from `--` passthrough.
     let mut pi_args = pi_args_with_startup_flags(
@@ -379,8 +386,12 @@ async fn run(mut args: Args) -> Result<()> {
             .as_ref()
             .map(|extension| extension.source_path()),
         tools_extension.as_ref().map(|extension| extension.path()),
-        // Rollback extension MUST be last so it sees final tool registrations.
+        // Rollback extension observes the final built-in registrations.
         rollback_ext.as_ref().map(|extension| extension.path()),
+        // Plan gate runs after all tool registrations and owns no renderer/UI.
+        plan_mode_extension
+            .as_ref()
+            .map(|extension| extension.source_path()),
     ]
     .into_iter()
     .flatten()
@@ -430,6 +441,9 @@ async fn run(mut args: Args) -> Result<()> {
         }
     }
     // Tree file rollback checkpoint extension env.
+    if let Some(extension) = plan_mode_extension.as_ref() {
+        env.push(("PI_GROK_PLAN_CONTROL".to_string(), extension.control_path().to_string_lossy().into_owned()));
+    }
     if rollback_ext.is_some() {
         env.push(("PI_GROK_ROLLBACK".to_string(), "1".to_string()));
         env.push((
@@ -457,6 +471,9 @@ async fn run(mut args: Args) -> Result<()> {
     let context_breakdown = context_extension
         .as_ref()
         .map(|extension| extension.breakdown_path().to_path_buf());
+    let plan_mode_control = plan_mode_extension
+        .as_ref()
+        .map(|extension| extension.control_path().to_path_buf());
     // Hold the NamedTempFiles so the extension paths remain valid.
     let _navigate_tree_extension = navigate_tree_extension;
     let _bash_extension = bash_extension;
@@ -466,6 +483,7 @@ async fn run(mut args: Args) -> Result<()> {
     let _auth_extension = auth_extension;
     let _native_commands_extension = native_commands_extension;
     let _remote_tui_extension = remote_tui_extension;
+    let _plan_mode_extension = plan_mode_extension;
     let _tools_extension = tools_extension;
     let _rollback_extension = rollback_ext;
     let bootstrap = PiBootstrap::load(&process.rpc)
@@ -488,7 +506,9 @@ async fn run(mut args: Args) -> Result<()> {
         pi_session_dir,
         bash_control_meta,
         context_breakdown,
-    ));
+        plan_mode_control,
+    )
+    .context("failed to restore Pi plan-mode state")?);
 
     let event_adapter = adapter.clone();
     tokio::task::spawn_local(async move {

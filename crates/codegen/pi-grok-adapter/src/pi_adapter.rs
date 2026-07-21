@@ -199,6 +199,13 @@ struct AdapterState {
     /// commits the matching session load, rather than validating it against the
     /// still-active Pager session.
     pending_subagent_bridge: PendingSubagentBridge,
+    /// Plan mode lifecycle tracker. The adapter is the sole owner of plan mode
+    /// state — Pi RPC has no mode concept, and the Pager only renders.
+    plan_mode: crate::plan_mode::PiPlanTracker,
+    /// Process-private control file consumed by the injected Pi plan gate.
+    /// It is deliberately not session persistence; the adapter rewrites it
+    /// from its authoritative tracker after every transition.
+    plan_mode_control: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -219,15 +226,18 @@ impl PiAgent {
         session_dir: PathBuf,
         bash_control_meta: Option<PathBuf>,
         context_breakdown: Option<PathBuf>,
-    ) -> Self {
+        plan_mode_control: Option<PathBuf>,
+    ) -> Result<Self> {
         let acp_session_id = bootstrap.state.session_id.clone();
+        let plan_file = plan_file_path(&bootstrap.state, &session_dir);
+        let plan_mode = load_plan_tracker(&plan_file)?;
         let model_map = bootstrap
             .models
             .iter()
             .cloned()
             .map(|model| (model_key(&model), model))
             .collect();
-        Self {
+        Ok(Self {
             rpc,
             client_tx,
             bash_control_meta,
@@ -240,7 +250,7 @@ impl PiAgent {
                 next_prompt_id: 1,
                 bash_running: false,
                 live_assistant: None,
-                session_dir,
+                session_dir: session_dir.clone(),
                 session_paths: HashMap::new(),
                 tool_args: HashMap::new(),
                 last_context_tokens: None,
@@ -248,8 +258,10 @@ impl PiAgent {
                 queue_mirror: QueueMirror::default(),
                 subagent_bridge_sequences: HashMap::new(),
                 pending_subagent_bridge: PendingSubagentBridge::default(),
+                plan_mode,
+                plan_mode_control,
             })),
-        }
+        })
     }
 
     pub async fn run_events(self: Rc<Self>, mut events: mpsc::UnboundedReceiver<Value>) {
@@ -532,11 +544,77 @@ impl PiAgent {
             .cloned()
             .map(|model| (model_key(&model), model))
             .collect();
+        // A session change invalidates the previous session's queue mirror.
+        // Stale entries would otherwise leak into the new session's queue UI.
+        state.queue_mirror = QueueMirror::default();
         state.bootstrap = bootstrap;
     }
 
     fn session_id(&self) -> acp::SessionId {
         acp::SessionId::new(self.state.borrow().acp_session_id.clone())
+    }
+
+    /// ACP session modes advertised on new/load session responses.
+    ///
+    /// Pager plan-mode UI is driven by `modes` + `CurrentModeUpdate`, not by
+    /// initialize-time agent capabilities. Mirror Grok's default/plan pair so
+    /// Shift+Tab / F2 plan toggle can reach the adapter.
+    fn acp_session_modes(&self) -> acp::SessionModeState {
+        let current = {
+            let state = self.state.borrow();
+            match state.plan_mode.state() {
+                crate::plan_mode::PiPlanState::Pending | crate::plan_mode::PiPlanState::Active => {
+                    "plan"
+                }
+                crate::plan_mode::PiPlanState::ExitPending
+                | crate::plan_mode::PiPlanState::Inactive => "default",
+            }
+        };
+        acp::SessionModeState::new(
+            acp::SessionModeId::new(current),
+            vec![
+                acp::SessionMode::new(acp::SessionModeId::new("default"), "Agent"),
+                acp::SessionMode::new(acp::SessionModeId::new("plan"), "Plan Mode"),
+            ],
+        )
+    }
+
+    /// Atomically publish the plan gate inputs to the injected Pi extension.
+    ///
+    /// The adapter is the sole writer, and this method has no await point, so
+    /// no two adapter tasks can interleave writes. Rename makes readers observe
+    /// either the prior complete JSON document or the next complete document.
+    fn sync_plan_mode_control(&self) -> Result<()> {
+        let (control_path, active, plan_file_path) = {
+            let state = self.state.borrow();
+            let Some(control_path) = state.plan_mode_control.clone() else {
+                return Ok(());
+            };
+            (
+                control_path,
+                state.plan_mode.is_active(),
+                state.plan_mode.plan_file_path().display().to_string(),
+            )
+        };
+        let body = serde_json::to_vec(&json!({
+            "active": active,
+            "planFilePath": plan_file_path,
+        }))?;
+        atomic_write(&control_path, &body)
+    }
+
+    /// Persist the tracker after every durable state transition. The data is
+    /// private to the Pi session sidecar; the Pi core remains unaware of it.
+    fn persist_plan_mode_state(&self) -> Result<()> {
+        let (path, snapshot) = {
+            let state = self.state.borrow();
+            (
+                plan_state_path(state.plan_mode.plan_file_path()),
+                state.plan_mode.snapshot(),
+            )
+        };
+        let body = serde_json::to_vec(&snapshot)?;
+        atomic_write(&path, &body)
     }
 
     async fn send_update(&self, update: acp::SessionUpdate) {
@@ -1052,9 +1130,27 @@ impl PiAgent {
             }
             "agent_settled" => {
                 self.refresh_context_usage().await;
-                {
+                let mode_update = {
                     let mut state = self.state.borrow_mut();
                     state.queue_mirror.clear_running();
+                    // Complete deferred plan-mode exit after the in-flight turn.
+                    if matches!(
+                        state.plan_mode.state(),
+                        crate::plan_mode::PiPlanState::ExitPending
+                    ) {
+                        state.plan_mode.complete_deferred_exit();
+                        Some(acp::SessionModeId::new("default"))
+                    } else {
+                        None
+                    }
+                };
+                if let Some(mode_id) = mode_update {
+                    self.persist_plan_mode_state()?;
+                    self.sync_plan_mode_control()?;
+                    self.send_update(acp::SessionUpdate::CurrentModeUpdate(
+                        acp::CurrentModeUpdate::new(mode_id),
+                    ))
+                    .await;
                 }
                 // Idle barrier: drop any stale runningPromptId so the pager can
                 // drain local rows without waiting on a ghost running id.
@@ -1445,6 +1541,120 @@ impl PiAgent {
                 .raw_input(args),
         ))
         .await;
+        if name == "exit_plan_mode" {
+            self.request_plan_approval(id).await;
+        }
+    }
+
+    /// Bridge Pi's extension-owned `exit_plan_mode` tool to the Pager's
+    /// native PlanApprovalView. The adapter remains the state authority; the
+    /// extension only gives the model a real tool to request this transition.
+    async fn request_plan_approval(&self, tool_call_id: &str) {
+        let plan_file_path = {
+            let mut state = self.state.borrow_mut();
+            if !state.plan_mode.is_active() || state.plan_mode.is_awaiting_plan_approval() {
+                return;
+            }
+            state.plan_mode.set_awaiting_plan_approval(true);
+            state.plan_mode.plan_file_path().to_path_buf()
+        };
+        if let Err(error) = self.persist_plan_mode_state() {
+            tracing::warn!(%error, "failed to persist plan approval state");
+            self.state
+                .borrow_mut()
+                .plan_mode
+                .set_awaiting_plan_approval(false);
+            return;
+        }
+        if let Err(error) = self.sync_plan_mode_control() {
+            tracing::warn!(%error, "failed to publish plan gate before approval");
+            self.state
+                .borrow_mut()
+                .plan_mode
+                .set_awaiting_plan_approval(false);
+            return;
+        }
+        let plan_content = std::fs::read_to_string(&plan_file_path)
+            .ok()
+            .filter(|content| !content.trim().is_empty());
+        let params = json!({
+            "sessionId": self.session_id().0.to_string(),
+            "toolCallId": tool_call_id,
+            "planContent": plan_content,
+        });
+        let raw = match serde_json::value::to_raw_value(&params) {
+            Ok(raw) => raw,
+            Err(error) => {
+                tracing::warn!(%error, "failed to serialize plan approval request");
+                self.state
+                    .borrow_mut()
+                    .plan_mode
+                    .set_awaiting_plan_approval(false);
+                return;
+            }
+        };
+        let request = acp::ExtRequest::new("x.ai/exit_plan_mode", raw.into());
+        let response = match acp_send(request, &self.client_tx).await {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(%error, "plan approval request failed");
+                self.state
+                    .borrow_mut()
+                    .plan_mode
+                    .set_awaiting_plan_approval(false);
+                return;
+            }
+        };
+        let response_value: Value = match serde_json::from_str(response.0.get()) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(%error, "invalid plan approval response");
+                self.state
+                    .borrow_mut()
+                    .plan_mode
+                    .set_awaiting_plan_approval(false);
+                return;
+            }
+        };
+        let result = response_value.get("result").unwrap_or(&response_value);
+        let outcome = result
+            .get("outcome")
+            .and_then(Value::as_str)
+            .unwrap_or("cancelled");
+        let feedback = result
+            .get("feedback")
+            .and_then(Value::as_str)
+            .filter(|feedback| !feedback.trim().is_empty());
+        let approved = outcome == "approved" || outcome == "abandoned";
+        if approved {
+            let changed = self.state.borrow_mut().plan_mode.deactivate_approved();
+            if let Err(error) = self.persist_plan_mode_state() {
+                tracing::warn!(%error, "failed to persist approved plan-mode exit");
+            }
+            if let Err(error) = self.sync_plan_mode_control() {
+                tracing::warn!(%error, "failed to publish approved plan-mode exit");
+            }
+            if changed {
+                self.send_update(acp::SessionUpdate::CurrentModeUpdate(
+                    acp::CurrentModeUpdate::new(acp::SessionModeId::new("default")),
+                ))
+                .await;
+            }
+            return;
+        }
+        self.state
+            .borrow_mut()
+            .plan_mode
+            .set_awaiting_plan_approval(false);
+        if let Err(error) = self.persist_plan_mode_state() {
+            tracing::warn!(%error, "failed to persist rejected plan approval");
+        }
+        if let Some(feedback) = feedback {
+            let _ = self.rpc.notify(json!({
+                "type": "follow_up",
+                "message": format!("The user requested plan changes:\n{feedback}"),
+            }));
+        }
     }
 
     async fn handle_tool_update(&self, event: &Value) {
@@ -1822,10 +2032,20 @@ impl acp::Agent for PiAgent {
             self.state.borrow_mut().acp_session_id = bootstrap.state.session_id.clone();
         }
         self.publish_bootstrap(&bootstrap).await;
+        // Fresh session starts outside plan mode and receives its own JSONL
+        // sidecar plan file rather than sharing the configured session root.
+        {
+            let mut state = self.state.borrow_mut();
+            let plan_path = plan_file_path(&bootstrap.state, &state.session_dir);
+            state.plan_mode = crate::plan_mode::PiPlanTracker::with_plan_file(plan_path);
+        }
         let mut response = acp::NewSessionResponse::new(bootstrap.state.session_id.clone());
         if let Some(models) = bootstrap.acp_models() {
             response = response.models(Some(models));
         }
+        response = response.modes(Some(self.acp_session_modes()));
+        self.persist_plan_mode_state().map_err(acp_internal)?;
+        self.sync_plan_mode_control().map_err(acp_internal)?;
         Ok(response)
     }
 
@@ -1862,7 +2082,12 @@ impl acp::Agent for PiAgent {
                 bootstrap.state.session_id
             )));
         }
-        self.state.borrow_mut().acp_session_id = requested.clone();
+        {
+            let mut state = self.state.borrow_mut();
+            state.acp_session_id = requested.clone();
+            let plan_path = plan_file_path(&bootstrap.state, &state.session_dir);
+            state.plan_mode = load_plan_tracker(&plan_path).map_err(acp_internal)?;
+        }
         if let Err(error) = self.replay_history().await {
             self.state
                 .borrow_mut()
@@ -1887,15 +2112,45 @@ impl acp::Agent for PiAgent {
         if let Some(models) = bootstrap.acp_models() {
             response = response.models(Some(models));
         }
+        response = response.modes(Some(self.acp_session_modes()));
+        self.sync_plan_mode_control().map_err(acp_internal)?;
         Ok(response)
     }
 
     async fn set_session_mode(
         &self,
-        _arguments: acp::SetSessionModeRequest,
+        arguments: acp::SetSessionModeRequest,
     ) -> Result<acp::SetSessionModeResponse, acp::Error> {
-        // Pi thinking is exposed through Grok's native model/effort surface,
-        // not ACP session modes. No modes are advertised during initialize.
+        let mode_id = arguments.mode_id.0.to_string();
+        let mode = mode_id.as_str();
+        let (changed, current_mode_id) = {
+            let mut state = self.state.borrow_mut();
+            let turn_in_flight = !state.active_prompts.is_empty();
+            let changed = if mode == "plan" {
+                state.plan_mode.enter_pending()
+            } else {
+                // Any non-plan mode exits plan mode (default/ask/agent).
+                let was_plan = state.plan_mode.state() != crate::plan_mode::PiPlanState::Inactive;
+                if was_plan {
+                    state.plan_mode.user_exit(turn_in_flight);
+                    true
+                } else {
+                    false
+                }
+            };
+            // ACP display state follows the request. ExitPending is an internal
+            // turn-drain state only; Pager must immediately confirm default.
+            let current = if mode == "plan" { "plan" } else { mode };
+            (changed, current.to_string())
+        };
+        if changed {
+            self.persist_plan_mode_state().map_err(acp_internal)?;
+            self.sync_plan_mode_control().map_err(acp_internal)?;
+            self.send_update(acp::SessionUpdate::CurrentModeUpdate(
+                acp::CurrentModeUpdate::new(acp::SessionModeId::new(current_mode_id)),
+            ))
+            .await;
+        }
         Ok(acp::SetSessionModeResponse::new())
     }
 
@@ -1907,7 +2162,7 @@ impl acp::Agent for PiAgent {
             return self.execute_bash(command, arguments.meta.as_ref()).await;
         }
 
-        let (message, images) = prompt_to_pi(&arguments.prompt);
+        let (mut message, images) = prompt_to_pi(&arguments.prompt);
         if message.trim().is_empty() && images.is_empty() {
             return Err(acp::Error::invalid_params().data("Pi prompt is empty"));
         }
@@ -1922,8 +2177,25 @@ impl acp::Agent for PiAgent {
             .map(str::to_string);
 
         let (completion_tx, completion_rx) = oneshot::channel();
+        let plan_file_to_seed = {
+            let state = self.state.borrow();
+            (state.plan_mode.state() == crate::plan_mode::PiPlanState::Pending)
+                .then(|| state.plan_mode.plan_file_path().to_path_buf())
+        };
+        if let Some(plan_file) = plan_file_to_seed {
+            ensure_plan_file(&plan_file).map_err(acp_internal)?;
+        }
         let (prompt_id, streaming_behavior) = {
             let mut state = self.state.borrow_mut();
+            // Inject plan-mode reminder as a prompt prefix before the user text.
+            // Pi RPC has no systemPrompt mutation command; prefix is the only lever.
+            if let Some(reminder) = state.plan_mode.build_reminder_for_prompt() {
+                if message.is_empty() {
+                    message = reminder;
+                } else {
+                    message = format!("{reminder}\n\n{message}");
+                }
+            }
             let already_active = !state.active_prompts.is_empty();
             let prompt_id = state.next_prompt_id;
             state.next_prompt_id = state.next_prompt_id.wrapping_add(1).max(1);
@@ -1947,6 +2219,8 @@ impl acp::Agent for PiAgent {
             });
             (prompt_id, streaming_behavior)
         };
+        self.persist_plan_mode_state().map_err(acp_internal)?;
+        self.sync_plan_mode_control().map_err(acp_internal)?;
         let mut request = json!({ "type": "prompt", "message": message });
         if !images.is_empty() {
             request["images"] = Value::Array(images);
@@ -2736,6 +3010,98 @@ fn catalog_session_dir(state: &PiState, configured_dir: &Path) -> PathBuf {
         .unwrap_or_else(|| configured_dir.to_path_buf())
 }
 
+/// Derive a plan sidecar that belongs to precisely one Pi JSONL session.
+///
+/// Pi's session store contains files, not Grok-style per-session directories;
+/// `<session>.plan.md` avoids sharing a bare `plan.md` across all sessions.
+/// The fallback is still session-id namespaced when Pi has not materialized a
+/// session file yet.
+fn plan_file_path(state: &PiState, configured_dir: &Path) -> PathBuf {
+    if let Some(session_file) = state
+        .session_file
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        return PathBuf::from(session_file).with_extension("plan.md");
+    }
+    configured_dir
+        .join("grok-pi-plans")
+        .join(format!("{}.plan.md", state.session_id))
+}
+
+/// Ensure activation has a writable, empty plan artifact without truncating a
+/// previous plan on re-entry.
+fn ensure_plan_file(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("plan file has no parent directory: {}", path.display()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| anyhow!("create plan directory {}: {error}", parent.display()))?;
+    if path.exists() {
+        if !path.is_file() {
+            bail!("plan path is not a regular file: {}", path.display());
+        }
+        return Ok(());
+    }
+    std::fs::File::create(path)
+        .map_err(|error| anyhow!("create plan file {}: {error}", path.display()))?;
+    Ok(())
+}
+
+fn plan_state_path(plan_file: &Path) -> PathBuf {
+    let name = plan_file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("plan.md");
+    let base = name.strip_suffix(".plan.md").unwrap_or(name);
+    plan_file.with_file_name(format!("{base}.plan-mode.json"))
+}
+
+fn load_plan_tracker(plan_file: &Path) -> Result<crate::plan_mode::PiPlanTracker> {
+    let state_path = plan_state_path(plan_file);
+    match std::fs::read(&state_path) {
+        Ok(bytes) => {
+            let snapshot: crate::plan_mode::PiPlanSnapshot = serde_json::from_slice(&bytes)
+                .map_err(|error| {
+                    anyhow!("parse plan-mode state {}: {error}", state_path.display())
+                })?;
+            Ok(
+                crate::plan_mode::PiPlanTracker::from_snapshot_with_plan_file(
+                    plan_file.to_path_buf(),
+                    snapshot,
+                ),
+            )
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(
+            crate::plan_mode::PiPlanTracker::with_plan_file(plan_file.to_path_buf()),
+        ),
+        Err(error) => Err(anyhow!(
+            "read plan-mode state {}: {error}",
+            state_path.display()
+        )),
+    }
+}
+
+fn atomic_write(path: &Path, body: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("state path has no parent directory: {}", path.display()))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| anyhow!("create state directory {}: {error}", parent.display()))?;
+    let staged = parent.join(format!(
+        ".{}.{}.next",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("plan-mode"),
+        std::process::id(),
+    ));
+    std::fs::write(&staged, body)
+        .map_err(|error| anyhow!("write staged state {}: {error}", staged.display()))?;
+    std::fs::rename(&staged, path)
+        .map_err(|error| anyhow!("replace state {}: {error}", path.display()))?;
+    Ok(())
+}
+
 fn content_chunk(content: acp::ContentBlock) -> acp::ContentChunk {
     acp::ContentChunk::new(content)
 }
@@ -3238,6 +3604,39 @@ mod tests {
             Some("zh-Hans-CN".into())
         );
         assert_eq!(first_apple_language("(\n)"), None);
+    }
+
+    #[test]
+    fn plan_sidecar_is_scoped_to_jsonl_session() {
+        let state = PiState {
+            session_id: "session-1".into(),
+            session_file: Some("/tmp/pi/project/session.jsonl".into()),
+            ..PiState::default()
+        };
+        let plan = plan_file_path(&state, Path::new("/tmp/pi"));
+        assert_eq!(plan, PathBuf::from("/tmp/pi/project/session.plan.md"));
+        assert_eq!(
+            plan_state_path(&plan),
+            PathBuf::from("/tmp/pi/project/session.plan-mode.json")
+        );
+    }
+
+    #[test]
+    fn plan_tracker_persists_and_restores_active_state() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let plan_file = directory.path().join("session.plan.md");
+        let mut tracker = crate::plan_mode::PiPlanTracker::with_plan_file(plan_file.clone());
+        tracker.enter_pending();
+        tracker.build_reminder_for_prompt();
+        atomic_write(
+            &plan_state_path(&plan_file),
+            &serde_json::to_vec(&tracker.snapshot()).expect("serialize snapshot"),
+        )
+        .expect("persist snapshot");
+
+        let restored = load_plan_tracker(&plan_file).expect("restore snapshot");
+        assert!(restored.is_active());
+        assert_eq!(restored.plan_file_path(), plan_file.as_path());
     }
 
     #[test]

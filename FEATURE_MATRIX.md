@@ -24,6 +24,7 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | Markdown / code blocks | Native+Adapted | Pi text/reasoning → ACP chunks → `xai-grok-markdown` |
 | Tool cards | Native+Adapted | Pi tool events → ACP `ToolCall`; `read`/`bash`/`edit`/`write`/`grep`/`find`/`ls` projected to native cards |
 | Todo / plan list | Native+Adapted | Pi `@juicesharp/rpiv-todo` `todo` tool `details.tasks` → ACP `Plan` → native TodoPane/badge; `todo` card suppressed in scrollback |
+| Plan mode | Native+Adapted | Pager-native Plan toggle → adapter-owned `Inactive/Pending/Active/ExitPending` tracker; full/sparse system-reminder prefix; session-private `.plan.md` sidecar; injected Pi `tool_call` gate blocks `edit`/`write`/`bash` except the plan file; Pi `exit_plan_mode` opens native `x.ai/exit_plan_mode` approval and persists `.plan-mode.json` state |
 | Diff rendering | Native+Adapted | edit-like tool metadata enters the Grok tool/diff pipeline |
 | Images | Native+Adapted | Pi image blocks → ACP `ImageContent`; actual terminal display depends on Grok/terminal capability |
 | Scroll / find / copy / transcript / export | Native | Grok Pager |

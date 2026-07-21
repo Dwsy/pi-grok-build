@@ -10,6 +10,7 @@ mod context_projection;
 mod model;
 mod pi_adapter;
 mod pi_rpc;
+pub mod plan_mode;
 mod prompt_bridge;
 mod psm_session_catalog;
 mod queue_bridge;
