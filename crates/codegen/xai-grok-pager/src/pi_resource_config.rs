@@ -23,7 +23,7 @@ const RESOURCE_TYPES: [PiResourceType; 4] = [
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
-pub(crate) enum PiResourceType {
+pub enum PiResourceType {
     Extensions,
     Skills,
     Prompts,
@@ -31,7 +31,7 @@ pub(crate) enum PiResourceType {
 }
 
 impl PiResourceType {
-    pub(crate) const fn settings_key(self) -> &'static str {
+    pub const fn settings_key(self) -> &'static str {
         match self {
             Self::Extensions => "extensions",
             Self::Skills => "skills",
@@ -40,7 +40,7 @@ impl PiResourceType {
         }
     }
 
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Extensions => "Extensions",
             Self::Skills => "Skills",
@@ -66,13 +66,13 @@ impl PiResourceType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
-pub(crate) enum PiResourceScope {
+pub enum PiResourceScope {
     User,
     Project,
 }
 
 impl PiResourceScope {
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::User => "Global",
             Self::Project => "Project",
@@ -81,14 +81,14 @@ impl PiResourceScope {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
-pub(crate) enum PiResourceOrigin {
+pub enum PiResourceOrigin {
     Auto,
     Settings,
     Package,
 }
 
 impl PiResourceOrigin {
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Auto => "auto",
             Self::Settings => "settings",
@@ -98,27 +98,27 @@ impl PiResourceOrigin {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum PiProjectOverride {
+pub enum PiProjectOverride {
     Inherit,
     Load,
     Unload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PiResource {
-    pub(crate) path: PathBuf,
-    pub(crate) resource_type: PiResourceType,
-    pub(crate) scope: PiResourceScope,
-    pub(crate) origin: PiResourceOrigin,
-    pub(crate) source: String,
-    pub(crate) base_dir: PathBuf,
-    pub(crate) enabled: bool,
-    pub(crate) inherited_enabled: bool,
-    pub(crate) project_override: PiProjectOverride,
+pub struct PiResource {
+    pub path: PathBuf,
+    pub resource_type: PiResourceType,
+    pub scope: PiResourceScope,
+    pub origin: PiResourceOrigin,
+    pub source: String,
+    pub base_dir: PathBuf,
+    pub enabled: bool,
+    pub inherited_enabled: bool,
+    pub project_override: PiProjectOverride,
 }
 
 impl PiResource {
-    pub(crate) fn display_name(&self) -> String {
+    pub fn display_name(&self) -> String {
         if self.resource_type == PiResourceType::Skills
             && self.path.file_name().and_then(|name| name.to_str()) == Some("SKILL.md")
         {
@@ -138,17 +138,17 @@ impl PiResource {
             .replace('\\', "/")
     }
 
-    pub(crate) fn identity(&self) -> (PiResourceType, PathBuf) {
+    pub fn identity(&self) -> (PiResourceType, PathBuf) {
         (self.resource_type, canonical_or_clean(&self.path))
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PiResourceCatalog {
-    pub(crate) resources: Vec<PiResource>,
-    pub(crate) project_trusted: bool,
-    pub(crate) agent_dir: PathBuf,
-    pub(crate) cwd: PathBuf,
+pub struct PiResourceCatalog {
+    pub resources: Vec<PiResource>,
+    pub project_trusted: bool,
+    pub agent_dir: PathBuf,
+    pub cwd: PathBuf,
 }
 
 fn resource_precedence(resource: &PiResource) -> u8 {
@@ -162,9 +162,23 @@ fn resource_precedence(resource: &PiResource) -> u8 {
 }
 
 impl PiResourceCatalog {
-    pub(crate) fn load(cwd: PathBuf) -> Result<Self> {
+    /// Load the resource catalog using the persisted trust store only.
+    pub fn load(cwd: PathBuf) -> Result<Self> {
+        Self::load_with_trust(cwd, None)
+    }
+
+    /// Load the resource catalog with an optional runtime trust override.
+    ///
+    /// `trust_override` mirrors Pi's `--approve` / `--no-approve` flags:
+    /// - `Some(true)`  — treat the project as trusted for this run (like `--approve`)
+    /// - `Some(false)` — treat the project as untrusted for this run (like `--no-approve`)
+    /// - `None`        — fall back to the persisted `trust.json` decision
+    pub fn load_with_trust(cwd: PathBuf, trust_override: Option<bool>) -> Result<Self> {
         let agent_dir = agent_dir()?;
-        let project_trusted = project_is_trusted(&agent_dir, &cwd)?;
+        let project_trusted = match trust_override {
+            Some(override_val) => override_val,
+            None => project_is_trusted(&agent_dir, &cwd)?,
+        };
         let user_settings = SettingsDocument::load(&agent_dir.join("settings.json"))?;
         let project_dir = cwd.join(CONFIG_DIR_NAME);
         let project_settings = if project_trusted {
@@ -226,7 +240,7 @@ impl PiResourceCatalog {
         })
     }
 
-    pub(crate) fn resources_for_scope(&self, scope: PiResourceScope) -> Vec<&PiResource> {
+    pub fn resources_for_scope(&self, scope: PiResourceScope) -> Vec<&PiResource> {
         self.resources
             .iter()
             .filter(|resource| resource.scope == scope || scope == PiResourceScope::Project)
@@ -280,6 +294,9 @@ impl SettingsDocument {
 struct PackageSource {
     source: String,
     autoload: bool,
+    // Pi changes manifest fallback behavior when a package is represented as
+    // an object, even if that object omits resource-type filters.
+    filtered: bool,
     filters: HashMap<PiResourceType, Vec<String>>,
 }
 
@@ -289,6 +306,7 @@ impl PackageSource {
             return Some(Self {
                 source: source.to_owned(),
                 autoload: true,
+                filtered: false,
                 filters: HashMap::new(),
             });
         }
@@ -314,6 +332,7 @@ impl PackageSource {
         Some(Self {
             source,
             autoload,
+            filtered: true,
             filters,
         })
     }
@@ -328,7 +347,7 @@ fn discover_scope(
     for kind in RESOURCE_TYPES {
         let patterns = settings.resource_patterns(kind);
         for path in explicit_resource_paths(config_dir, kind, &patterns) {
-            let enabled = enabled_by_patterns(&path, &patterns, config_dir);
+            let enabled = enabled_by_overrides(&path, &patterns, config_dir);
             resources.push(resource(
                 path,
                 kind,
@@ -340,7 +359,7 @@ fn discover_scope(
             ));
         }
         for path in auto_resource_paths(config_dir, kind, scope) {
-            let enabled = enabled_by_patterns(&path, &patterns, config_dir);
+            let enabled = enabled_by_overrides(&path, &patterns, config_dir);
             resources.push(resource(
                 path,
                 kind,
@@ -358,12 +377,15 @@ fn discover_scope(
             continue;
         };
         for kind in RESOURCE_TYPES {
-            let filters = package.filters.get(&kind).cloned().unwrap_or_default();
-            for path in package_resource_paths(&package_dir, kind) {
-                let enabled = if package.autoload {
-                    enabled_by_patterns(&path, &filters, &package_dir)
-                } else {
-                    enabled_when_autoload_disabled(&path, &filters, &package_dir)
+            let filters = package.filters.get(&kind);
+            for path in package_resource_paths(&package_dir, kind, package.filtered) {
+                let Some(enabled) = package_enabled_state(
+                    &path,
+                    package.autoload,
+                    filters,
+                    &package_dir,
+                ) else {
+                    continue;
                 };
                 resources.push(resource(
                     path,
@@ -531,31 +553,83 @@ fn ancestor_agent_skill_dirs(cwd: &Path) -> Vec<PathBuf> {
     directories
 }
 
-fn package_resource_paths(package_dir: &Path, kind: PiResourceType) -> Vec<PathBuf> {
+fn package_resource_paths(
+    package_dir: &Path,
+    kind: PiResourceType,
+    use_conventions_for_missing_manifest_type: bool,
+) -> Vec<PathBuf> {
     let manifest = fs::read_to_string(package_dir.join("package.json"))
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .and_then(|value| value.get("pi").cloned());
-    if let Some(entries) = manifest
-        .as_ref()
-        .and_then(|value| value.get(kind.settings_key()))
-        .and_then(Value::as_array)
-    {
-        return entries
+
+    if let Some(manifest) = manifest {
+        let Some(entries) = manifest.get(kind.settings_key()).and_then(Value::as_array) else {
+            // A bare package source with a pi manifest loads only declared
+            // categories. A package object uses Pi's filter path, whose
+            // missing category falls back to the conventional directory.
+            return use_conventions_for_missing_manifest_type
+                .then(|| package_convention_resource_paths(package_dir, kind))
+                .unwrap_or_default();
+        };
+        let paths = entries
             .iter()
             .filter_map(Value::as_str)
+            .filter(|entry| !starts_with_any(entry, &['!', '+', '-']))
             .flat_map(|entry| discover_resource_path(&resolve_path(package_dir, entry), kind))
+            .collect::<Vec<_>>();
+        let manifest_overrides = entries
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|entry| starts_with_any(entry, &['!', '+', '-']))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        return paths
+            .into_iter()
+            .filter(|path| enabled_by_patterns(path, &manifest_overrides, package_dir))
             .collect();
     }
+
+    package_convention_resource_paths(package_dir, kind)
+}
+
+fn package_convention_resource_paths(package_dir: &Path, kind: PiResourceType) -> Vec<PathBuf> {
+    let convention_dir = package_dir.join(kind.settings_key());
     match kind {
-        PiResourceType::Extensions => {
-            let index = [package_dir.join("index.ts"), package_dir.join("index.js")]
-                .into_iter()
-                .find(|path| path.is_file());
-            index.map_or_else(Vec::new, |path| vec![path])
-        }
-        _ => discover_resource_path(package_dir.join(kind.settings_key()).as_path(), kind),
+        PiResourceType::Extensions => auto_extension_paths(&convention_dir),
+        _ => discover_resource_path(&convention_dir, kind),
     }
+}
+
+fn package_enabled_state(
+    path: &Path,
+    autoload: bool,
+    filters: Option<&Vec<String>>,
+    base_dir: &Path,
+) -> Option<bool> {
+    match (autoload, filters) {
+        (true, None) => Some(true),
+        // Pi treats an explicitly empty filter array as an instruction to
+        // disable this resource category, rather than as a missing filter.
+        (true, Some(filters)) if filters.is_empty() => Some(false),
+        (true, Some(filters)) => Some(enabled_by_patterns(path, filters, base_dir)),
+        // autoload:false is a delta package: only resources named by its
+        // filters enter Pi's resolver; unmatched resources must not appear.
+        (false, None) => None,
+        (false, Some(filters)) => has_autoload_disabled_match(path, filters, base_dir)
+            .then(|| enabled_when_autoload_disabled(path, filters, base_dir)),
+    }
+}
+
+fn has_autoload_disabled_match(path: &Path, patterns: &[String], base_dir: &Path) -> bool {
+    patterns.iter().any(|pattern| {
+        let target = pattern.trim_start_matches(['+', '-', '!']);
+        if starts_with_any(pattern, &['+', '-']) {
+            matches_exact(path, target, base_dir)
+        } else {
+            matches_pattern(path, target, base_dir)
+        }
+    })
 }
 
 fn discover_resource_path(path: &Path, kind: PiResourceType) -> Vec<PathBuf> {
@@ -568,14 +642,22 @@ fn discover_resource_path(path: &Path, kind: PiResourceType) -> Vec<PathBuf> {
     if !path.is_dir() {
         return Vec::new();
     }
+    let root = canonical_or_clean(path);
     let mut builder = WalkBuilder::new(path);
     builder
-        .hidden(true)
+        // Pi skips hidden entries *inside* a resource root. Enabling the
+        // WalkBuilder hidden filter would also reject every child of ~/.pi.
+        .hidden(false)
         .git_ignore(true)
         .ignore(true)
-        .parents(true)
+        // Pi begins ignore matching at the supplied resource root; parent
+        // ignore files must not suppress an installed package's entries.
+        .parents(false)
         .require_git(false)
-        .filter_entry(move |entry| entry.file_name().to_str() != Some("node_modules"));
+        .filter_entry(move |entry| {
+            let name = entry.file_name().to_str().unwrap_or_default();
+            entry.path() == root || (name != "node_modules" && !name.starts_with('.'))
+        });
     let mut entries = BTreeSet::new();
     for entry in builder.build().flatten() {
         let candidate = entry.path();
@@ -592,6 +674,15 @@ fn discover_resource_path(path: &Path, kind: PiResourceType) -> Vec<PathBuf> {
     entries.into_iter().collect()
 }
 
+fn enabled_by_overrides(path: &Path, entries: &[String], base_dir: &Path) -> bool {
+    let overrides = entries
+        .iter()
+        .filter(|entry| starts_with_any(entry, &['!', '+', '-']))
+        .cloned()
+        .collect::<Vec<_>>();
+    enabled_by_patterns(path, &overrides, base_dir)
+}
+
 fn enabled_by_patterns(path: &Path, patterns: &[String], base_dir: &Path) -> bool {
     let includes = patterns
         .iter()
@@ -601,22 +692,30 @@ fn enabled_by_patterns(path: &Path, patterns: &[String], base_dir: &Path) -> boo
         || includes
             .iter()
             .any(|pattern| matches_pattern(path, pattern, base_dir));
-    for pattern in patterns {
-        if let Some(target) = pattern.strip_prefix('!')
-            && matches_pattern(path, target, base_dir)
-        {
-            enabled = false;
-        }
-        if let Some(target) = pattern.strip_prefix('+')
-            && matches_exact(path, target, base_dir)
-        {
-            enabled = true;
-        }
-        if let Some(target) = pattern.strip_prefix('-')
-            && matches_exact(path, target, base_dir)
-        {
-            enabled = false;
-        }
+
+    // Pi applies overrides by category, not left-to-right input ordering:
+    // excludes → force-includes → force-excludes. In particular, a '-' always
+    // wins over a '+' for the same resource.
+    if patterns.iter().any(|pattern| {
+        pattern
+            .strip_prefix('!')
+            .is_some_and(|target| matches_pattern(path, target, base_dir))
+    }) {
+        enabled = false;
+    }
+    if patterns.iter().any(|pattern| {
+        pattern
+            .strip_prefix('+')
+            .is_some_and(|target| matches_exact(path, target, base_dir))
+    }) {
+        enabled = true;
+    }
+    if patterns.iter().any(|pattern| {
+        pattern
+            .strip_prefix('-')
+            .is_some_and(|target| matches_exact(path, target, base_dir))
+    }) {
+        enabled = false;
     }
     enabled
 }
@@ -726,12 +825,18 @@ fn matches_exact(path: &Path, pattern: &str, base_dir: &Path) -> bool {
 }
 
 fn package_dir(source: &str, base_dir: &Path, agent_dir: &Path) -> Option<PathBuf> {
+    let source = source.trim();
     if source.starts_with("npm:") {
         let name = npm_package_name(source.strip_prefix("npm:")?);
         let directory = agent_dir.join("npm/node_modules").join(name);
         return directory.is_dir().then_some(directory);
     }
-    if source.starts_with("http://") || source.starts_with("https://") || source.starts_with("git@")
+    if source.starts_with("git:")
+        || source.starts_with("http://")
+        || source.starts_with("https://")
+        || source.starts_with("ssh://")
+        || source.starts_with("git://")
+        || source.starts_with("git@")
     {
         return git_package_dir(source, agent_dir);
     }
@@ -751,22 +856,25 @@ fn npm_package_name(spec: &str) -> &str {
 }
 
 fn git_package_dir(source: &str, agent_dir: &Path) -> Option<PathBuf> {
+    let source = source.trim().strip_prefix("git:").unwrap_or(source.trim());
     let trimmed = source
         .trim_start_matches("git+")
         .split(['#', '?'])
         .next()
         .unwrap_or(source)
         .trim_end_matches(".git");
-    let path_part = trimmed
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .or_else(|| {
-            trimmed
-                .strip_prefix("git@")?
-                .split_once(':')
-                .map(|(_, path)| path)
-        })?;
-    let (host, path) = path_part.split_once('/')?;
+
+    let (host, path) = if let Some(rest) = trimmed.strip_prefix("git@") {
+        // SSH shorthand: git@github.com:owner/repo
+        rest.split_once(':')?
+    } else if let Some((_, rest)) = trimmed.split_once("://") {
+        // https://, ssh:// and git:// URLs
+        rest.split_once('/')?
+    } else {
+        // Pi's git: prefix accepts hosted shorthand: git:github.com/owner/repo
+        let (host, path) = trimmed.split_once('/')?;
+        (host, path)
+    };
     let candidate = agent_dir.join("git").join(host).join(path);
     candidate.is_dir().then_some(candidate)
 }
@@ -834,7 +942,7 @@ impl PiResourceCatalog {
     /// Persist the global enable/disable state using the same `+path` / `-path`
     /// representation as Pi's ConfigSelector. Runtime resource loading remains
     /// restart/reload-bound, so callers must make that boundary visible to users.
-    pub(crate) fn set_global_enabled(&self, resource: &PiResource, enabled: bool) -> Result<()> {
+    pub fn set_global_enabled(&self, resource: &PiResource, enabled: bool) -> Result<()> {
         if resource.scope != PiResourceScope::User {
             bail!("global resource mutation requires a user-scoped resource");
         }
@@ -850,7 +958,7 @@ impl PiResourceCatalog {
 
     /// Persist one project-local Pi override. Project writes are rejected unless
     /// Pi's own trust store authoritatively marks the active project trusted.
-    pub(crate) fn set_project_override(
+    pub fn set_project_override(
         &self,
         resource: &PiResource,
         override_state: PiProjectOverride,
@@ -1106,15 +1214,182 @@ mod tests {
     }
 
     #[test]
-    fn force_exclude_wins_over_include() {
+    fn git_package_dir_resolves_https_and_ssh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agent_dir = tmp.path().to_path_buf();
+
+        // Create the expected directory so is_dir() passes.
+        let repo_dir = agent_dir.join("git/github.com/owner/repo");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+
+        // Pi git: hosted shorthand.
+        let dir = git_package_dir("git:github.com/owner/repo", &agent_dir);
+        assert_eq!(dir, Some(repo_dir.clone()));
+
+        // HTTPS URL
+        let dir = git_package_dir("https://github.com/owner/repo", &agent_dir);
+        assert_eq!(dir, Some(repo_dir.clone()));
+
+        // SSH URL (git@host:path form)
+        let dir = git_package_dir("git@github.com:owner/repo", &agent_dir);
+        assert_eq!(dir, Some(repo_dir.clone()));
+
+        // git+ prefix and .git suffix stripped
+        let dir = git_package_dir("git+https://github.com/owner/repo.git", &agent_dir);
+        assert_eq!(dir, Some(repo_dir.clone()));
+
+        // Branch/query fragments stripped
+        let dir = git_package_dir("https://github.com/owner/repo#main", &agent_dir);
+        assert_eq!(dir, Some(repo_dir));
+
+        // Non-existent directory returns None
+        assert!(git_package_dir("https://github.com/other/missing", &agent_dir).is_none());
+    }
+
+    #[test]
+    fn git_prefixed_package_source_uses_pi_git_cache_layout() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let package = temp.path().join("git/github.com/owner/repo");
+        fs::create_dir_all(&package).expect("package directory");
+        fs::write(
+            package.join("package.json"),
+            r#"{"pi":{"extensions":["index.ts"]}}"#,
+        )
+        .expect("manifest");
+        fs::write(package.join("index.ts"), "export default () => {}; ").expect("extension");
+        let settings = SettingsDocument {
+            root: serde_json::json!({"packages": ["git:github.com/owner/repo"]})
+                .as_object()
+                .expect("settings object")
+                .clone(),
+        };
+
+        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings)
+            .into_iter()
+            .filter(|resource| resource.origin == PiResourceOrigin::Package)
+            .collect::<Vec<_>>();
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].path, canonical_or_clean(&package.join("index.ts")));
+        assert_eq!(resources[0].source, "git:github.com/owner/repo");
+        assert!(resources[0].enabled);
+    }
+
+    #[test]
+    fn auto_resources_ignore_unrelated_explicit_entries_when_enabled() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let extensions = temp.path().join("extensions");
+        fs::create_dir_all(&extensions).expect("extensions directory");
+        fs::write(extensions.join("auto.ts"), "export default () => {}; ").expect("auto extension");
+        fs::write(temp.path().join("outside.ts"), "export default () => {}; ")
+            .expect("explicit extension");
+        let settings = SettingsDocument {
+            root: serde_json::json!({"extensions": ["outside.ts"]})
+                .as_object()
+                .expect("settings object")
+                .clone(),
+        };
+
+        let auto = discover_scope(PiResourceScope::User, temp.path(), &settings)
+            .into_iter()
+            .find(|resource| resource.path == canonical_or_clean(&extensions.join("auto.ts")))
+            .expect("auto-discovered extension");
+        assert!(auto.enabled);
+    }
+
+    #[test]
+    fn package_empty_filter_disables_all_declared_resources() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let package = temp.path().join("package");
+        fs::create_dir_all(&package).expect("package directory");
+        fs::write(
+            package.join("package.json"),
+            r#"{"pi":{"extensions":["index.ts"]}}"#,
+        )
+        .expect("manifest");
+        fs::write(package.join("index.ts"), "export default () => {}; ").expect("extension");
+        let settings = SettingsDocument {
+            root: serde_json::json!({
+                "packages": [{"source": "./package", "extensions": []}]
+            })
+            .as_object()
+            .expect("settings object")
+            .clone(),
+        };
+
+        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings)
+            .into_iter()
+            .filter(|resource| resource.origin == PiResourceOrigin::Package)
+            .collect::<Vec<_>>();
+        assert_eq!(resources.len(), 1);
+        assert!(!resources[0].enabled);
+    }
+
+    #[test]
+    fn package_manifest_omitted_category_does_not_fall_back_to_conventions() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let package = temp.path().join("package");
+        fs::create_dir_all(package.join("skills/example")).expect("skills directory");
+        fs::write(
+            package.join("package.json"),
+            r#"{"pi":{"extensions":["index.ts"]}}"#,
+        )
+        .expect("manifest");
+        fs::write(package.join("index.ts"), "export default () => {}; ").expect("extension");
+        fs::write(package.join("skills/example/SKILL.md"), "# skill").expect("skill");
+        let settings = SettingsDocument {
+            root: serde_json::json!({"packages": ["./package"]})
+                .as_object()
+                .expect("settings object")
+                .clone(),
+        };
+
+        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings)
+            .into_iter()
+            .filter(|resource| resource.origin == PiResourceOrigin::Package)
+            .collect::<Vec<_>>();
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].resource_type, PiResourceType::Extensions);
+    }
+
+    #[test]
+    fn package_object_missing_manifest_category_uses_convention_directory() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let package = temp.path().join("package");
+        fs::create_dir_all(package.join("skills/example")).expect("skills directory");
+        fs::write(
+            package.join("package.json"),
+            r#"{"pi":{"extensions":["index.ts"]}}"#,
+        )
+        .expect("manifest");
+        fs::write(package.join("index.ts"), "export default () => {}; ").expect("extension");
+        fs::write(package.join("skills/example/SKILL.md"), "# skill").expect("skill");
+        let settings = SettingsDocument {
+            root: serde_json::json!({"packages": [{"source": "./package"}]})
+                .as_object()
+                .expect("settings object")
+                .clone(),
+        };
+
+        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings)
+            .into_iter()
+            .filter(|resource| resource.origin == PiResourceOrigin::Package)
+            .collect::<Vec<_>>();
+        assert_eq!(resources.len(), 2);
+        assert!(resources
+            .iter()
+            .any(|resource| resource.resource_type == PiResourceType::Skills));
+    }
+
+    #[test]
+    fn force_exclude_wins_over_include_regardless_of_array_order() {
         let base = Path::new("/tmp/pi");
         let path = Path::new("/tmp/pi/extensions/example.ts");
         assert!(!enabled_by_patterns(
             path,
             &[
                 "*.ts".to_owned(),
-                "+extensions/example.ts".to_owned(),
-                "-extensions/example.ts".to_owned()
+                "-extensions/example.ts".to_owned(),
+                "+extensions/example.ts".to_owned()
             ],
             base,
         ));
@@ -1288,6 +1563,20 @@ mod tests {
         assert!(
             !cwd.join(CONFIG_DIR_NAME).join("settings.json").exists(),
             "the rejected mutation must not create project settings"
+        );
+    }
+
+    #[test]
+    fn resource_discovery_allows_hidden_pi_ancestors() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let skills = temp.path().join(".pi/agent/git/github.com/owner/repo/skills");
+        let skill = skills.join("example/SKILL.md");
+        fs::create_dir_all(skill.parent().expect("skill parent")).expect("skills directory");
+        fs::write(&skill, "# skill").expect("skill");
+
+        assert_eq!(
+            discover_resource_path(&skills, PiResourceType::Skills),
+            vec![canonical_or_clean(&skill)]
         );
     }
 }

@@ -18,6 +18,7 @@ use ratatui::text::Line;
 use crate::pi_resource_config::{
     PiProjectOverride, PiResource, PiResourceCatalog, PiResourceOrigin, PiResourceScope,
 };
+use crate::pi_resource_policy::ResourcePolicy;
 use crate::scrollback::blocks::markdown_content::MarkdownContent;
 use crate::theme::Theme;
 use crate::views::modal_window::{
@@ -25,7 +26,43 @@ use crate::views::modal_window::{
 };
 
 const TABS: [&str; 2] = ["Global", "Project"];
-const SHORTCUTS: [Shortcut<'static>; 6] = [
+
+/// Mirrors the enabled-state filtering used by Grok's native MCP/plugin modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ResourceFilter {
+    #[default]
+    All,
+    Enabled,
+    Disabled,
+}
+
+impl ResourceFilter {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Enabled => "Enabled",
+            Self::Disabled => "Disabled",
+        }
+    }
+
+    const fn next(self) -> Self {
+        match self {
+            Self::All => Self::Enabled,
+            Self::Enabled => Self::Disabled,
+            Self::Disabled => Self::All,
+        }
+    }
+
+    const fn matches(self, enabled: bool) -> bool {
+        match self {
+            Self::All => true,
+            Self::Enabled => enabled,
+            Self::Disabled => !enabled,
+        }
+    }
+}
+
+const SHORTCUTS: [Shortcut<'static>; 9] = [
     Shortcut {
         label: "↑/↓ navigate",
         clickable: false,
@@ -42,12 +79,27 @@ const SHORTCUTS: [Shortcut<'static>; 6] = [
         id: 0,
     },
     Shortcut {
+        label: "f filter",
+        clickable: false,
+        id: 0,
+    },
+    Shortcut {
+        label: "a policy",
+        clickable: false,
+        id: 0,
+    },
+    Shortcut {
         label: "/ search",
         clickable: false,
         id: 0,
     },
     Shortcut {
-        label: "Tab scope",
+        label: "Tab/⇧Tab scope",
+        clickable: false,
+        id: 0,
+    },
+    Shortcut {
+        label: "r refresh",
         clickable: false,
         id: 0,
     },
@@ -98,10 +150,12 @@ struct PackagePreview {
 pub struct PiConfigModalState {
     pub window: ModalWindowState,
     catalog: PiResourceCatalog,
+    policy: ResourcePolicy,
     scope: PiResourceScope,
     selected: usize,
     scroll: usize,
     folded_sources: HashSet<String>,
+    filter: ResourceFilter,
     search_query: String,
     search_active: bool,
     list_rect: Option<Rect>,
@@ -121,13 +175,16 @@ pub enum PiConfigOutcome {
 impl PiConfigModalState {
     pub fn open(cwd: PathBuf) -> Result<Self> {
         let catalog = PiResourceCatalog::load(cwd)?;
+        let policy = ResourcePolicy::load_from_config();
         let mut state = Self {
             window: ModalWindowState::new(),
             catalog,
+            policy,
             scope: PiResourceScope::User,
             selected: 0,
             scroll: 0,
             folded_sources: HashSet::new(),
+            filter: ResourceFilter::default(),
             search_query: String::new(),
             search_active: false,
             list_rect: None,
@@ -170,7 +227,7 @@ impl PiConfigModalState {
 
         match key.code {
             KeyCode::Esc | KeyCode::F(2) => PiConfigOutcome::Close,
-            KeyCode::Tab if self.catalog.project_trusted => {
+            KeyCode::Tab | KeyCode::BackTab if self.catalog.project_trusted => {
                 self.select_tab(match self.scope {
                     PiResourceScope::User => 1,
                     PiResourceScope::Project => 0,
@@ -223,6 +280,15 @@ impl PiConfigModalState {
             }
             KeyCode::Char('r') if key.modifiers.is_empty() => {
                 self.refresh();
+                PiConfigOutcome::Changed
+            }
+            KeyCode::Char('f') if key.modifiers.is_empty() => {
+                self.filter = self.filter.next();
+                self.reset_after_filter_change();
+                PiConfigOutcome::Changed
+            }
+            KeyCode::Char('a') if key.modifiers.is_empty() => {
+                self.toggle_policy();
                 PiConfigOutcome::Changed
             }
             KeyCode::Char(character) if key.modifiers.is_empty() => {
@@ -289,6 +355,15 @@ impl PiConfigModalState {
 
     fn handle_search_key(&mut self, key: &KeyEvent) -> PiConfigOutcome {
         match key.code {
+            KeyCode::Tab | KeyCode::BackTab if self.catalog.project_trusted => {
+                // Keep the query so users can compare the same match across
+                // Global and Project without first dismissing search.
+                self.search_active = false;
+                self.select_tab(match self.scope {
+                    PiResourceScope::User => 1,
+                    PiResourceScope::Project => 0,
+                });
+            }
             KeyCode::Esc => {
                 if self.search_query.is_empty() {
                     self.search_active = false;
@@ -315,7 +390,7 @@ impl PiConfigModalState {
     fn visible_rows(&self) -> Vec<PiConfigRow> {
         let mut groups: BTreeMap<String, (String, Vec<PiResource>)> = BTreeMap::new();
         for resource in self.catalog.resources_for_scope(self.scope) {
-            if !self.matches_search(resource) {
+            if !self.matches_resource(resource) {
                 continue;
             }
             let id = source_id(resource);
@@ -382,19 +457,49 @@ impl PiConfigModalState {
         self.clamp_selected();
     }
 
-    fn matches_search(&self, resource: &PiResource) -> bool {
+    fn matches_resource(&self, resource: &PiResource) -> bool {
+        if !self.filter.matches(resource.enabled) {
+            return false;
+        }
         let query = self.search_query.trim().to_lowercase();
         if query.is_empty() {
             return true;
         }
+        let policy_state = if self.policy.allow.iter().any(|source| source == &resource.source) {
+            "policy allowed"
+        } else if self.policy.block.iter().any(|source| source == &resource.source) {
+            "policy blocked"
+        } else if crate::pi_resource_policy::DEFAULT_BLOCKED_SOURCES
+            .iter()
+            .any(|source| *source == resource.source)
+        {
+            "policy default blocked"
+        } else if resource.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
         [
             resource.display_name(),
             resource.resource_type.label().to_owned(),
             source_label(resource),
             resource.path.display().to_string(),
+            policy_state.to_owned(),
         ]
         .into_iter()
         .any(|value| value.to_lowercase().contains(&query))
+    }
+
+    fn scope_resource_count(&self) -> usize {
+        self.catalog.resources_for_scope(self.scope).len()
+    }
+
+    fn matching_resource_count(&self) -> usize {
+        self.catalog
+            .resources_for_scope(self.scope)
+            .into_iter()
+            .filter(|resource| self.matches_resource(resource))
+            .count()
     }
 
     fn activate_selected(&mut self) {
@@ -460,6 +565,38 @@ impl PiConfigModalState {
         }
     }
 
+    /// Toggle the grok-pi resource policy (allow/block) for the selected
+    /// resource.  Cycles: default → block → allow → default.  Persists to
+    /// `~/.grok/config.toml` under `[pi.resources]`.
+    fn toggle_policy(&mut self) {
+        let Some(PiConfigRow::Resource(resource)) = self.visible_rows().get(self.selected).cloned()
+        else {
+            return;
+        };
+        let source = &resource.source;
+        let in_allow = self.policy.allow.iter().any(|s| s == source);
+        let in_block = self.policy.block.iter().any(|s| s == source);
+        if in_allow {
+            // allow → default (remove from allow)
+            self.policy.allow.retain(|s| s != source);
+            self.notice = Some(format!("Policy: removed allow for {source}"));
+        } else if in_block {
+            // block → allow
+            self.policy.block.retain(|s| s != source);
+            self.policy.allow.push(source.clone());
+            self.notice = Some(format!(
+                "Policy: {source} → allow (overrides default blocklist)"
+            ));
+        } else {
+            // default → block
+            self.policy.block.push(source.clone());
+            self.notice = Some(format!("Policy: {source} → block"));
+        }
+        if let Err(error) = self.policy.save_to_config() {
+            self.notice = Some(format!("Failed to save policy: {error}"));
+        }
+    }
+
     fn move_selection(&mut self, delta: isize) {
         let len = self.visible_rows().len() as isize;
         if len == 0 {
@@ -519,6 +656,7 @@ impl PiConfigModalState {
     }
 
     fn refresh(&mut self) {
+        self.policy = ResourcePolicy::load_from_config();
         match PiResourceCatalog::load(self.catalog.cwd.clone()) {
             Ok(catalog) => {
                 self.catalog = catalog;
@@ -577,12 +715,8 @@ fn source_id(resource: &PiResource) -> String {
 
 fn source_label(resource: &PiResource) -> String {
     match resource.origin {
-        PiResourceOrigin::Package if resource.source.starts_with("https://github.com/") => {
-            let repo = resource
-                .source
-                .trim_start_matches("https://github.com/")
-                .trim_end_matches(".git");
-            format!("GitHub · {repo}")
+        PiResourceOrigin::Package if github_repo(&resource.source).is_some() => {
+            format!("GitHub · {}", github_repo(&resource.source).unwrap_or_default())
         }
         PiResourceOrigin::Package if resource.source.starts_with("npm:") => {
             format!("npm · {}", resource.source.trim_start_matches("npm:"))
@@ -591,6 +725,14 @@ fn source_label(resource: &PiResource) -> String {
         PiResourceOrigin::Auto => format!("Auto-discovered · {}", resource.base_dir.display()),
         PiResourceOrigin::Settings => format!("Settings path · {}", resource.base_dir.display()),
     }
+}
+
+fn github_repo(source: &str) -> Option<&str> {
+    source
+        .strip_prefix("git:github.com/")
+        .or_else(|| source.strip_prefix("https://github.com/"))
+        .or_else(|| source.strip_prefix("http://github.com/"))
+        .map(|repo| repo.trim_end_matches(".git"))
 }
 
 fn package_preview(resource: PiResource, key: String) -> PackagePreview {
@@ -737,6 +879,12 @@ fn render_resource_tree(
         (PiResourceScope::User, false) => "Global · project is not trusted",
         (PiResourceScope::Project, _) => "Project overrides · inherit/load/unload",
     };
+    let matching_resources = state.matching_resource_count();
+    let scope_resources = state.scope_resource_count();
+    let scope_description = format!(
+        "{scope_description} · {} · {matching_resources}/{scope_resources} resources",
+        state.filter.label(),
+    );
     let search_label = if state.search_query.is_empty() {
         "Search resources…"
     } else {
@@ -748,7 +896,7 @@ fn render_resource_tree(
         x,
         y,
         width,
-        &format!("/ {search_label}{cursor}"),
+        &format!("/ [{}] {search_label}{cursor}", state.filter.label()),
         if state.search_active {
             Style::default().fg(theme.fuzzy_accent)
         } else {
@@ -762,7 +910,7 @@ fn render_resource_tree(
         x,
         y,
         width,
-        scope_description,
+        &scope_description,
         Style::default().fg(theme.gray_dim),
     );
     y = y.saturating_add(1);
@@ -834,11 +982,15 @@ fn render_resource_tree(
                     format!("{fold} {label} · {resource_count}")
                 }
                 PiConfigRow::ResourceType { label, .. } => format!("  {label}"),
-                PiConfigRow::Resource(resource) => format!(
-                    "    {} {}",
-                    marker_for(resource, state.scope),
-                    resource.display_name()
-                ),
+                PiConfigRow::Resource(resource) => {
+                    let policy_tag = policy_marker(&state.policy, resource);
+                    format!(
+                        "    {} {}{}",
+                        marker_for(resource, state.scope),
+                        resource.display_name(),
+                        policy_tag,
+                    )
+                }
             };
             write_line(buf, x, y.saturating_add(offset as u16), width, &text, style);
         }
@@ -852,7 +1004,14 @@ fn render_resource_tree(
             PiConfigRow::Source { label, .. } => format!("{label} · Space/Enter toggles"),
             PiConfigRow::ResourceType { label, .. } => format!("{label} resources"),
             PiConfigRow::Resource(resource) => {
-                format!("{} · {}", resource.path.display(), resource.scope.label())
+                let pol = if state.policy.allow.iter().any(|s| s == &resource.source) {
+                    " · policy: allow"
+                } else if state.policy.block.iter().any(|s| s == &resource.source) {
+                    " · policy: block"
+                } else {
+                    ""
+                };
+                format!("{} · {}{pol}", resource.path.display(), resource.scope.label())
             }
         },
     );
@@ -874,7 +1033,10 @@ fn render_resource_tree(
         x,
         help_y,
         width,
-        &format!("({position}/{count}) {hint}"),
+        &format!(
+            "({position}/{count}) {} · {matching_resources}/{scope_resources} resources · {hint}",
+            state.filter.label(),
+        ),
         Style::default().fg(theme.gray_dim),
     );
 }
@@ -976,6 +1138,25 @@ fn marker_for(resource: &PiResource, scope: PiResourceScope) -> &'static str {
     if resource.enabled { "[x]" } else { "[ ]" }
 }
 
+/// Policy tag shown next to a resource name in the tree.
+/// Returns a short suffix like " ⛔ blocked" or " ✅ forced" or empty string.
+fn policy_marker(policy: &ResourcePolicy, resource: &PiResource) -> String {
+    let source = &resource.source;
+    if policy.allow.iter().any(|s| s == source) {
+        return " ✅ forced".to_owned();
+    }
+    if policy.block.iter().any(|s| s == source) {
+        return " ⛔ blocked".to_owned();
+    }
+    // Check default blocklist
+    for blocked in crate::pi_resource_policy::DEFAULT_BLOCKED_SOURCES {
+        if source == blocked {
+            return " ⛔ default-blocked".to_owned();
+        }
+    }
+    String::new()
+}
+
 fn write_line(buf: &mut Buffer, x: u16, y: u16, width: usize, text: &str, style: Style) {
     buf.set_line(x, y, &Line::styled(text, style), width as u16);
 }
@@ -1011,10 +1192,12 @@ mod tests {
                 agent_dir: PathBuf::from("/tmp/pi"),
                 cwd: PathBuf::from("/tmp/project"),
             },
+            policy: ResourcePolicy::default(),
             scope: PiResourceScope::User,
             selected: 0,
             scroll: 0,
             folded_sources: HashSet::new(),
+            filter: ResourceFilter::default(),
             search_query: String::new(),
             search_active: false,
             list_rect: None,
@@ -1059,6 +1242,43 @@ mod tests {
     }
 
     #[test]
+    fn status_filter_cycles_and_limits_visible_resources() {
+        let mut state = state();
+        state.catalog.resources[1].enabled = false;
+
+        let key = KeyEvent::new(KeyCode::Char('f'), crossterm::event::KeyModifiers::NONE);
+        state.handle_key(&key);
+        assert_eq!(state.filter, ResourceFilter::Enabled);
+        assert_eq!(state.matching_resource_count(), 1);
+
+        state.handle_key(&key);
+        assert_eq!(state.filter, ResourceFilter::Disabled);
+        assert_eq!(state.matching_resource_count(), 1);
+
+        state.handle_key(&key);
+        assert_eq!(state.filter, ResourceFilter::All);
+        assert_eq!(state.matching_resource_count(), 2);
+    }
+
+    #[test]
+    fn tab_and_backtab_switch_scope_without_clearing_search() {
+        let mut state = state();
+        state.search_query = "alpha".to_owned();
+        let tab = KeyEvent::new(KeyCode::Tab, crossterm::event::KeyModifiers::NONE);
+        let backtab = KeyEvent::new(KeyCode::BackTab, crossterm::event::KeyModifiers::SHIFT);
+
+        state.handle_key(&tab);
+        assert_eq!(state.scope, PiResourceScope::Project);
+        assert_eq!(state.search_query, "alpha");
+
+        state.search_active = true;
+        state.handle_key(&backtab);
+        assert_eq!(state.scope, PiResourceScope::User);
+        assert_eq!(state.search_query, "alpha");
+        assert!(!state.search_active);
+    }
+
+    #[test]
     fn automatic_resource_names_keep_the_relative_path() {
         assert_eq!(
             resource("extensions/alpha.ts", "auto").display_name(),
@@ -1070,6 +1290,8 @@ mod tests {
     fn github_source_has_a_concise_identity_label() {
         let mut resource = resource("index.ts", "https://github.com/acme/example.git");
         resource.origin = PiResourceOrigin::Package;
+        assert_eq!(source_label(&resource), "GitHub · acme/example");
+        resource.source = "git:github.com/acme/example".to_owned();
         assert_eq!(source_label(&resource), "GitHub · acme/example");
     }
 

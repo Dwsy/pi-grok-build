@@ -686,6 +686,9 @@ fn handle_browse(state: &mut SettingsModalState, key: &KeyEvent) -> SettingsKeyO
             }
         }
         KeyCode::Enter => {
+            if matches!(state.focused_setting(), Some(("pi_config", _))) {
+                return SettingsKeyOutcome::Action(Action::OpenPiConfig);
+            }
             if matches!(state.focused_setting(), Some(("recap_model", _))) {
                 return SettingsKeyOutcome::Action(Action::OpenRecapModelPicker);
             }
