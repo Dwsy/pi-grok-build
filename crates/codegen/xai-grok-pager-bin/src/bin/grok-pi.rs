@@ -94,6 +94,7 @@ const PI_GROK_NATIVE_COMMANDS: &[&str] = &[
     // Native Grok transcript/navigation surfaces over the Pi-backed session.
     "copy",
     "find",
+    "jump",
     "transcript",
     "export",
     "expand",
@@ -665,7 +666,8 @@ mod env_flag_tests {
     }
 
     #[test]
-    fn grok_pi_command_profile_includes_voice() {
+    fn grok_pi_command_profile_includes_native_navigation() {
+        assert!(PI_GROK_NATIVE_COMMANDS.contains(&"jump"));
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"voice"));
     }
 

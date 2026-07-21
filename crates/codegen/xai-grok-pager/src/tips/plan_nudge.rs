@@ -32,13 +32,11 @@ const PLANNING_KEYWORDS: &[&str] = &[
     "strategy",
 ];
 
-/// Plan-mode chord for the tip copy: always `shift+tab`. Derived from the real
-/// `CycleMode` binding (not a literal) — `shift_tab_keys()[0]` is one of the
-/// encodings [`crate::input::key::is_shift_tab`] accepts — so it can't drift.
+/// Plan-mode chord for the tip copy: `ctrl+shift+t`. The CycleMode binding
+/// was moved from Shift+Tab (now used for thinking level cycling) to
+/// Ctrl+Shift+T in the external/grok-pi profile.
 fn plan_chord_label() -> String {
-    crate::input::key::shift_tab_keys()[0]
-        .display()
-        .to_ascii_lowercase()
+    "ctrl+shift+t".to_string()
 }
 
 /// Build the "Planning? Check out plan mode via {chord}" tip, seen-gated to
@@ -143,15 +141,8 @@ mod tests {
     }
 
     #[test]
-    fn plan_nudge_chord_is_shift_tab() {
-        // Always shift+tab — derived from the real binding so it can't drift.
-        assert_eq!(plan_chord_label(), "shift+tab");
-        // The advertised chord is genuinely one is_shift_tab accepts.
-        assert!(crate::input::key::is_shift_tab(
-            &crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::BackTab,
-                crossterm::event::KeyModifiers::NONE,
-            )
-        ));
+    fn plan_nudge_chord_is_ctrl_shift_t() {
+        // Ctrl+Shift+T — the CycleMode binding for external/grok-pi profile.
+        assert_eq!(plan_chord_label(), "ctrl+shift+t");
     }
 }

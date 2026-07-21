@@ -237,6 +237,7 @@ impl AgentView {
             question_scroll_region: None,
             plan_mode_active: false,
             plan_mode_pending: None,
+            pi_plan_file_path: None,
             deferred_session_mode: None,
             pending_extensions_fetch: false,
             in_dashboard_overlay: false,
@@ -260,6 +261,7 @@ impl AgentView {
             cancel_trigger_hint: None,
             rewind_state: None,
             rewind_points: None,
+            jump_state: None,
             inline_edit: None,
             pending_inline_resubmit: None,
             timeline_rail: None,
@@ -345,6 +347,7 @@ impl AgentView {
     /// recoverable until [`finish_session_reload`](Self::finish_session_reload)
     /// decides the outcome.
     pub(crate) fn begin_session_reload(&mut self, generation: u64) {
+        self.dismiss_jump_picker();
         if let Some(prev) = self.session_reload.take() {
             tracing::warn!(
                 generation,

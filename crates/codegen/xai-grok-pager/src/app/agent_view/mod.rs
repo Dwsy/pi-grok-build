@@ -151,6 +151,7 @@ use std::time::Instant;
 mod cta;
 mod input;
 mod interactions;
+mod jump;
 mod links;
 mod media;
 mod modals;
@@ -1222,6 +1223,10 @@ pub struct AgentView {
     /// tool completes, cleared when `exit_plan_mode` tool completes.
     /// Controls prompt accent color and shortcut bar hints.
     pub(crate) plan_mode_active: bool,
+    /// Pi adapter's plan file path (sidecar `<session>.plan.md`). Set via
+    /// `pi/ui/plan_file` ext notification. When present, `/view-plan` reads
+    /// this path instead of the Grok-native `~/.grok/sessions/…/plan.md`.
+    pub(crate) pi_plan_file_path: Option<std::path::PathBuf>,
     /// Optimistic plan-mode state set immediately on Shift+Tab.
     /// Cleared to `None` when `detect_plan_mode_change()` confirms real state.
     /// The cycle logic uses `plan_mode_pending.unwrap_or(plan_mode_active)`
@@ -1295,6 +1300,7 @@ pub struct AgentView {
     pub(crate) cancel_trigger_hint: Option<crate::app::actions::CancelTrigger>,
     pub(crate) rewind_state: Option<crate::views::rewind::RewindState>,
     pub(crate) rewind_points: Option<Vec<crate::views::rewind::RewindPointInfo>>,
+    pub(crate) jump_state: Option<crate::views::jump::JumpState>,
     /// In-place edit of a previous user prompt. See `inline_edit.rs`.
     pub(crate) inline_edit: Option<crate::app::inline_edit::InlineEditState>,
     /// Edited text awaiting its rewind; `dispatch_rewind_success` resubmits it.

@@ -12,9 +12,11 @@ mod types;
 pub mod verb_group;
 
 pub use layout::compute_paint_window;
+pub use timeline::TimelineEntry;
 pub use types::*;
 
 use layout::LayoutCache;
+pub(crate) use layout::ScrollAnchor;
 
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
@@ -500,6 +502,7 @@ impl ScrollbackState {
     pub fn needs_animation(&self) -> bool {
         !self.running.is_empty() && self.any_running_in_viewport()
     }
+
 
     /// Get the current animation tick value.
     pub fn current_tick(&self) -> u64 {
@@ -1286,6 +1289,14 @@ impl ScrollbackState {
         self.entries.get_index_of(&id)
     }
 
+    pub(crate) fn capture_scroll_bookmark(&self) -> Option<ScrollAnchor> {
+        self.capture_scroll_anchor()
+    }
+
+    pub(crate) fn restore_scroll_bookmark(&mut self, bookmark: ScrollAnchor) {
+        self.restore_scroll_anchor(bookmark);
+    }
+
     /// Mark an entry as finished (no longer running).
     ///
     /// If the entry has been running for less than `MIN_RUNNING_DURATION_MS`,
@@ -2049,6 +2060,7 @@ mod tests {
             "missing entry reports false"
         );
     }
+
 
     /// The untrusted rising edge overrides the Edit-to-Edit preserve rule:
     /// once a later Diff reveals a multi-file call, the collapsed one-liner

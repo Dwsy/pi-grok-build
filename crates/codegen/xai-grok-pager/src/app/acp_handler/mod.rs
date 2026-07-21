@@ -620,6 +620,7 @@ fn handle_ext_notification(notif: &acp::ExtNotification, app: &mut AppView) -> b
         "pi/ui/editor_text" => handle_pi_ui_editor_text(notif, app),
         "pi/ui/session_catalog" => handle_pi_ui_session_catalog(notif, app),
         "pi/ui/cancel_interaction" => handle_pi_ui_cancel_interaction(notif, app),
+        "pi/ui/plan_file" => handle_pi_ui_plan_file(notif, app),
         // Experimental Remote TUI frame projection (PI_GROK_REMOTE_TUI=1 on Pi).
         "pi/ui/remote_tui" => handle_pi_ui_remote_tui(notif, app),
         _ => false,
@@ -743,6 +744,25 @@ fn handle_pi_ui_title(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
     super::set_terminal_title(title);
     // Also surface Pi's session name in the native prompt-border inline title.
     app.set_external_session_title(title);
+    true
+}
+
+/// `pi/ui/plan_file` — adapter publishes the session plan sidecar path so
+/// `/view-plan` and the plan preview can locate the Pi-owned plan file.
+fn handle_pi_ui_plan_file(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
+    let Some(params) = pi_ui_params(notif) else {
+        return false;
+    };
+    let Some(plan_path) = params.get("planFilePath").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    // Route to the active agent (same pattern as other pi/ui/* handlers).
+    let ActiveView::Agent(id) = app.active_view else {
+        return false;
+    };
+    if let Some(agent) = app.agents.get_mut(&id) {
+        agent.pi_plan_file_path = Some(std::path::PathBuf::from(plan_path));
+    }
     true
 }
 

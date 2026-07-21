@@ -486,6 +486,21 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
                 "Cycles the current model's supported thinking levels. It does not switch the model or change the session mode.",
             ),
         },
+        ActionDef {
+            id: ActionId::CycleMode,
+            label: "plan",
+            description: "Toggle plan mode",
+            default_key: key!('T', CONTROL | SHIFT),
+            alt_keys: vec![],
+            category: Category::GettingStarted,
+            context: When::AgentScreen,
+            hint_priority: None,
+            hint_key_display: Some("Ctrl+Shift+T"),
+            requires_confirmation: false,
+            long_help: Some(
+                "Toggles plan mode on/off. In plan mode the agent plans before implementing: write tools are gated to the plan file only. Ctrl+Shift+T because Shift+Tab is used for thinking level cycling.",
+            ),
+        },
         // ── Panes (agent-level — toggle side panes) ─────────────────
         ActionDef {
             id: ActionId::ToggleTodos,

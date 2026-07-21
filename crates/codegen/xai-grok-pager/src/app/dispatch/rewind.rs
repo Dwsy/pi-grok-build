@@ -85,6 +85,11 @@ pub(in crate::app) fn find_user_prompt_entry_for_shell_index(
 }
 
 pub(super) fn dispatch_rewind(app: &mut AppView) -> Vec<Effect> {
+    // Pi owns session branching via SessionTree + navigateTree; Grok Shell
+    // rewind (x.ai/rewind/*) is not implemented by pi-grok-adapter.
+    if app.external_agent {
+        return super::session::tree::dispatch_show_session_tree(app);
+    }
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
@@ -126,6 +131,11 @@ pub(super) fn dispatch_rewind(app: &mut AppView) -> Vec<Effect> {
 }
 
 pub(super) fn dispatch_rewind_show_picker(app: &mut AppView) -> Vec<Effect> {
+    // /rewind, Esc Esc (scrollback), and Action::Rewind must not call
+    // x.ai/rewind/points under external/Pi — remap to native SessionTree.
+    if app.external_agent {
+        return super::session::tree::dispatch_show_session_tree(app);
+    }
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };

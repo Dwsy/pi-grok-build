@@ -76,6 +76,19 @@ impl AgentView {
             || self.video_viewer.is_some()
             || self.image_viewer.is_some()
     }
+    /// Idle empty composer (prompt or scrollback) where external/Pi double-Esc
+    /// may arm SessionTree instead of Grok Shell rewind.
+    pub(crate) fn can_arm_pi_session_tree_on_esc(&self) -> bool {
+        self.session.state.is_idle()
+            && self.prompt_input_mode == PromptInputMode::Normal
+            && self.prompt.images.is_empty()
+            && self.prompt.text().is_empty()
+            && !self.prompt.history_search.is_active()
+            && !self.prompt.file_search_visible()
+            && self.no_input_overlay_pending()
+            && !self.modal_owns_input()
+            && self.jump_state.is_none()
+    }
     /// Prompt pane focused with an empty draft and no overlay or prompt-local
     /// sub-state owning keys — the state where a bare Left backs out of the
     /// dashboard overlay (mirror of the dashboard's Right = open detail). A
@@ -94,6 +107,7 @@ impl AgentView {
             && !self.prompt.file_search_visible()
             && self.no_input_overlay_pending()
             && !self.modal_owns_input()
+            && self.jump_state.is_none()
     }
     /// No per-pane `Esc` consumer is pending (text selection, link highlight,
     /// goal detail, rewind overlay, or open `/btw` panel), so `Esc` is free to
@@ -106,6 +120,7 @@ impl AgentView {
             && !self.show_goal_detail
             && self.rewind_state.is_none()
             && self.btw_state.is_none()
+            && self.jump_state.is_none()
     }
     /// Esc on the prompt pane in a dashboard overlay backs out to the dashboard
     /// list (the prompt-focus mirror of the Left-arrow back-out), but only for an
@@ -292,6 +307,14 @@ impl AgentView {
                 return child_view.handle_input_inner(ev, registry, prompt_paging);
             }
             return InputOutcome::Unchanged;
+        }
+        if self.dismiss_jump_picker_if_suppressed()
+            && let Event::Key(key) = ev
+            && key.kind != KeyEventKind::Release
+            && key.code == KeyCode::Esc
+            && key.modifiers.is_empty()
+        {
+            return InputOutcome::Changed;
         }
         if let Event::Paste(text) = ev
             && let Some(outcome) = self.try_handle_wrap_host_image_paste(text)
@@ -736,6 +759,24 @@ impl AgentView {
                     }
                     InputOutcome::Changed
                 }
+                _ => InputOutcome::Unchanged,
+            };
+        }
+        if self.jump_state.is_some() {
+            return match ev {
+                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    if key!('q', CONTROL).matches(key) {
+                        return InputOutcome::Unchanged;
+                    }
+                    if registry.matches_id(ActionId::CancelTurn, key)
+                        && (self.session.state.is_turn_running() || self.session.state.is_cancelling())
+                    {
+                        self.dismiss_jump_picker();
+                        return self.handle_agent_action(ActionId::CancelTurn);
+                    }
+                    self.handle_jump_key(key)
+                }
+                Event::Mouse(mouse) => self.handle_jump_mouse(mouse),
                 _ => InputOutcome::Unchanged,
             };
         }

@@ -7,6 +7,7 @@
 //! - [`Effect`] — produced by dispatch, consumed by the event loop (async).
 //! - [`TaskResult`] — produced by spawned tasks, fed back into dispatch.
 use super::agent::AgentId;
+use crate::scrollback::EntryId;
 use agent_client_protocol as acp;
 use xai_grok_shell::sampling::types::ReasoningEffort;
 
@@ -1093,6 +1094,12 @@ pub enum Action {
     /// Submit an inline edit: conversation-only rewind to that prompt, then
     /// resubmit the edited text (state lives on `AgentView::inline_edit`).
     InlineEditSubmit,
+    /// Open the `/jump` turn picker.
+    JumpShowPicker,
+    /// Jump to a turn by its prompt's stable id and close the picker.
+    JumpPickerSelect(EntryId),
+    /// Close the picker and restore the stashed viewport.
+    JumpDismiss,
 }
 /// Persist-and-notify semantics for [`Effect::PersistPermissionMode`].
 ///

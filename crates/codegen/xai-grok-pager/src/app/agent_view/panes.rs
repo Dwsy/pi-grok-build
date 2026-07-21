@@ -527,6 +527,12 @@ impl AgentView {
             }
             return;
         }
+        self.dismiss_jump_picker_if_suppressed();
+        if let Some(state) = self.jump_state.as_mut() {
+            crate::views::jump::move_cursor(state, lines.signum());
+            self.sync_jump_preview();
+            return;
+        }
         if let Some(ref mut viewer) = self.line_viewer {
             if let Some(area) = viewer.last_popup_area
                 && area.contains((col, row).into())

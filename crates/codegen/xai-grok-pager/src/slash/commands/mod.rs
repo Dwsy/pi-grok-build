@@ -31,6 +31,7 @@ pub mod home;
 pub mod imagine;
 pub mod imagine_video;
 pub mod import_claude;
+pub mod jump;
 pub mod login;
 pub mod logout;
 pub mod loop_cmd;
@@ -65,6 +66,7 @@ pub mod toggle_mouse_reporting;
 pub mod transcript;
 pub mod tree;
 pub mod usage;
+pub mod plan_mode;
 pub mod view_plan;
 pub mod vim_mode;
 pub mod voice;
@@ -113,6 +115,7 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(announcements::AnnouncementsCommand),
         Arc::new(remember::RememberCommand),
         Arc::new(plan::PlanCommand),
+        Arc::new(plan_mode::PlanModeCommand),
         Arc::new(view_plan::ViewPlanCommand),
         Arc::new(resume::ResumeCommand),
         Arc::new(tree::TreeCommand),
@@ -132,6 +135,7 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(settings_cmd::SettingsCommand),
         Arc::new(privacy::PrivacyCommand),
         Arc::new(rewind::RewindCommand),
+        Arc::new(jump::JumpCommand),
         Arc::new(login::LoginCommand),
         Arc::new(logout::LogoutCommand),
         Arc::new(import_claude::ImportClaudeCommand),

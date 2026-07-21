@@ -27,6 +27,9 @@ use super::import_claude::{
     dispatch_import_claude_confirm,
 };
 use super::interject::dispatch_interject;
+use super::jump::{
+    dispatch_jump_dismiss, dispatch_jump_picker_select, dispatch_jump_show_picker,
+};
 use super::modes::{
     dispatch_cycle_mode, dispatch_enter_plan_mode, dispatch_show_plan, dispatch_toggle_yolo,
     set_permission_mode, set_plan_mode, set_yolo_mode,
@@ -1385,6 +1388,9 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         }
         Action::Rewind => dispatch_rewind(app),
         Action::RewindShowPicker => dispatch_rewind_show_picker(app),
+        Action::JumpShowPicker => dispatch_jump_show_picker(app),
+        Action::JumpPickerSelect(id) => dispatch_jump_picker_select(app, id),
+        Action::JumpDismiss => dispatch_jump_dismiss(app),
         Action::RewindPickerSelect(prompt_index) => {
             dispatch_rewind_picker_select(app, prompt_index)
         }

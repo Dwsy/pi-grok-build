@@ -535,6 +535,78 @@ impl PiAgent {
         }))
     }
 
+    /// Read-only list of user messages available for Pi `/fork`.
+    async fn fetch_fork_messages(&self) -> Result<Value, acp::Error> {
+        let data = self
+            .rpc
+            .request(json!({ "type": "get_fork_messages" }))
+            .await
+            .map_err(acp_internal)?;
+        let messages = data
+            .get("messages")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        Ok(json!({ "messages": messages }))
+    }
+
+    /// Fork Pi into a new session file from a user-message entry.
+    ///
+    /// On success the adapter rebinds to the new session identity (same process,
+    /// new JSONL) so subsequent `session/load` replays the forked history.
+    async fn fork_from_entry(&self, entry_id: &str) -> Result<Value, acp::Error> {
+        let entry_id = entry_id.trim();
+        if entry_id.is_empty() {
+            return Err(acp::Error::invalid_params().data("entryId is empty"));
+        }
+        let response = self
+            .rpc
+            .request(json!({
+                "type": "fork",
+                "entryId": entry_id,
+            }))
+            .await
+            .map_err(acp_internal)?;
+        let cancelled = response
+            .get("cancelled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let text = response
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if cancelled {
+            return Ok(json!({
+                "cancelled": true,
+                "entryId": entry_id,
+            }));
+        }
+        let bootstrap = self.refresh().await.map_err(acp_internal)?;
+        if let Some(path) = bootstrap
+            .state
+            .session_file
+            .as_deref()
+            .filter(|path| !path.is_empty())
+        {
+            self.state.borrow_mut().session_paths.insert(
+                bootstrap.state.session_id.clone(),
+                PathBuf::from(path),
+            );
+        }
+        {
+            let mut state = self.state.borrow_mut();
+            let plan_path = plan_file_path(&bootstrap.state, &state.session_dir);
+            state.plan_mode = load_plan_tracker(&plan_path).map_err(acp_internal)?;
+        }
+        self.publish_bootstrap(&bootstrap).await;
+        Ok(json!({
+            "cancelled": false,
+            "entryId": entry_id,
+            "sessionId": bootstrap.state.session_id,
+            "sessionFile": bootstrap.state.session_file,
+            "text": text,
+        }))
+    }
+
     fn replace_bootstrap(&self, bootstrap: PiBootstrap) {
         let mut state = self.state.borrow_mut();
         state.acp_session_id = bootstrap.state.session_id.clone();
@@ -601,6 +673,17 @@ impl PiAgent {
             "planFilePath": plan_file_path,
         }))?;
         atomic_write(&control_path, &body)
+    }
+
+    /// Notify the Pager of the session plan file path so `/view-plan` and the
+    /// plan preview overlay can locate the Pi-owned sidecar.
+    async fn publish_plan_file_path(&self) {
+        let plan_path = self.state.borrow().plan_mode.plan_file_path().display().to_string();
+        self.send_ext_notification(
+            "pi/ui/plan_file",
+            json!({ "planFilePath": plan_path }),
+        )
+        .await;
     }
 
     /// Persist the tracker after every durable state transition. The data is
@@ -2046,6 +2129,7 @@ impl acp::Agent for PiAgent {
         response = response.modes(Some(self.acp_session_modes()));
         self.persist_plan_mode_state().map_err(acp_internal)?;
         self.sync_plan_mode_control().map_err(acp_internal)?;
+        self.publish_plan_file_path().await;
         Ok(response)
     }
 
@@ -2114,6 +2198,7 @@ impl acp::Agent for PiAgent {
         }
         response = response.modes(Some(self.acp_session_modes()));
         self.sync_plan_mode_control().map_err(acp_internal)?;
+        self.publish_plan_file_path().await;
         Ok(response)
     }
 
@@ -2443,6 +2528,22 @@ impl acp::Agent for PiAgent {
                     string(&params, &["label", "text"])
                 };
                 let data = self.set_session_tree_label(entry_id, label).await?;
+                ext_response(data).map_err(acp_internal)
+            }
+            // Pi /fork message catalog (RPC get_fork_messages).
+            "pi/session/fork_messages" => {
+                let data = self.fetch_fork_messages().await?;
+                ext_response(data).map_err(acp_internal)
+            }
+            // Pi /fork: create branched session file from a user message entry.
+            "pi/session/fork" => {
+                let params: Value =
+                    serde_json::from_str(arguments.params.get()).unwrap_or_default();
+                let entry_id = string(&params, &["entryId", "id", "targetId"])
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| acp::Error::invalid_params().data("entryId is required"))?;
+                let data = self.fork_from_entry(entry_id).await?;
                 ext_response(data).map_err(acp_internal)
             }
             // Tree file rollback: preview via injected extension command.

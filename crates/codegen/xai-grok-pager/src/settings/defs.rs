@@ -1490,9 +1490,9 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "Plan mode",
-            description: "Suggest plan mode (Shift+Tab) when your prompt looks like a \
+            description: "Suggest plan mode (Ctrl+Shift+T) when your prompt looks like a \
                           planning request.",
-            keywords: &["plan", "mode", "nudge", "shift+tab", "hint"],
+            keywords: &["plan", "mode", "nudge", "ctrl+shift+t", "hint"],
             kind: SettingKind::Bool {
                 default: ui_default.contextual_hints.plan_mode.unwrap_or(true),
             },

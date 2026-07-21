@@ -66,6 +66,7 @@ impl AgentView {
         if self.inline_edit.is_some() {
             return true;
         }
+        self.dismiss_jump_picker();
         let Some(entry) = self.scrollback.entry(entry_idx) else {
             return false;
         };

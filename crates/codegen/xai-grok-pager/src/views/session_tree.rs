@@ -709,6 +709,17 @@ pub fn render_session_tree(
             let abs = start + row_i;
             let node = &state.nodes[row.node_index];
             let selected = abs == state.selected;
+            if selected {
+                buf.set_style(
+                    Rect {
+                        x: chunks[1].x,
+                        y: chunks[1].y + row_i as u16,
+                        width: chunks[1].width,
+                        height: 1,
+                    },
+                    Style::default().bg(theme.bg_highlight),
+                );
+            }
             let folded = state.folded.contains(&node.id);
             let foldable = !node.child_ids.is_empty() || state.is_foldable(&node.id);
             let prefix = build_prefix(row, folded, foldable);
@@ -718,21 +729,12 @@ pub fn render_session_tree(
                 "  "
             };
             let cursor = if selected { "› " } else { "  " };
-            let label = node
-                .label
-                .as_deref()
-                .map(|l| {
-                    if state.show_label_timestamps {
-                        if let Some(ts) = node.label_timestamp.as_deref() {
-                            format!("[{l} {ts}] ")
-                        } else {
-                            format!("[{l}] ")
-                        }
-                    } else {
-                        format!("[{l}] ")
-                    }
-                })
-                .unwrap_or_default();
+            let label = node.label.as_deref().map(|label| format!("[{label}] "));
+            let label_timestamp = state
+                .show_label_timestamps
+                .then(|| node.label_timestamp.as_deref())
+                .flatten()
+                .map(|timestamp| format!("{timestamp} "));
 
             // Pi colors: user accent, assistant success, tools muted.
             let (role_style, body_style) = role_styles(node, selected, theme);
@@ -774,8 +776,11 @@ pub fn render_session_tree(
                     },
                 ),
             ];
-            if !label.is_empty() {
+            if let Some(label) = label {
                 spans.push(Span::styled(label, Style::default().fg(theme.warning)));
+            }
+            if let Some(timestamp) = label_timestamp {
+                spans.push(Span::styled(timestamp, Style::default().fg(theme.gray_dim)));
             }
             // Split "role: body" for colored role when present.
             if let Some((role_part, body_part)) = content.split_once(": ") {
@@ -789,10 +794,6 @@ pub fn render_session_tree(
                 }
             } else {
                 spans.push(Span::styled(content, body_style));
-            }
-            if selected {
-                // Highlight whole line background via style on first span width is hard;
-                // keep bold accent cursor which is the Pi selection cue.
             }
             lines.push(Line::from(spans));
         }
@@ -831,22 +832,24 @@ fn role_styles(node: &SessionTreeNode, selected: bool, theme: &Theme) -> (Style,
     };
     let role = match node.role.as_str() {
         "user" => Style::default().fg(theme.accent_user).add_modifier(bold),
-        "assistant" => Style::default()
-            .fg(theme.accent_assistant)
-            .add_modifier(bold),
+        "assistant" => Style::default().fg(theme.accent_success).add_modifier(bold),
         _ => Style::default().fg(theme.text_secondary).add_modifier(bold),
     };
-    let body = if selected {
-        Style::default()
-            .fg(theme.text_primary)
-            .add_modifier(Modifier::BOLD)
-    } else if node.on_active_path {
-        Style::default().fg(theme.text_primary)
-    } else if node.role == "toolResult" || node.role == "bashExecution" {
-        Style::default().fg(theme.text_secondary)
-    } else {
-        Style::default().fg(theme.text_primary)
+    let body_color = match node.entry_type.as_str() {
+        "custom_message" => theme.accent_skill,
+        "compaction" => theme.accent_assistant,
+        "branch_summary" => theme.warning,
+        "model_change" | "thinking_level_change" | "custom" | "label" | "session_info" => {
+            theme.gray_dim
+        }
+        _ if node.role == "toolResult" || node.role == "bashExecution" => theme.gray,
+        _ => theme.text_primary,
     };
+    let body = Style::default().fg(body_color).add_modifier(if selected {
+        Modifier::BOLD
+    } else {
+        Modifier::empty()
+    });
     (role, body)
 }
 
@@ -1096,5 +1099,47 @@ mod tests {
         state.selected = 0;
         assert!(state.toggle_fold_selected());
         assert_eq!(state.visible_indices().len(), 1);
+    }
+
+    #[test]
+    fn special_entry_types_use_pi_semantic_colors() {
+        let theme = Theme::tokyonight();
+        let custom = node("custom", None, 0, "todo", "custom_message", true);
+        let compaction = node("compact", None, 0, "compaction", "compaction", true);
+        let branch = node("branch", None, 0, "branch", "branch_summary", true);
+        let assistant = node("assistant", None, 0, "assistant", "message", true);
+
+        assert_eq!(
+            role_styles(&custom, false, &theme).1.fg,
+            Some(theme.accent_skill)
+        );
+        assert_eq!(
+            role_styles(&compaction, false, &theme).1.fg,
+            Some(theme.accent_assistant)
+        );
+        assert_eq!(
+            role_styles(&branch, false, &theme).1.fg,
+            Some(theme.warning)
+        );
+        assert_eq!(
+            role_styles(&assistant, false, &theme).0.fg,
+            Some(theme.accent_success)
+        );
+    }
+
+    #[test]
+    fn selected_row_uses_pi_selected_background() {
+        let tree = vec![node("user", None, 0, "user", "message", true)];
+        let mut state = SessionTreeState::with_nodes(tree, Some("user".into()));
+        let theme = Theme::tokyonight();
+        let area = Rect::new(0, 0, 40, 12);
+        let mut buf = Buffer::empty(area);
+
+        render_session_tree(&mut buf, area, &mut state, &theme);
+
+        assert_eq!(
+            buf.cell((0, 1)).expect("selected row cell").bg,
+            theme.bg_highlight
+        );
     }
 }

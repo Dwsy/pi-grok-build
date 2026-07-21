@@ -2705,7 +2705,7 @@ impl AppView {
         {
             let stale_idle_arm_while_busy = matches!(
                 pending.action,
-                Action::ClearPrompt | Action::RewindShowPicker
+                Action::ClearPrompt | Action::RewindShowPicker | Action::ShowSessionTree
             ) && matches!(
                 self.active_view, ActiveView::Agent(id) if self.agents.get(& id)
                 .is_some_and(| a | { a.session.state.is_turn_running() || a.session
@@ -3014,15 +3014,16 @@ impl AppView {
                     agent.scrollback.toggle_tool_output_expansion(ctrl_o_scope);
                     return InputOutcome::Changed;
                 }
+                // Empty composer Esc Esc → SessionTree for Pi (prompt or
+                // scrollback). Do not require prompt focus: agent Esc policy
+                // arms rewind from either pane when empty.
                 let pi_double_esc = self.external_agent
                     && key_event
                         .is_some_and(|key| key.code == KeyCode::Esc && key.modifiers.is_empty())
-                    && self.agents.get(&id).is_some_and(|agent| {
-                        agent.session.state.is_idle()
-                            && agent.prompt_input_mode == PromptInputMode::Normal
-                            && agent.prompt.images.is_empty()
-                            && agent.is_empty_focused_prompt()
-                    });
+                    && self
+                        .agents
+                        .get(&id)
+                        .is_some_and(AgentView::can_arm_pi_session_tree_on_esc);
                 let mut outcome = match self.agents.get_mut(&id) {
                     Some(agent) if prompt_paging => {
                         agent.handle_input_with_prompt_paging(ev, &self.registry)

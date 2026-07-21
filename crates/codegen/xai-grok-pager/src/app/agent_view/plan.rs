@@ -16,7 +16,14 @@ use crossterm::event::KeyModifiers;
 use crossterm::event::{KeyCode, KeyEvent};
 impl AgentView {
     /// Resolve the absolute path to the plan file for this session.
+    ///
+    /// For Pi-backed sessions the adapter publishes the sidecar path via
+    /// `pi/ui/plan_file` notification (stored in `pi_plan_file_path`).
+    /// Falls back to the Grok-native `~/.grok/sessions/...` layout.
     fn plan_file_path(&self) -> Option<std::path::PathBuf> {
+        if let Some(ref path) = self.pi_plan_file_path {
+            return Some(path.clone());
+        }
         let session_id = self.session.session_id.as_ref()?;
         let cwd_str = self.session.cwd.to_string_lossy().into_owned();
         let encoded_cwd = urlencoding::encode(&cwd_str);

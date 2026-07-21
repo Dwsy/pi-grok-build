@@ -2,7 +2,49 @@
 
 use super::*;
 
+const PREVIEW_MAX_CHARS: usize = 120;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineEntry {
+    pub turn_idx: usize,
+    pub prompt_entry_id: EntryId,
+    pub preview: String,
+}
+
+fn prompt_preview(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let mut preview: String = line.chars().take(PREVIEW_MAX_CHARS).collect();
+    if preview.chars().count() == PREVIEW_MAX_CHARS && line.chars().nth(PREVIEW_MAX_CHARS).is_some()
+    {
+        preview.pop();
+        preview.push('…');
+    }
+    preview
+}
+
 impl ScrollbackState {
+    pub fn timeline_entries(&self) -> Vec<TimelineEntry> {
+        self.turns
+            .iter()
+            .enumerate()
+            .filter_map(|(turn_idx, turn)| {
+                let (prompt_entry_id, entry) = self.entries.get_index(turn.prompt_index)?;
+                let RenderBlock::UserPrompt(prompt) = &entry.block else {
+                    return None;
+                };
+                Some(TimelineEntry {
+                    turn_idx,
+                    prompt_entry_id: *prompt_entry_id,
+                    preview: prompt_preview(&prompt.text),
+                })
+            })
+            .collect()
+    }
+
     /// Preview text for one turn, used by the timeline rail hover card.
     pub fn turn_preview(&self, turn_idx: usize) -> Option<String> {
         let turn = self.turns.get(turn_idx)?;
@@ -16,8 +58,8 @@ impl ScrollbackState {
             .map(str::trim)
             .find(|line| !line.is_empty())
             .unwrap_or("");
-        let mut preview: String = line.chars().take(120).collect();
-        if line.chars().nth(120).is_some() {
+        let mut preview: String = line.chars().take(PREVIEW_MAX_CHARS).collect();
+        if line.chars().nth(PREVIEW_MAX_CHARS).is_some() {
             preview.pop();
             preview.push('…');
         }

@@ -857,8 +857,19 @@ impl AgentView {
         } else {
             0
         };
+        let jump_view_h = if permission_view_h == 0 && question_view_h == 0 && rewind_view_h == 0 {
+            if !self.jump_slot_taken() {
+                self.jump_state
+                    .as_ref()
+                    .map_or(0, |state| crate::views::jump::jump_overlay_height(state, area.height))
+            } else {
+                0
+            }
+        } else {
+            0
+        };
         let cancel_turn_view_h =
-            if permission_view_h == 0 && question_view_h == 0 && rewind_view_h == 0 {
+            if permission_view_h == 0 && question_view_h == 0 && rewind_view_h == 0 && jump_view_h == 0 {
                 if self.cancel_turn_view.is_some() {
                     modal::cancel_turn_panel_height(area.height)
                 } else {
@@ -946,6 +957,8 @@ impl AgentView {
                 + question_footer_h
         } else if rewind_view_h > 0 {
             rewind_view_h
+        } else if jump_view_h > 0 {
+            jump_view_h
         } else if cancel_turn_view_h > 0 {
             cancel_turn_view_h
         } else {
@@ -1124,6 +1137,10 @@ impl AgentView {
             );
         } else {
             self.timeline_rail = None;
+            self.timeline_hover = None;
+            self.timeline_hover_preview = None;
+        }
+        if self.jump_state.is_some() {
             self.timeline_hover = None;
             self.timeline_hover_preview = None;
         }
@@ -2620,6 +2637,10 @@ impl AgentView {
                     &rw.phase,
                     prompt_focused,
                 );
+            }
+        } else if jump_view_h > 0 {
+            if let Some(state) = self.jump_state.as_ref() {
+                crate::views::jump::render_jump_overlay(buf, layout.prompt, state, prompt_focused);
             }
         } else if cancel_turn_view_h > 0 {
             let buttons = &mut self.cancel_turn_buttons;
