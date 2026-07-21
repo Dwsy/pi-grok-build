@@ -127,25 +127,7 @@ pub fn init_discovery(cwd: &Path) -> DiscoveryReport {
         let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
         report.loaded = guard.by_name.len();
     }
-
-    if let Some(home) = dirs::home_dir() {
-        let global = home.join(".pi").join("agent").join("themes");
-        scan_dir(&global, &mut report);
-    }
-
-    let project = cwd.join(".pi").join("themes");
-    scan_dir(&project, &mut report);
-
-    if let Ok(extra) = std::env::var("PI_THEME_PATHS") {
-        for part in std::env::split_paths(&extra) {
-            if part.is_dir() {
-                scan_dir(&part, &mut report);
-            } else if part.is_file() {
-                try_register_file(&part, &mut report);
-            }
-        }
-    }
-
+    scan_discovered_locations(cwd, &mut report);
     tracing::info!(
         target: "pi_theme",
         loaded = report.loaded,
@@ -156,9 +138,99 @@ pub fn init_discovery(cwd: &Path) -> DiscoveryReport {
     report
 }
 
+/// Re-scan Pi theme directories after `/reload` so newly added/changed JSON files
+/// appear in Grok's `/theme` list without restarting the process.
+///
+/// Unlike first-load discovery, this reloads palettes for themes that already
+/// have a file path so on-disk edits take effect. Builtins stay first-wins.
+/// If a Pi theme is currently applied, its palette is re-applied after rescan.
+pub fn rediscover(cwd: &Path) -> DiscoveryReport {
+    ensure_builtins();
+    let mut report = DiscoveryReport::default();
+    rescan_discovered_locations(cwd, &mut report);
+    {
+        let guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+        report.loaded = guard.by_name.len();
+    }
+    let current = crate::theme::Theme::current_display_id();
+    if is_pi_theme_id(&current) {
+        if let Err(error) = apply_pi_theme(&current) {
+            tracing::warn!(
+                target: "pi_theme",
+                %error,
+                theme = %current,
+                "failed to re-apply active Pi theme after rediscovery"
+            );
+            report
+                .errors
+                .push(format!("re-apply {current}: {error}"));
+        }
+    }
+    tracing::info!(
+        target: "pi_theme",
+        loaded = report.loaded,
+        skipped = report.skipped,
+        errors = report.errors.len(),
+        "Pi theme rediscovery finished"
+    );
+    report
+}
+
+fn scan_discovered_locations(cwd: &Path, report: &mut DiscoveryReport) {
+    if let Some(home) = dirs::home_dir() {
+        let global = home.join(".pi").join("agent").join("themes");
+        scan_dir(&global, report);
+    }
+
+    let project = cwd.join(".pi").join("themes");
+    scan_dir(&project, report);
+
+    if let Ok(extra) = std::env::var("PI_THEME_PATHS") {
+        for part in std::env::split_paths(&extra) {
+            if part.is_dir() {
+                scan_dir(&part, report);
+            } else if part.is_file() {
+                try_register_file(&part, report);
+            }
+        }
+    }
+}
+
+fn rescan_discovered_locations(cwd: &Path, report: &mut DiscoveryReport) {
+    if let Some(home) = dirs::home_dir() {
+        let global = home.join(".pi").join("agent").join("themes");
+        scan_dir(&global, report);
+    }
+
+    let project = cwd.join(".pi").join("themes");
+    scan_dir(&project, report);
+
+    if let Ok(extra) = std::env::var("PI_THEME_PATHS") {
+        for part in std::env::split_paths(&extra) {
+            if part.is_dir() {
+                scan_dir(&part, report);
+            } else if part.is_file() {
+                try_register_file(&part, report);
+            }
+        }
+    }
+}
+
 fn scan_dir(dir: &Path, report: &mut DiscoveryReport) {
+    for path in theme_json_paths(dir) {
+        try_register_file(&path, report);
+    }
+}
+
+fn rescan_dir(dir: &Path, report: &mut DiscoveryReport) {
+    for path in theme_json_paths(dir) {
+        try_reregister_file(&path, report);
+    }
+}
+
+fn theme_json_paths(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+        return Vec::new();
     };
     let mut paths: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
@@ -170,9 +242,7 @@ fn scan_dir(dir: &Path, report: &mut DiscoveryReport) {
         })
         .collect();
     paths.sort();
-    for path in paths {
-        try_register_file(&path, report);
-    }
+    paths
 }
 
 fn try_register_file(path: &Path, report: &mut DiscoveryReport) {
@@ -210,6 +280,44 @@ fn try_register_file(path: &Path, report: &mut DiscoveryReport) {
                 }
             }
         }
+        Err(e) => {
+            report.errors.push(format!("{}: {e}", path.display()));
+        }
+    }
+}
+
+/// Register or refresh a theme file. Used by `/reload` rediscovery so edits to
+/// existing theme JSON replace the cached palette instead of being skipped.
+fn try_reregister_file(path: &Path, report: &mut DiscoveryReport) {
+    match load_from_path(path) {
+        Ok(doc) => match map_pi_theme(&doc) {
+            Ok(palette) => {
+                let mut guard = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(existing) = guard.by_name.get(&doc.name) {
+                    // Never overwrite embedded builtins with a file of the same name.
+                    if existing.builtin {
+                        report.skipped += 1;
+                        return;
+                    }
+                }
+                let name = doc.name.clone();
+                let id = theme_id(&name);
+                guard.by_name.insert(
+                    name.clone(),
+                    PiThemeMeta {
+                        name: name.clone(),
+                        id,
+                        path: Some(path.to_path_buf()),
+                        builtin: false,
+                    },
+                );
+                guard.palettes.insert(name, palette);
+                report.loaded += 1;
+            }
+            Err(e) => {
+                report.errors.push(format!("{}: {e}", path.display()));
+            }
+        },
         Err(e) => {
             report.errors.push(format!("{}: {e}", path.display()));
         }
@@ -306,5 +414,27 @@ mod tests {
         assert_eq!(parse_pi_theme_id("pi:dark").as_deref(), Some("dark"));
         assert_eq!(parse_pi_theme_id("pi:").as_deref(), None);
         assert_eq!(parse_pi_theme_id("dark").as_deref(), None);
+    }
+
+    #[test]
+    fn rediscover_picks_up_new_theme_files() {
+        reset_registry();
+        let dir = tempfile::tempdir().unwrap();
+        let themes = dir.path().join(".pi").join("themes");
+        std::fs::create_dir_all(&themes).unwrap();
+
+        // First discovery: empty project themes dir (builtins only).
+        let first = init_discovery(dir.path());
+        assert!(first.errors.is_empty(), "{:?}", first.errors);
+        assert!(!list_themes().iter().any(|t| t.name == "reload-new"));
+
+        let mut json = include_str!("../../../assets/pi-themes/dark.json").to_string();
+        json = json.replacen("\"dark\"", "\"reload-new\"", 1);
+        std::fs::write(themes.join("reload-new.json"), json).unwrap();
+
+        let report = rediscover(dir.path());
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert!(list_themes().iter().any(|t| t.name == "reload-new"));
+        let (_id, _) = load_palette("pi:reload-new").unwrap();
     }
 }

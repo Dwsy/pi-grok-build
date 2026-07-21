@@ -16,6 +16,7 @@ pub mod fps_hud;
 pub mod goal_detail;
 pub mod history_search;
 pub mod import_claude_modal;
+pub mod fork_picker;
 pub mod jump;
 pub mod list_pane;
 pub mod mcps_modal;

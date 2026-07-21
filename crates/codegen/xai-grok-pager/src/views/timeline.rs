@@ -228,28 +228,34 @@ pub fn render_rail(
     } else {
         dim
     };
-    let x = rail.rect.x + RAIL_WIDTH - 1;
-    buf.set_span(x, rail.up_y, &Span::styled("▲", up_style), 1);
-    buf.set_span(x, rail.down_y, &Span::styled("▼", down_style), 1);
+    let chevron_x = rail.rect.x + RAIL_WIDTH - 1;
+    buf.set_span(
+        chevron_x,
+        rail.up_y,
+        &Span::styled(crate::glyphs::timeline_chevron_up(), up_style),
+        1,
+    );
+    buf.set_span(
+        chevron_x,
+        rail.down_y,
+        &Span::styled(crate::glyphs::timeline_chevron_down(), down_style),
+        1,
+    );
     for (row, turn_idx) in rail.window.clone().enumerate() {
-        let style = if rail.active == Some(turn_idx) || hovered == Some(TimelineHit::Tick(turn_idx))
-        {
-            bright
+        let y = rail.ticks_y + row as u16;
+        let is_active = rail.active == Some(turn_idx);
+        let is_hovered = hovered == Some(TimelineHit::Tick(turn_idx));
+
+        // Upstream rail uses horizontal strokes, not dots:
+        // active "━━", hover "──", idle right-aligned " ─".
+        let (text, style) = if is_active {
+            (crate::glyphs::timeline_tick_active(), bright)
+        } else if is_hovered {
+            (crate::glyphs::timeline_tick_hover(), bright)
         } else {
-            dim
+            // Short dim tick in the rightmost cell (precomposed pad + light).
+            (" \u{2500}", dim)
         };
-        let tick = if rail.active == Some(turn_idx) {
-            " ●"
-        } else if hovered == Some(TimelineHit::Tick(turn_idx)) {
-            " ○"
-        } else {
-            " ─"
-        };
-        buf.set_span(
-            rail.rect.x,
-            rail.ticks_y + row as u16,
-            &Span::styled(tick, style),
-            RAIL_WIDTH,
-        );
+        buf.set_span(rail.rect.x, y, &Span::styled(text, style), RAIL_WIDTH);
     }
 }

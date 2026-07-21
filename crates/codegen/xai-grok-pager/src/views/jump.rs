@@ -99,22 +99,34 @@ pub fn jump_overlay_height(state: &JumpState, screen_h: u16) -> u16 {
     state.list().height(screen_h)
 }
 
+/// Compact wall-clock time after the turn ordinal (`14:32`).
+fn format_turn_time(created_at: Option<chrono::DateTime<chrono::Local>>) -> Option<String> {
+    created_at.map(|ts| ts.format("%H:%M").to_string())
+}
+
 pub fn render_jump_overlay(buf: &mut Buffer, area: Rect, state: &JumpState, focused: bool) {
     let theme = Theme::current();
     let ord_width = state.entries.len().to_string().len();
+    // Fixed "HH:MM " gutter so preview columns stay aligned across rows.
+    const TIME_GUTTER: usize = 6;
 
     state
         .list()
         .render(buf, area, "Jump to which turn?", focused, |index, ctx| {
             let entry = &state.entries[index];
             let ordinal = format!("{:>ord_width$} ", entry.turn_idx + 1);
+            let time = format_turn_time(entry.created_at)
+                .map(|t| format!("{t:<5} "))
+                .unwrap_or_else(|| " ".repeat(TIME_GUTTER));
+            let prefix_width = ord_width + 1 + TIME_GUTTER;
             let ord_style = Style::default().fg(theme.gray).bg(ctx.row_bg);
+            let time_style = Style::default().fg(theme.gray_dim).bg(ctx.row_bg);
             let preview = if entry.preview.is_empty() {
                 "(no preview)".to_string()
             } else {
                 truncate_str(
                     &entry.preview,
-                    ctx.content_width.saturating_sub(ord_width as u16 + 3) as usize,
+                    ctx.content_width.saturating_sub(prefix_width as u16 + 2) as usize,
                 )
             };
             let text_style = Style::default()
@@ -127,6 +139,7 @@ pub fn render_jump_overlay(buf: &mut Buffer, area: Rect, state: &JumpState, focu
                 });
             Line::from(vec![
                 Span::styled(ordinal, ord_style),
+                Span::styled(time, time_style),
                 Span::styled(preview, text_style),
             ])
         });
@@ -143,6 +156,7 @@ mod tests {
                 .map(|turn_idx| TimelineEntry {
                     turn_idx,
                     prompt_entry_id: EntryId::new(turn_idx as u64),
+                    created_at: None,
                     preview: format!("turn {turn_idx}"),
                 })
                 .collect(),

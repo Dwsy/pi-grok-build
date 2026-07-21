@@ -17,7 +17,7 @@ pub use load::{
 pub use map::{MapError, map_pi_theme};
 pub use registry::{
     DiscoveryReport, PI_THEME_PREFIX, PiThemeMeta, apply_pi_theme, ensure_builtins, init_discovery,
-    is_pi_theme_id, list_themes, load_palette, parse_pi_theme_id, reset_for_test, reset_registry,
-    theme_id,
+    is_pi_theme_id, list_themes, load_palette, parse_pi_theme_id, rediscover, reset_for_test,
+    reset_registry, theme_id,
 };
 pub use schema::{ColorValue, PiThemeColors, PiThemeJson};
