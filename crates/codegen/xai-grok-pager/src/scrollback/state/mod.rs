@@ -503,6 +503,37 @@ impl ScrollbackState {
         !self.running.is_empty() && self.any_running_in_viewport()
     }
 
+    /// Whether an expanded Edit/Write diff is currently inside the viewport.
+    ///
+    /// Expanded edit blocks are paint-heavy (full hunk layout + styled spans).
+    /// During a live turn the pager otherwise redraws at animation/spinner
+    /// cadence; keeping an expanded edit on screen makes every frame expensive
+    /// and freezes input. Callers use this to drop pure animation/status
+    /// redraws while the user is inspecting a diff (content/input redraws
+    /// still flow). Resume/idle paths never hit that hot loop, so the same
+    /// expanded card is cheap there.
+    ///
+    /// Conservative when layout is not ready: any expanded edit counts as
+    /// visible (same fail-open as [`Self::any_running_in_viewport`]).
+    pub fn has_expanded_edit_in_viewport(&self) -> bool {
+        for (idx, (_, entry)) in self.entries.iter().enumerate() {
+            if entry.display_mode != DisplayMode::Expanded {
+                continue;
+            }
+            let RenderBlock::ToolCall(ToolCallBlock::Edit(edit)) = &entry.block else {
+                continue;
+            };
+            // Empty success headers are one-line either way; only real diffs
+            // (or error bodies) pay the expanded paint cost.
+            if edit.hunks.is_empty() && edit.error.is_none() {
+                continue;
+            }
+            if self.entry_index_in_viewport(idx) {
+                return true;
+            }
+        }
+        false
+    }
 
     /// Get the current animation tick value.
     pub fn current_tick(&self) -> u64 {
@@ -2061,6 +2092,68 @@ mod tests {
         );
     }
 
+    /// Expanded Edit/Write diffs in the viewport drive the live-turn paint
+    /// throttle (see `AppView::tick` / `tick_demand`). Collapsed or empty
+    /// edits must not trip it; off-screen expanded ones are ignored once a
+    /// layout exists.
+    #[test]
+    fn has_expanded_edit_in_viewport_detects_visible_diffs() {
+        use crate::diff::DiffLine;
+        use similar::ChangeTag;
+
+        let hunks = vec![vec![DiffLine {
+            text: "fn main() {}\n".into(),
+            lo: 0,
+            ln: 1,
+            tag: ChangeTag::Insert,
+        }]];
+
+        let mut state = edit_state(false);
+        // No layout yet: fail-open treats any expanded diff as visible.
+        let expanded_id =
+            state.push_block(edit_block(EditToolCallBlock::new("a.rs", hunks.clone())));
+        state
+            .get_by_id_mut(expanded_id)
+            .unwrap()
+            .set_display_mode(DisplayMode::Expanded);
+        assert!(
+            state.has_expanded_edit_in_viewport(),
+            "pre-layout expanded edit must count as visible"
+        );
+
+        // Collapsed edit with hunks is cheap (one-liner) — not heavy.
+        let mut collapsed = edit_state(false);
+        let id = collapsed.push_block(edit_block(EditToolCallBlock::new("b.rs", hunks.clone())));
+        collapsed
+            .get_by_id_mut(id)
+            .unwrap()
+            .set_display_mode(DisplayMode::Collapsed);
+        collapsed.prepare_layout(80, 20);
+        assert!(
+            !collapsed.has_expanded_edit_in_viewport(),
+            "collapsed edit must not trip the heavy-edit gate"
+        );
+
+        // Expanded empty edit (no hunks / error) is also cheap.
+        let mut empty = edit_state(false);
+        let id = empty.push_block(edit_block(EditToolCallBlock::new("c.rs", vec![])));
+        empty
+            .get_by_id_mut(id)
+            .unwrap()
+            .set_display_mode(DisplayMode::Expanded);
+        empty.prepare_layout(80, 20);
+        assert!(
+            !empty.has_expanded_edit_in_viewport(),
+            "empty expanded edit header is not paint-heavy"
+        );
+
+        // After layout, an expanded diff in a short transcript is on-screen.
+        state.prepare_layout(80, 20);
+        assert!(
+            state.has_expanded_edit_in_viewport(),
+            "laid-out expanded edit in a short viewport must be detected"
+        );
+    }
 
     /// The untrusted rising edge overrides the Edit-to-Edit preserve rule:
     /// once a later Diff reveals a multi-file call, the collapsed one-liner

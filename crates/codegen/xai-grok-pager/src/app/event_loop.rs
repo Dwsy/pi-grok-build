@@ -2123,9 +2123,18 @@ pub(crate) async fn run(
                     schedule_tick(&mut animation_tick_at, &app, tick_interval);
                     resize_debounce_at = None;
                     // Cap paint rate so terminal input isn't starved during
-                    // heavy ACP streaming.
+                    // heavy ACP streaming. Expanded Edit/Write diffs in the
+                    // viewport make each paint much more expensive — use a
+                    // floor so live turns stay responsive while a diff is open.
                     let now = Instant::now();
-                    if presenter.request_throttled(now, min_draw_interval) {
+                    let draw_interval = if app.active_agent().is_some_and(|a| {
+                        a.scrollback.has_expanded_edit_in_viewport()
+                    }) {
+                        min_draw_interval.max(Duration::from_millis(120))
+                    } else {
+                        min_draw_interval
+                    };
+                    if presenter.request_throttled(now, draw_interval) {
                         app.update_notifications();
                     }
                 }

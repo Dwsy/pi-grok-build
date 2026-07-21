@@ -5368,7 +5368,17 @@ impl AppView {
         if let ActiveView::Agent(id) = self.active_view
             && let Some(agent) = self.agents.get_mut(&id)
         {
-            needs_redraw |= agent.scrollback.tick();
+            // Expanded Edit/Write diffs are paint-heavy. During a live turn the
+            // animation/status loop would otherwise full-redraw the scrollback at
+            // spinner/wave cadence, which freezes the TUI while a diff is open
+            // (resume/idle is fine because that loop is off). Drop pure
+            // animation/status redraws while an expanded edit is on screen;
+            // content, input, and interaction paths still request draws.
+            let heavy_expanded_edit = agent.scrollback.has_expanded_edit_in_viewport();
+            let scrollback_anim_redraw = agent.scrollback.tick();
+            if !heavy_expanded_edit {
+                needs_redraw |= scrollback_anim_redraw;
+            }
             needs_redraw |= agent.todo.list_state.tick();
             needs_redraw |= agent.todo.badge_tick();
             needs_redraw |= agent.tasks.tick();
@@ -5387,7 +5397,9 @@ impl AppView {
             }
             let spinner_frame_tick =
                 agent.scrollback.animation_tick() % crate::views::turn_status::SPINNER_DIVISOR == 0;
-            needs_redraw |= !agent.session.state.is_idle() && spinner_frame_tick;
+            if !heavy_expanded_edit {
+                needs_redraw |= !agent.session.state.is_idle() && spinner_frame_tick;
+            }
             needs_redraw |= agent
                 .mcp_init_progress
                 .as_ref()
@@ -5662,12 +5674,19 @@ impl AppView {
                 let Some(agent) = self.agents.get(&id) else {
                     return TickDemand::None;
                 };
-                let fast = agent.scrollback.needs_animation()
+                // Match tick(): while an expanded edit fills the viewport, do not
+                // keep the 30fps loop alive solely for turn status / wave chrome.
+                let heavy_expanded_edit = agent.scrollback.has_expanded_edit_in_viewport();
+                let scrollback_anim =
+                    agent.scrollback.needs_animation() && !heavy_expanded_edit;
+                let turn_status_tick =
+                    !agent.session.state.is_idle() && !heavy_expanded_edit;
+                let fast = scrollback_anim
                     || agent.todo.list_state.needs_tick()
                     || agent.todo.badge_needs_tick()
                     || agent.tasks.needs_tick()
                     || agent.acp_synced_generation != agent.session.available_commands_generation
-                    || !agent.session.state.is_idle()
+                    || turn_status_tick
                     || agent.session.loading_replay
                     || agent
                         .mcp_init_progress
