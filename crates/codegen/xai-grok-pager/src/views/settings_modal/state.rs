@@ -766,12 +766,15 @@ pub(super) fn compute_filtered(
 }
 
 /// Row visibility: voice rows need the voice gate; capture needs key releases;
-/// `hidden_in_minimal` rows are dropped in minimal mode. Pure for unit tests.
+/// `hidden_in_minimal` rows are dropped in minimal mode; `external_only` rows
+/// are hidden unless the process runs the external-agent (grok-pi) profile.
+/// Pure for unit tests.
 pub(super) fn setting_row_visible(
     meta: &SettingMeta,
     kitty_releases: bool,
     minimal: bool,
     voice_mode: bool,
+    external_agent: bool,
 ) -> bool {
     if !voice_mode && matches!(meta.key, "voice_capture_mode" | "voice_stt_language") {
         return false;
@@ -782,6 +785,9 @@ pub(super) fn setting_row_visible(
     if minimal && meta.hidden_in_minimal {
         return false;
     }
+    if meta.external_only && !external_agent {
+        return false;
+    }
     true
 }
 
@@ -789,6 +795,7 @@ fn build_rows(registry: &SettingsRegistry) -> Vec<RowEntry> {
     let kitty_releases = crate::app::kitty_flags_pushed();
     let minimal = crate::app::minimal_mode_active();
     let voice_mode = crate::app::voice_mode_enabled();
+    let external_agent = crate::app::external_agent_active();
     // Keys that belong to a group sub-sheet are rendered only inside that
     // sheet, never as their own top-level rows.
     let group_children: std::collections::HashSet<SettingKey> = registry
@@ -808,7 +815,7 @@ fn build_rows(registry: &SettingsRegistry) -> Vec<RowEntry> {
             if meta.category != *cat {
                 continue;
             }
-            if !setting_row_visible(meta, kitty_releases, minimal, voice_mode) {
+            if !setting_row_visible(meta, kitty_releases, minimal, voice_mode, external_agent) {
                 continue;
             }
             if group_children.contains(meta.key) {
@@ -862,6 +869,7 @@ pub(super) fn action_for_bool(key: SettingKey, new: bool) -> Option<Action> {
             enabled: new,
         }),
         "psm_resume_index" => Some(Action::SetPsmResumeIndex(new)),
+        "pi_tree_file_rollback" => Some(Action::SetPiTreeFileRollback(new)),
         "simple_mode" => Some(Action::SetSimpleMode(new)),
         "contextual_hints.undo" => Some(Action::SetContextualHintUndo(new)),
         "contextual_hints.plan_mode" => Some(Action::SetContextualHintPlanMode(new)),
@@ -873,7 +881,9 @@ pub(super) fn action_for_bool(key: SettingKey, new: bool) -> Option<Action> {
         "multiline_mode" => Some(Action::SetMultilineMode(new)),
         "vim_mode" => Some(Action::SetVimMode(new)),
         "session_recap" => Some(Action::SetSessionRecap(new)),
+        "recap_mermaid" => Some(Action::SetRecapMermaid(new)),
         "progress_bar" => Some(Action::SetProgressBar(new)),
+        "remote_tui_footer" => Some(Action::SetRemoteTuiFooter(new)),
         "remember_tool_approvals" => Some(Action::SetRememberToolApprovals(new)),
         "toolset.ask_user_question.timeout_enabled" => {
             Some(Action::SetAskUserQuestionTimeoutEnabled(new))

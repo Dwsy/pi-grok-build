@@ -789,6 +789,7 @@ pub(crate) async fn run(
         connection.available_commands,
     );
     app.external_agent = external_agent;
+    crate::app::set_external_agent_active(external_agent);
     app.tracing_rx = Some(tracing_handle.rx);
     // Startup terminal height for the auto-compact derivation; kept fresh by
     // `Event::Resize` from here on. 0 (probe failure) never forces compact.
@@ -1317,7 +1318,7 @@ pub(crate) async fn run(
     // field) must not wipe a valid `show_timeline` or leave appearance /
     // cache / `current_ui` disagreeing — `/timeline` and the rail all read
     // the same canonical value after this sync + `prime` below.
-let show_timeline = crate::appearance::cache::load_show_timeline();
+    let show_timeline = crate::appearance::cache::load_show_timeline();
     app.current_ui.show_timeline = Some(show_timeline);
     if app.appearance.show_timeline != show_timeline {
         let mut config = app.appearance.clone();
@@ -1695,7 +1696,7 @@ let show_timeline = crate::appearance::cache::load_show_timeline();
         if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
             return Ok(make_run_result(&app));
         }
-presenter.request_presentation(&mut app, terminal, false);
+        presenter.request_presentation(&mut app, terminal, false);
     } else if external_agent
         && matches!(materialized, MaterializedStartup::NewAuto)
         && matches!(app.active_view, ActiveView::Welcome)
@@ -3195,7 +3196,7 @@ async fn drain_and_process(
                 if process_effects(effs, tasks, app, progress_tx) {
                     return true;
                 }
-if let InputOutcome::Action(follow_up) = app.handle_input_at_with_paste_provenance(
+                if let InputOutcome::Action(follow_up) = app.handle_input_at_with_paste_provenance(
                     ev,
                     routed.arrived_at,
                     routed.paste_provenance,

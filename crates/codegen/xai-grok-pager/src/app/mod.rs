@@ -137,6 +137,18 @@ static MINIMAL_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub(crate) fn minimal_mode_active() -> bool {
     MINIMAL_MODE_ACTIVE.load(Ordering::Acquire)
 }
+/// Whether this process runs the external-agent (grok-pi) UI profile.
+/// Set once at startup from `ui_profile.is_external()`. Gates Pi-specific
+/// settings visibility in the F2 modal.
+static EXTERNAL_AGENT_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Read the cached external-agent profile flag (see [`EXTERNAL_AGENT_ACTIVE`]).
+pub(crate) fn external_agent_active() -> bool {
+    EXTERNAL_AGENT_ACTIVE.load(Ordering::Acquire)
+}
+/// Set the external-agent profile flag. Called once at startup.
+pub(crate) fn set_external_agent_active(on: bool) {
+    EXTERNAL_AGENT_ACTIVE.store(on, Ordering::Release);
+}
 /// Test-only override for [`minimal_mode_active`] (unit tests exercising
 /// minimal-gated input paths without a terminal). Save/restore around use —
 /// this is process-global state.

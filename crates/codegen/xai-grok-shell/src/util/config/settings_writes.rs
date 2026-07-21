@@ -160,10 +160,26 @@ pub async fn set_session_recap(value: bool) -> Result<()> {
     .await
 }
 
+/// Persist `[ui].recap_mermaid` (optional Markdown Mermaid in recap output).
+pub async fn set_recap_mermaid(value: bool) -> Result<()> {
+    update_config(|cfg| {
+        cfg.ui.recap_mermaid = Some(value);
+    })
+    .await
+}
+
 /// Persist `[ui].progress_bar` (OSC 9;4 terminal-tab progress indicators).
 pub async fn set_progress_bar(value: bool) -> Result<()> {
     update_config(|cfg| {
         cfg.ui.progress_bar = Some(value);
+    })
+    .await
+}
+
+/// Persist `[ui].remote_tui_footer` (experimental Remote TUI footer).
+pub async fn set_remote_tui_footer(value: bool) -> Result<()> {
+    update_config(|cfg| {
+        cfg.ui.remote_tui_footer = Some(value);
     })
     .await
 }
@@ -177,6 +193,11 @@ pub async fn set_pi_builtin_tools(value: PiBuiltinTools) -> Result<()> {
 /// Persist the optional PSM SQLite session-index preference for grok-pi.
 pub async fn set_psm_resume_index(value: bool) -> Result<()> {
     update_config(|cfg| cfg.ui.psm_resume_index = value).await
+}
+
+/// Persist `[ui].pi_tree_file_rollback` via `update_config`.
+pub async fn set_pi_tree_file_rollback(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.pi_tree_file_rollback = value).await
 }
 
 /// Bounds for [`set_max_thoughts_width`]. Mirrored from the pager's

@@ -2071,6 +2071,24 @@ pub(in crate::app::dispatch) fn set_psm_resume_index(
     }]
 }
 
+pub(in crate::app::dispatch) fn set_pi_tree_file_rollback(
+    app: &mut AppView,
+    enabled: bool,
+) -> Vec<Effect> {
+    let previous = app.current_ui.pi_tree_file_rollback;
+    if previous == enabled {
+        return vec![];
+    }
+    app.current_ui.pi_tree_file_rollback = enabled;
+    refresh_open_settings_modals(app);
+    app.show_toast(&save_success_toast("Pi tree file rollback", enabled));
+    vec![Effect::PersistSetting {
+        key: "pi_tree_file_rollback",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
 /// State-only mutation for auto session-recap toggle.
 pub(super) fn set_session_recap_inner(app: &mut AppView, enabled: bool) {
     app.current_ui.session_recap = Some(enabled);
@@ -2092,6 +2110,30 @@ pub(in crate::app::dispatch) fn set_session_recap(app: &mut AppView, enabled: bo
     });
     vec![Effect::PersistSetting {
         key: "session_recap",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(prev),
+    }]
+}
+
+/// State-only mutation for optional Mermaid generation in Recap.
+pub(super) fn set_recap_mermaid_inner(app: &mut AppView, enabled: bool) {
+    app.current_ui.recap_mermaid = Some(enabled);
+}
+
+pub(in crate::app::dispatch) fn set_recap_mermaid(app: &mut AppView, enabled: bool) -> Vec<Effect> {
+    let prev = app.current_ui.recap_mermaid.unwrap_or(false);
+    if prev == enabled {
+        return vec![];
+    }
+    set_recap_mermaid_inner(app, enabled);
+    refresh_open_settings_modals(app);
+    app.show_toast(if enabled {
+        "✓ Recap Mermaid: on"
+    } else {
+        "✓ Recap Mermaid: off"
+    });
+    vec![Effect::PersistSetting {
+        key: "recap_mermaid",
         value: crate::settings::SettingValue::Bool(enabled),
         rollback_value: crate::settings::SettingValue::Bool(prev),
     }]
@@ -2122,6 +2164,30 @@ pub(in crate::app::dispatch) fn set_progress_bar(app: &mut AppView, enabled: boo
     });
     vec![Effect::PersistSetting {
         key: "progress_bar",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(prev),
+    }]
+}
+
+/// Outer dispatcher for `Action::SetRemoteTuiFooter`.
+pub(in crate::app::dispatch) fn set_remote_tui_footer(
+    app: &mut AppView,
+    enabled: bool,
+) -> Vec<Effect> {
+    let prev = app.current_ui.remote_tui_footer.unwrap_or(false);
+    if prev == enabled {
+        return vec![];
+    }
+    app.current_ui.remote_tui_footer = Some(enabled);
+    app.refresh_external_ui_surface();
+    refresh_open_settings_modals(app);
+    app.show_toast(if enabled {
+        "✓ Remote TUI footer: on"
+    } else {
+        "✓ Remote TUI footer: off"
+    });
+    vec![Effect::PersistSetting {
+        key: "remote_tui_footer",
         value: crate::settings::SettingValue::Bool(enabled),
         rollback_value: crate::settings::SettingValue::Bool(prev),
     }]

@@ -212,6 +212,9 @@ pub struct SettingMeta {
     /// When `true`, the row is hidden in minimal mode (the setting still
     /// exists and applies to the full TUI).
     pub hidden_in_minimal: bool,
+    /// When `true`, the row is only visible in the external (grok-pi)
+    /// profile. Normal Grok F2 hides these settings entirely.
+    pub external_only: bool,
 }
 
 /// A typed value carried by `Action::Set*` payloads, modal preview state,
@@ -494,6 +497,7 @@ pub fn current_value_for(
         "pi_builtin_tools.find" => Some(SettingValue::Bool(ui.pi_builtin_tools.find)),
         "pi_builtin_tools.ls" => Some(SettingValue::Bool(ui.pi_builtin_tools.ls)),
         "psm_resume_index" => Some(SettingValue::Bool(ui.psm_resume_index)),
+        "pi_tree_file_rollback" => Some(SettingValue::Bool(ui.pi_tree_file_rollback)),
         // Cache is the send-path source of truth (same pattern as group_tool_verbs).
         "page_flip_on_send" => Some(SettingValue::Bool(
             crate::appearance::cache::load_page_flip_on_send(),
@@ -687,8 +691,12 @@ pub fn current_value_for(
         })),
         // session_recap: None → on (default).
         "session_recap" => Some(SettingValue::Bool(ui.session_recap.unwrap_or(true))),
+        // recap_mermaid: None → off (default).
+        "recap_mermaid" => Some(SettingValue::Bool(ui.recap_mermaid.unwrap_or(false))),
         // progress_bar: None → off (default).
         "progress_bar" => Some(SettingValue::Bool(ui.progress_bar.unwrap_or(false))),
+        // remote_tui_footer: None → off (default).
+        "remote_tui_footer" => Some(SettingValue::Bool(ui.remote_tui_footer.unwrap_or(false))),
         // recap_model: empty = recap generation disabled.
         "recap_model" => Some(SettingValue::String(ui.recap_model.clone())),
 
@@ -1170,11 +1178,26 @@ mod tests {
                         "progress_bar default drifts from UiConfig::default()",
                     );
                 }
+                ("remote_tui_footer", SettingKind::Bool { default }) => {
+                    assert!(!default, "remote_tui_footer registry default must be off");
+                    assert_eq!(
+                        *default,
+                        ui.remote_tui_footer.unwrap_or(false),
+                        "remote_tui_footer default drifts from UiConfig::default()",
+                    );
+                }
                 ("session_recap", SettingKind::Bool { default }) => {
                     assert_eq!(
                         *default,
                         ui.session_recap.unwrap_or(true),
                         "session_recap default drifts from UiConfig::default()",
+                    );
+                }
+                ("recap_mermaid", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default,
+                        ui.recap_mermaid.unwrap_or(false),
+                        "recap_mermaid default drifts from UiConfig::default()",
                     );
                 }
                 ("recap_model", SettingKind::DynamicEnum { default, .. }) => {
@@ -1523,6 +1546,7 @@ mod tests {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         };
         // Same key registered twice → panic.
         let _ = SettingsRegistry::from_entries(vec![dup_meta.clone(), dup_meta]);

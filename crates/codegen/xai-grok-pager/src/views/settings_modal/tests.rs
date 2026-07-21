@@ -215,9 +215,9 @@ fn setting_row_visible_gates_voice_capture_on_key_releases() {
     let voice = meta_for(&reg, "voice_capture_mode");
     let vim = meta_for(&reg, "vim_mode");
     // voice_mode = true; kitty_releases varies.
-    assert!(!setting_row_visible(voice, false, false, true));
-    assert!(setting_row_visible(voice, true, false, true));
-    assert!(setting_row_visible(vim, false, false, true));
+    assert!(!setting_row_visible(voice, false, false, true, true));
+    assert!(setting_row_visible(voice, true, false, true, true));
+    assert!(setting_row_visible(vim, false, false, true, true));
 }
 
 #[test]
@@ -227,13 +227,13 @@ fn setting_row_visible_hides_voice_rows_when_voice_mode_off() {
     let language = meta_for(&reg, "voice_stt_language");
     let vim = meta_for(&reg, "vim_mode");
     // Gate off: both voice rows gone even with kitty releases + full TUI.
-    assert!(!setting_row_visible(capture, true, false, false));
-    assert!(!setting_row_visible(language, true, false, false));
+    assert!(!setting_row_visible(capture, true, false, false, true));
+    assert!(!setting_row_visible(language, true, false, false, true));
     // Non-voice rows unaffected.
-    assert!(setting_row_visible(vim, true, false, false));
+    assert!(setting_row_visible(vim, true, false, false, true));
     // Gate on: both visible (kitty releases for capture).
-    assert!(setting_row_visible(capture, true, false, true));
-    assert!(setting_row_visible(language, true, false, true));
+    assert!(setting_row_visible(capture, true, false, true, true));
+    assert!(setting_row_visible(language, true, false, true, true));
 }
 
 #[test]
@@ -278,11 +278,11 @@ fn setting_row_visible_hides_theme_rows_in_minimal() {
         let meta = meta_for(&reg, key);
         assert!(meta.hidden_in_minimal, "{key} must declare the flag");
         assert!(
-            !setting_row_visible(meta, true, true, true),
+            !setting_row_visible(meta, true, true, true, true),
             "{key} in minimal"
         );
         assert!(
-            setting_row_visible(meta, true, false, true),
+            setting_row_visible(meta, true, false, true, true),
             "{key} in full TUI"
         );
     }
@@ -290,8 +290,39 @@ fn setting_row_visible_hides_theme_rows_in_minimal() {
         meta_for(&reg, "vim_mode"),
         true,
         true,
+        true,
         true
     ));
+}
+
+#[test]
+fn setting_row_visible_hides_external_only_in_normal_profile() {
+    let reg = SettingsRegistry::defaults();
+    let pi_tools = meta_for(&reg, "pi_builtin_tools");
+    assert!(pi_tools.external_only, "pi_builtin_tools must be external_only");
+    // Normal Grok profile (external_agent = false): hidden.
+    assert!(!setting_row_visible(pi_tools, true, false, true, false));
+    // External/grok-pi profile: visible.
+    assert!(setting_row_visible(pi_tools, true, false, true, true));
+    // Children too.
+    for key in [
+        "pi_builtin_tools.read",
+        "pi_builtin_tools.bash",
+        "pi_builtin_tools.edit",
+        "pi_builtin_tools.write",
+        "pi_builtin_tools.grep",
+        "pi_builtin_tools.find",
+        "pi_builtin_tools.ls",
+    ] {
+        let child = meta_for(&reg, key);
+        assert!(child.external_only, "{key} must be external_only");
+        assert!(!setting_row_visible(child, true, false, true, false), "{key} hidden in normal");
+        assert!(setting_row_visible(child, true, false, true, true), "{key} visible in external");
+    }
+    // Non-external settings unaffected.
+    let vim = meta_for(&reg, "vim_mode");
+    assert!(!vim.external_only);
+    assert!(setting_row_visible(vim, true, false, true, false));
 }
 
 /// `action_for_bool` mirrors `current_value_for`: every registered
@@ -560,6 +591,7 @@ fn render_setting_row_shows_full_label_when_one_line_fits() {
         kind: SettingKind::Bool { default: false },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     };
     let area = Rect {
         x: 0,
@@ -1452,6 +1484,7 @@ fn render_setting_row_emits_restart_pill_when_required() {
         kind: SettingKind::Bool { default: false },
         restart_required: true,
         hidden_in_minimal: false,
+            external_only: false,
     };
     let area = Rect {
         x: 0,
@@ -1525,6 +1558,7 @@ fn render_setting_row_hides_restart_pill_when_at_default_and_collapsed() {
         kind: SettingKind::Bool { default: false },
         restart_required: true,
         hidden_in_minimal: false,
+            external_only: false,
     };
     let area = Rect {
         x: 0,
@@ -1593,6 +1627,7 @@ fn editor_render_fixture(buffer: &str, cursor_byte: usize) -> SettingsModalState
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     };
     let registry = SettingsRegistry::from_entries(vec![synthetic_meta]);
     let snapshot = PagerLocalSnapshot {
@@ -2426,6 +2461,7 @@ fn synthetic_enum_meta() -> SettingMeta {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }
 }
 
@@ -2958,6 +2994,7 @@ fn render_picker_drops_description_when_wrap_block_exceeds_height() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     };
     let registry = SettingsRegistry::from_entries(vec![synthetic_meta]);
     let mut s = SettingsModalState::new(
@@ -3027,6 +3064,7 @@ fn render_picker_long_description_wraps_no_ellipsis() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3119,6 +3157,7 @@ fn picker_visual_smoke_debug() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3176,6 +3215,7 @@ fn picker_long_description_wraps_to_multiple_lines() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3307,6 +3347,7 @@ fn picker_short_description_stays_one_line() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3376,6 +3417,7 @@ fn picker_no_description_renders_symbol_and_display_only() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3446,6 +3488,7 @@ fn picker_multi_line_choice_hit_rect_spans_all_lines() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3564,6 +3607,7 @@ fn picker_scroll_offset_accounts_for_variable_height() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }];
     let registry = Arc::new(SettingsRegistry::from_entries(entries));
     // Focus the LAST choice (c4) — the scroll math must keep it
@@ -3634,6 +3678,7 @@ fn render_picker_truncates_long_display_with_ellipsis() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3684,6 +3729,7 @@ fn render_picker_truncates_long_title_with_ellipsis() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3764,6 +3810,7 @@ fn render_picker_shows_more_indicator_when_choices_overflow() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -4477,6 +4524,7 @@ fn synthetic_long_label_meta() -> SettingMeta {
         kind: SettingKind::Bool { default: false },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }
 }
 
@@ -4495,6 +4543,7 @@ fn synthetic_enum_chevron_meta() -> SettingMeta {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     }
 }
 
@@ -5357,6 +5406,7 @@ fn bool_off_value_renders_in_dim_color() {
         kind: SettingKind::Bool { default: false },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     };
     let area = Rect {
         x: 0,
@@ -5460,6 +5510,7 @@ fn chevron_column_is_at_constant_right_offset() {
         kind: SettingKind::Bool { default: false },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     };
     let enum_meta = synthetic_enum_chevron_meta();
     let area = Rect {
@@ -5870,6 +5921,7 @@ fn picker_description_word_wraps_no_ellipsis() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     };
     let registry = SettingsRegistry::from_entries(vec![synthetic_meta]);
     let mut s = SettingsModalState::new(
@@ -7119,6 +7171,7 @@ fn max_thoughts_width_preview_only_renders_for_max_thoughts_width_key() {
         },
         restart_required: false,
         hidden_in_minimal: false,
+            external_only: false,
     };
     let registry = SettingsRegistry::from_entries(vec![synthetic_meta]);
     let mut s = SettingsModalState::new(

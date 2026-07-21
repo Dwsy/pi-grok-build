@@ -561,6 +561,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "screen_mode",
@@ -589,6 +590,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "show_timestamps",
@@ -603,6 +605,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "show_timeline",
@@ -618,6 +621,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             restart_required: false,
             // Minimal mode has no interactive scrollback pane for the rail.
             hidden_in_minimal: true,
+            external_only: false,
         },
         SettingMeta {
             key: "page_flip_on_send",
@@ -635,6 +639,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: true,
+            external_only: false,
         },
         SettingMeta {
             // Persisted key stays `simple_mode`; the user-facing label
@@ -663,6 +668,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned, persisted to `[ui].vim_mode` in config.toml.
         // Defaults to the same value main's `appearance::persist::VIM_MODE_DEFAULT`
@@ -689,6 +695,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // --- theme + auto themes ---------------------------------------------
         SettingMeta {
@@ -714,6 +721,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: true,
+            external_only: false,
         },
         SettingMeta {
             key: "auto_dark_theme",
@@ -730,6 +738,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: true,
+            external_only: false,
         },
         SettingMeta {
             key: "auto_light_theme",
@@ -746,6 +755,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: true,
+            external_only: false,
         },
         // SHELL-owned: persisted to `[ui].render_mermaid`, with a pager-side
         // process-wide cache mirror (like `vim_mode`). Default pinned to "auto"
@@ -773,6 +783,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // Security-relevant: "always-approve" bypasses all permission prompts.
         // Modal reads live state from `PagerLocalSnapshot.yolo_mode`
@@ -805,6 +816,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned `[ui].remember_tool_approvals`. Gates the per-tool
         // "Always allow …" prompt options. `restart_required` — resolved at
@@ -836,6 +848,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // PAGER-owned; default pinned by `defaults_match_pager_state`.
         SettingMeta {
@@ -848,6 +861,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             kind: SettingKind::Bool { default: false },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned. Reads from `pager.current_model_name` (not
         // `cfg.models.default`) so the modal reflects `/model` switches.
@@ -866,6 +880,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHARED. `u16` in UiConfig, widened to `i64` for registry.
         // Width changes apply on the next render frame.
@@ -891,6 +906,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned: `[ui].show_thinking_blocks` + process-wide cache. Default ON.
         SettingMeta {
@@ -912,6 +928,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned: `[ui].prompt_suggestions` + process-wide cache. Default ON.
         // The `GROK_PROMPT_SUGGESTIONS` env var overrides at runtime.
@@ -938,6 +955,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // PAGER-owned, persisted to `[scrollback.scroll].respect_manual_folds`
         // in pager.toml (NOT config.toml). Live value is the appearance
@@ -958,6 +976,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned: `[ui].group_tool_verbs` + process-wide cache. Default ON.
         SettingMeta {
@@ -976,6 +995,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned: `[ui].collapsed_edit_blocks` + process-wide cache.
         // Default OFF (rollout flag; remote settings / managed config can enable).
@@ -1005,6 +1025,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned: `[ui].ctrl_o_tool_expansion`. Only grok-pi consumes this
         // setting; normal Grok retains its existing Ctrl+O behavior.
@@ -1024,6 +1045,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned: `[ui.display_refresh].auto_cadence_enabled`. Restart-
         // required (cadence pinned at startup); hidden in minimal.
@@ -1047,6 +1069,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: true,
+            external_only: false,
         },
         // SHELL-owned, persisted to `[ui].scroll_speed` in config.toml.
         SettingMeta {
@@ -1065,6 +1088,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned `auto` | `wheel` | `trackpad` on `[ui].scroll_mode`.
         SettingMeta {
@@ -1089,6 +1113,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned, persisted to `[ui].scroll_lines`. One knob for BOTH
         // wheel and trackpad lines-per-tick; the registered default 3 matches
@@ -1111,6 +1136,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned: `[ui].invert_scroll` + process-wide cache. Default OFF.
         SettingMeta {
@@ -1133,6 +1159,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned `flash` | `hold` on `[ui].keep_text_selection`.
         SettingMeta {
@@ -1163,6 +1190,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned. Persisted in auth metadata (not config.toml).
         // Reads from `PagerLocalSnapshot.coding_data_sharing_opt_out`.
@@ -1196,6 +1224,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned, persisted to `[ui].default_selected_permission` in
         // config.toml. Read by the pager via `appearance::permission_cursor`.
@@ -1229,6 +1258,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned `[toolset.ask_user_question].timeout_enabled`. Surfaces
         // the user-config layer of the tiered timeout gate (requirements/env/
@@ -1258,6 +1288,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // PAGER-owned, ACP-mediated. Reads from
         // `PagerLocalSnapshot.plan_mode_active`. Default "off" matches
@@ -1278,6 +1309,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned startup-time settings (restart_required: true).
         // The running pager doesn't re-read these mid-session.
@@ -1293,6 +1325,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             kind: SettingKind::Bool { default: true },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // Contextual hints: one Advanced row that opens a sub-sheet of per-tip
         // toggles. Applies live (restart_required: false); the group carries no
@@ -1341,6 +1374,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "auto_update",
@@ -1355,6 +1389,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             kind: SettingKind::Bool { default: true },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned, persisted to `[ui].hunk_tracker_mode`. Restart-required:
         // the mode is read once when the session connects.
@@ -1376,6 +1411,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned, persisted to `[ui].voice_capture_mode`. The `hold` choice
         // is hidden on terminals without key-release reporting (see
@@ -1409,6 +1445,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // SHELL-owned, persisted to `[ui].voice_stt_language`. Live-applied to
         // the next voice capture (no restart). Default English; System (`auto`)
@@ -1430,6 +1467,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // Contextual-hint children (hidden from the top-level list; reached via
         // the group sub-sheet). Default ON — `None` (inherit) reads as `true`.
@@ -1445,6 +1483,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "contextual_hints.plan_mode",
@@ -1459,6 +1498,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "contextual_hints.image_input",
@@ -1473,6 +1513,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "contextual_hints.send_now",
@@ -1496,6 +1537,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "contextual_hints.small_screen",
@@ -1510,6 +1552,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "contextual_hints.word_select",
@@ -1534,6 +1577,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "contextual_hints.ssh_wrap",
@@ -1556,6 +1600,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // ── TodoGate (runtime turn-end backstop) ──────────────────────
         //
@@ -1589,6 +1634,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // External Pi profile resource manager. This is a Pager navigation row,
         // not a Grok-shell setting, so its Group form only supplies the native
@@ -1607,6 +1653,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: true,
         },
         SettingMeta {
             key: "pi_builtin_tools.read",
@@ -1620,6 +1667,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: true,
         },
         SettingMeta {
             key: "pi_builtin_tools.bash",
@@ -1633,6 +1681,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: true,
         },
         SettingMeta {
             key: "pi_builtin_tools.edit",
@@ -1646,6 +1695,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: true,
         },
         SettingMeta {
             key: "pi_builtin_tools.write",
@@ -1659,6 +1709,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: true,
         },
         SettingMeta {
             key: "pi_builtin_tools.grep",
@@ -1672,6 +1723,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: true,
         },
         SettingMeta {
             key: "pi_builtin_tools.find",
@@ -1685,6 +1737,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: true,
         },
         SettingMeta {
             key: "pi_builtin_tools.ls",
@@ -1698,6 +1751,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: true,
             hidden_in_minimal: false,
+            external_only: true,
         },
         SettingMeta {
             key: "psm_resume_index",
@@ -1711,6 +1765,21 @@ pub fn default_settings() -> Vec<SettingMeta> {
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
+        },
+        SettingMeta {
+            key: "pi_tree_file_rollback",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Pi tree file rollback",
+            description: "Track write/edit preimages and allow file-only rollback from SessionTree. Takes effect for new grok-pi sessions.",
+            keywords: &["pi", "tree", "rollback", "rewind", "checkpoint", "file", "undo"],
+            kind: SettingKind::Bool {
+                default: ui_default.pi_tree_file_rollback,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+            external_only: true,
         },
         SettingMeta {
             key: "pi_config",
@@ -1730,6 +1799,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             kind: SettingKind::Group { children: &[] },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
         // Session recap (auto away-recap + /recap model override).
         // Auto toggle lives on `[ui].session_recap` (mirrors notification opt-in).
@@ -1746,6 +1816,21 @@ Manual /recap still works when the agent advertises sessionRecap.",
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
+        },
+        SettingMeta {
+            key: "recap_mermaid",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Recap Mermaid diagrams",
+            description: "Allow Recap to include an optional Markdown Mermaid diagram. The diagram is rendered when the recap is expanded.",
+            keywords: &["recap", "mermaid", "diagram", "summary", "graph"],
+            kind: SettingKind::Bool {
+                default: ui_default.recap_mermaid.unwrap_or(false),
+            },
+            restart_required: false,
+            hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "progress_bar",
@@ -1759,6 +1844,21 @@ Manual /recap still works when the agent advertises sessionRecap.",
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
+        },
+        SettingMeta {
+            key: "remote_tui_footer",
+            category: SettingCategory::Appearance,
+            owner: SettingOwner::Shell,
+            label: "Remote TUI footer",
+            description: "Show keyboard hints below experimental Remote TUI frames.",
+            keywords: &["remote", "tui", "footer", "keyboard", "hints"],
+            kind: SettingKind::Bool {
+                default: ui_default.remote_tui_footer.unwrap_or(false),
+            },
+            restart_required: false,
+            hidden_in_minimal: false,
+            external_only: false,
         },
         SettingMeta {
             key: "recap_model",
@@ -1775,6 +1875,7 @@ Choose a model to enable recap; `(no override)` disables recap generation.",
             },
             restart_required: false,
             hidden_in_minimal: false,
+            external_only: false,
         },
     ]
 }

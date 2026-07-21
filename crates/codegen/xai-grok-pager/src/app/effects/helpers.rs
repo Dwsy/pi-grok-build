@@ -1167,6 +1167,14 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "pi_tree_file_rollback" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("pi_tree_file_rollback", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_pi_tree_file_rollback(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
         "session_recap" => {
             let SettingValue::Bool(b) = value else {
                 return Err(kind_mismatch("session_recap", "Bool", &value));
@@ -1175,11 +1183,27 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "recap_mermaid" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("recap_mermaid", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_recap_mermaid(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
         "progress_bar" => {
             let SettingValue::Bool(b) = value else {
                 return Err(kind_mismatch("progress_bar", "Bool", &value));
             };
             xai_grok_shell::util::config::set_progress_bar(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "remote_tui_footer" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("remote_tui_footer", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_remote_tui_footer(b)
                 .await
                 .map_err(|e| e.to_string())
         }
