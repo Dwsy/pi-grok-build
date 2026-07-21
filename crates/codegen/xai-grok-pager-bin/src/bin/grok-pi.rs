@@ -22,6 +22,8 @@ mod pi_version;
 mod recap_extension;
 #[path = "grok_pi/remote_tui_extension.rs"]
 mod remote_tui_extension;
+#[path = "grok_pi/rpc_compat_extension.rs"]
+mod rpc_compat_extension;
 #[path = "grok_pi/session_paths.rs"]
 mod session_paths;
 #[path = "grok_pi/subagent_extension.rs"]
@@ -56,6 +58,7 @@ use plan_mode_extension::write_plan_mode_extension;
 use pi_version::ensure_compatible_pi_host;
 use recap_extension::write_recap_extension;
 use remote_tui_extension::write_remote_tui_extension;
+use rpc_compat_extension::write_rpc_compat_extension;
 use session_paths::pi_session_dir;
 use subagent_extension::write_subagent_extension;
 use tools_extension::{
@@ -233,6 +236,11 @@ async fn run(mut args: Args) -> Result<()> {
     } else {
         None
     };
+    let rpc_compat_extension = if remote_tui_enabled {
+        Some(write_rpc_compat_extension().context("failed to create Pi RPC compatibility extension")?)
+    } else {
+        None
+    };
     let plan_mode_extension = bridge_extensions_enabled
         .then(|| write_plan_mode_extension())
         .transpose()
@@ -292,6 +300,24 @@ async fn run(mut args: Args) -> Result<()> {
         }
         pi_args = filtered_args;
     }
+
+    // Pi loads explicit extensions in argument order. Install the mode facade
+    // and its Remote TUI host before any third-party resource is loaded. They
+    // bypass the user-resource policy just like the other host bridge files.
+    let mut startup_extensions = Vec::new();
+    for path in [
+        rpc_compat_extension.as_ref().map(|extension| extension.path()),
+        remote_tui_extension.as_ref().map(|extension| extension.path()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        startup_extensions.extend([
+            "--extension".to_string(),
+            path.to_string_lossy().into_owned(),
+        ]);
+    }
+    pi_args.splice(0..0, startup_extensions);
 
     // Disable Pi auto-discovery; we supply approved resources explicitly.
     // Respect the user's own --no-* CLI flags (both Clap and passthrough):
@@ -375,9 +401,6 @@ async fn run(mut args: Args) -> Result<()> {
         context_extension
             .as_ref()
             .map(|extension| extension.source_path()),
-        remote_tui_extension
-            .as_ref()
-            .map(|extension| extension.path()),
         auth_extension.as_ref().map(|extension| extension.path()),
         native_commands_extension
             .as_ref()
@@ -429,8 +452,10 @@ async fn run(mut args: Args) -> Result<()> {
         ));
     }
     if remote_tui_enabled {
-        // Extension host gates on this exact value.
+        // The compatibility facade is safe only while this host can service
+        // custom component requests.
         env.push(("PI_GROK_REMOTE_TUI".to_string(), "1".to_string()));
+        env.push(("PI_GROK_EXTENSION_TUI_COMPAT".to_string(), "1".to_string()));
         // Pi RPC child has no real TTY; pass host size so Remote TUI is full-width
         // like interactive Pi (not a fixed 72-col probe box).
         if let Some((cols, rows)) = host_terminal_size() {
@@ -483,6 +508,7 @@ async fn run(mut args: Args) -> Result<()> {
     let _auth_extension = auth_extension;
     let _native_commands_extension = native_commands_extension;
     let _remote_tui_extension = remote_tui_extension;
+    let _rpc_compat_extension = rpc_compat_extension;
     let _plan_mode_extension = plan_mode_extension;
     let _tools_extension = tools_extension;
     let _rollback_extension = rollback_ext;

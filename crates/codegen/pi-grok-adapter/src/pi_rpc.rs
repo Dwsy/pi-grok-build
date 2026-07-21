@@ -3,7 +3,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    env,
+    path::{Path, PathBuf},
     process::Stdio,
     sync::{
         Arc, Mutex,
@@ -41,11 +42,15 @@ pub struct PiProcess {
 
 impl PiRpc {
     pub async fn spawn(config: SpawnConfig) -> Result<PiProcess> {
-        let mut command = Command::new(&config.program);
+        let rpc_entry = rpc_entry_for_cli(&config.program, &config.prefix_args);
+        let program = rpc_entry.as_deref().unwrap_or_else(|| Path::new(&config.program));
+        let mut command = Command::new(program);
+        command.args(&config.prefix_args);
+        if rpc_entry.is_none() {
+            tracing::debug!(program = %config.program, "Pi RPC entrypoint unavailable; passing --mode rpc to CLI");
+            command.arg("--mode").arg("rpc");
+        }
         command
-            .args(&config.prefix_args)
-            .arg("--mode")
-            .arg("rpc")
             .args(&config.pi_args)
             .current_dir(&config.cwd)
             .stdin(Stdio::piped())
@@ -342,6 +347,38 @@ impl StderrRingBuffer {
     }
 }
 
+/// Locate the official npm Pi RPC entrypoint next to a canonical `dist/cli.js`.
+///
+/// `rpc-entry.js` inserts `--mode rpc` only when it calls Pi's `main()`, so
+/// third-party extensions do not see that transport detail in `process.argv`.
+/// Prefix arguments describe a custom launcher (`node cli.js`, `bun`, etc.);
+/// those launchers intentionally remain on the documented CLI fallback.
+fn rpc_entry_for_cli(program: &str, prefix_args: &[String]) -> Option<PathBuf> {
+    if !prefix_args.is_empty() {
+        return None;
+    }
+    let cli = canonical_cli_path(program)?;
+    if cli.file_name().and_then(|name| name.to_str()) != Some("cli.js") {
+        return None;
+    }
+    let entry = cli.with_file_name("rpc-entry.js");
+    entry.is_file().then_some(entry)
+}
+
+fn canonical_cli_path(program: &str) -> Option<PathBuf> {
+    let direct = Path::new(program);
+    if direct.components().count() > 1 {
+        return std::fs::canonicalize(direct).ok();
+    }
+    env::var_os("PATH")
+        .and_then(|paths| {
+            env::split_paths(&paths)
+                .map(|directory| directory.join(program))
+                .find(|candidate| candidate.is_file())
+        })
+        .and_then(|candidate| std::fs::canonicalize(candidate).ok())
+}
+
 fn fail_pending(
     pending: &Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>>,
     message: &str,
@@ -366,6 +403,36 @@ mod tests {
         assert_eq!(request_timeout("bash"), None);
         assert_eq!(request_timeout("compact"), None);
         assert_eq!(request_timeout("get_state"), Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn resolves_official_rpc_entry_beside_npm_cli() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dist = temp.path().join("dist");
+        std::fs::create_dir(&dist).expect("create dist");
+        let cli = dist.join("cli.js");
+        let rpc_entry = dist.join("rpc-entry.js");
+        std::fs::write(&cli, "#!/usr/bin/env node").expect("write cli");
+        std::fs::write(&rpc_entry, "#!/usr/bin/env node").expect("write rpc entry");
+
+        assert_eq!(
+            rpc_entry_for_cli(cli.to_str().unwrap(), &[]),
+            Some(std::fs::canonicalize(rpc_entry).expect("canonical rpc entry"))
+        );
+    }
+
+    #[test]
+    fn custom_launcher_keeps_cli_rpc_fallback() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let cli = temp.path().join("cli.js");
+        std::fs::write(&cli, "#!/usr/bin/env node").expect("write cli");
+        std::fs::write(temp.path().join("rpc-entry.js"), "#!/usr/bin/env node")
+            .expect("write rpc entry");
+
+        assert_eq!(
+            rpc_entry_for_cli(cli.to_str().unwrap(), &["loader.js".to_string()]),
+            None
+        );
     }
 
     #[test]
