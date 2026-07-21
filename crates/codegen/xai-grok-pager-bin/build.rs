@@ -62,7 +62,10 @@ fn git_describe_version() -> Option<String> {
             "--match",
             "v*",
             "--abbrev=0",
-            "--dirty=-dirty",
+            // Use build metadata (`+dirty`), not a prerelease (`-dirty`).
+            // Semver ranks prereleases below the base release, which made a
+            // dirty tree of vX.Y.Z look older than the published X.Y.Z tag.
+            "--dirty=+dirty",
         ])
         .output()
         .ok()

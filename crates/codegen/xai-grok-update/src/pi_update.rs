@@ -141,12 +141,26 @@ pub async fn check_pi_update_background(current: String) -> Option<UpdateAvailab
     }
 }
 
+/// Parse a product version for update comparison.
+///
+/// Local git dirty builds historically used a `-dirty` prerelease suffix
+/// (`0.0.6-dirty`). Semver treats prereleases as *older* than the base
+/// release, which false-positive'd "Update: v0.0.6 available" while already
+/// running a dirty tree of that same tag. Strip the local dirty marker so
+/// comparison uses the base version. Build-metadata form (`0.0.6+dirty`) is
+/// already ignored by semver precedence.
+fn parse_for_compare(raw: &str) -> Option<semver::Version> {
+    let trimmed = raw.trim().trim_start_matches('v');
+    let base = trimmed
+        .strip_suffix("-dirty")
+        .or_else(|| trimmed.strip_suffix("+dirty"))
+        .unwrap_or(trimmed);
+    semver::Version::parse(base).ok()
+}
+
 fn is_remote_newer(latest: &str, current: &str) -> bool {
-    match (
-        semver::Version::parse(latest),
-        semver::Version::parse(current),
-    ) {
-        (Ok(remote), Ok(local)) => remote > local,
+    match (parse_for_compare(latest), parse_for_compare(current)) {
+        (Some(remote), Some(local)) => remote > local,
         _ => {
             tracing::warn!(%current, %latest, "pi update: semver parse failed");
             false
@@ -306,5 +320,23 @@ mod tests {
         assert!(is_remote_newer("0.0.2", "0.0.1"));
         assert!(!is_remote_newer("0.0.1", "0.0.2"));
         assert!(!is_remote_newer("0.0.2", "0.0.2"));
+    }
+
+    #[test]
+    fn dirty_local_same_base_is_not_an_update() {
+        // Historical `-dirty` prerelease marker must not false-positive.
+        assert!(!is_remote_newer("0.0.6", "0.0.6-dirty"));
+        assert!(!is_remote_newer("0.0.6", "v0.0.6-dirty"));
+        // Build-metadata form used by current build.rs.
+        assert!(!is_remote_newer("0.0.6", "0.0.6+dirty"));
+        assert!(!is_remote_newer("0.0.6", "v0.0.6+dirty"));
+    }
+
+    #[test]
+    fn dirty_local_still_sees_real_newer_remote() {
+        assert!(is_remote_newer("0.0.7", "0.0.6-dirty"));
+        assert!(is_remote_newer("0.0.7", "0.0.6+dirty"));
+        assert!(!is_remote_newer("0.0.5", "0.0.6-dirty"));
+        assert!(!is_remote_newer("0.0.5", "0.0.6+dirty"));
     }
 }
