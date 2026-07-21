@@ -362,9 +362,13 @@ impl ScrollbackPane {
             entry_range.clone(),
         );
 
-        // Compute sticky header layout (disabled in compact mode).
+        // Sticky headers: disabled in compact mode (by design) and during a live
+        // turn (`suppress_sticky_headers`) so non-compact sessions match compact
+        // paint cost while the agent is streaming — sticky re-layout/paint on
+        // every spinner frame was the compact-off lag path.
         let use_sticky = state.appearance().scrollback.display.sticky_headers
-            && !state.appearance().prompt.compact;
+            && !state.appearance().prompt.compact
+            && !state.suppress_sticky_headers();
         let sticky = if use_sticky {
             compute_sticky_layout(state.scroll_offset(), area.height, &prompts)
         } else {

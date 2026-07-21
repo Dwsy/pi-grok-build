@@ -5368,12 +5368,10 @@ impl AppView {
         if let ActiveView::Agent(id) = self.active_view
             && let Some(agent) = self.agents.get_mut(&id)
         {
-            // Expanded Edit/Write diffs are paint-heavy. During a live turn the
-            // animation/status loop would otherwise full-redraw the scrollback at
-            // spinner/wave cadence, which freezes the TUI while a diff is open
-            // (resume/idle is fine because that loop is off). Drop pure
-            // animation/status redraws while an expanded edit is on screen;
-            // content, input, and interaction paths still request draws.
+            // Expanded Edit/Write diffs are paint-heavy. Drop pure scrollback
+            // wave redraws while one fills the viewport so tool-accent animation
+            // does not full-repaint the diff every frame. Status spinner still
+            // advances (Pi-aligned cadence) so the braille glyph never freezes.
             let heavy_expanded_edit = agent.scrollback.has_expanded_edit_in_viewport();
             let scrollback_anim_redraw = agent.scrollback.tick();
             if !heavy_expanded_edit {
@@ -5397,9 +5395,9 @@ impl AppView {
             }
             let spinner_frame_tick =
                 agent.scrollback.animation_tick() % crate::views::turn_status::SPINNER_DIVISOR == 0;
-            if !heavy_expanded_edit {
-                needs_redraw |= !agent.session.state.is_idle() && spinner_frame_tick;
-            }
+            // Always redraw on spinner frame ticks during a live turn — never
+            // gate this on heavy expanded edits (that freezes the braille glyph).
+            needs_redraw |= !agent.session.state.is_idle() && spinner_frame_tick;
             needs_redraw |= agent
                 .mcp_init_progress
                 .as_ref()
@@ -5674,19 +5672,18 @@ impl AppView {
                 let Some(agent) = self.agents.get(&id) else {
                     return TickDemand::None;
                 };
-                // Match tick(): while an expanded edit fills the viewport, do not
-                // keep the 30fps loop alive solely for turn status / wave chrome.
+                // While an expanded edit fills the viewport, skip pure scrollback
+                // wave demand — but keep turn-status Fast so the spinner advances
+                // at Pi-aligned cadence and never freezes on a single braille frame.
                 let heavy_expanded_edit = agent.scrollback.has_expanded_edit_in_viewport();
                 let scrollback_anim =
                     agent.scrollback.needs_animation() && !heavy_expanded_edit;
-                let turn_status_tick =
-                    !agent.session.state.is_idle() && !heavy_expanded_edit;
                 let fast = scrollback_anim
                     || agent.todo.list_state.needs_tick()
                     || agent.todo.badge_needs_tick()
                     || agent.tasks.needs_tick()
                     || agent.acp_synced_generation != agent.session.available_commands_generation
-                    || turn_status_tick
+                    || !agent.session.state.is_idle()
                     || agent.session.loading_replay
                     || agent
                         .mcp_init_progress

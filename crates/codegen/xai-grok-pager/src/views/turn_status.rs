@@ -28,14 +28,17 @@ use crate::render::line_utils::truncate_str;
 use crate::theme::Theme;
 
 /// Show each spinner frame for this many animation ticks.
-/// At ~30fps, 4 ticks = ~133ms per frame = ~7.5 spinner fps.
-pub(crate) const SPINNER_DIVISOR: u64 = 4;
+///
+/// Pi's TUI `Loader` defaults to **80ms** per braille frame. At the pager's
+/// ~30fps animation cadence (≈33ms/tick), divisor `2` ≈ 66ms — the closest
+/// integer match. Divisor `4` was ≈133ms and read visibly slower than Pi.
+pub(crate) const SPINNER_DIVISOR: u64 = 2;
 
 /// Show each monitor-pulse frame for this many animation ticks — twice the
-/// [`SPINNER_DIVISOR`] dwell (~3.75 fps). The idle "watching" cue should
+/// [`SPINNER_DIVISOR`] dwell (~7.5 fps). The idle "watching" cue should
 /// breathe calmly rather than read like the active turn spinner, so its
-/// `○ ◎ ◉ ◎` cycle runs at roughly half the speed (~1.07s per loop).
-pub(crate) const MONITOR_PULSE_DIVISOR: u64 = 8;
+/// `○ ◎ ◉ ◎` cycle runs at roughly half the busy-spinner speed.
+pub(crate) const MONITOR_PULSE_DIVISOR: u64 = 4;
 
 /// Pulse speed for every "waiting on you" diamond — the drain-blocked
 /// status, the pending-user-input status, and the plan-approval status

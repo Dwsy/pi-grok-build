@@ -210,6 +210,12 @@ pub struct ScrollbackState {
 
     /// Session/worktree cwd (`AgentSession.cwd`) for Expanded tool paths.
     cwd: Option<std::path::PathBuf>,
+
+    /// When true, sticky section headers are skipped for this paint — same as
+    /// compact mode. Set during a live turn so non-compact sessions do not pay
+    /// sticky re-layout/paint on every spinner/stream frame (compact-on is
+    /// smooth; compact-off was lagging for the same transcript).
+    suppress_sticky_headers: bool,
 }
 
 impl Default for ScrollbackState {
@@ -255,11 +261,22 @@ impl ScrollbackState {
             layout_rebuilds: 0,
             inline_edit_height: None,
             cwd: None,
+            suppress_sticky_headers: false,
         }
     }
 
     pub fn cwd(&self) -> Option<&std::path::Path> {
         self.cwd.as_deref()
+    }
+
+    /// Suppress sticky headers for the next paint passes (live turn hot path).
+    pub fn set_suppress_sticky_headers(&mut self, suppress: bool) {
+        self.suppress_sticky_headers = suppress;
+    }
+
+    /// Whether sticky headers are suppressed for this paint.
+    pub fn suppress_sticky_headers(&self) -> bool {
+        self.suppress_sticky_headers
     }
 
     /// Update session cwd; invalidates cwd-dependent paint, layout, and link maps.
