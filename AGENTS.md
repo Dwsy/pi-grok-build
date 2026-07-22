@@ -17,6 +17,31 @@ base     98c3b2438aa922fbbe6178a5c0a4c48f85edc8ce
 - Pi host default is **system `pi` >= 0.80.10** (`npm i -g @earendil-works/pi-coding-agent`). Override with `--pi-bin` / `PI_BIN`.
 - Optional Pi source checkout is the git submodule [`pi-main`](https://github.com/earendil-works/pi) (not a vendored copy). Follow [`pi-main/AGENTS.md`](pi-main/AGENTS.md) when working inside the submodule.
 
+## Upstream sync workflow
+
+Syncing upstream Grok Build is a **two-phase** process. Always record what
+upstream changed *before* merging it.
+
+1. **Fill the upstream update record first.** Run the
+   [`upstream-changelog`](.pi/skills/upstream-changelog/SKILL.md) skill (trigger:
+   `/skill:upstream-changelog`, or "上游更新记录" / "fill the upstream update
+   list"). It fetches `upstream`, computes the pending range
+   (`merge-base HEAD upstream/main .. upstream/main`), transcribes the
+   `Changes:` list from each upstream commit message, and writes a structured
+   English entry to [`docs/upstream/UPSTREAM_CHANGELOG.md`](docs/upstream/UPSTREAM_CHANGELOG.md).
+   This step is **read-only** — it records changes but merges nothing.
+2. **Then merge.** Only after the changelog entry exists, proceed with the
+   isolated-worktree merge, seam reapplication, and validation (see the
+   `docs/issues/架构/` sync issues). Never merge an upstream root commit
+   directly into `main` without this plan.
+
+Upstream commits are titled `Synced from monorepo` but each carries a full
+`Changes:` bullet list and a `Source-Revision:` trailer — the changelog skill
+transcribes those as the authoritative feature list (diff analysis is only a
+fallback for commits lacking a `Changes:` list). `SOURCE_REV`, `AGENTS.md`
+`base`, and verifier baselines are updated only after a completed, verified
+merge — never by the changelog skill.
+
 ## Architecture invariants
 
 1. **Grok Pager is the only terminal UI.** All visible terminal surfaces must come from `xai-grok-pager` or native component crates.
@@ -39,6 +64,8 @@ Read [`NATIVE_GROK_TUI_ALIGNMENT.md`](NATIVE_GROK_TUI_ALIGNMENT.md) and [`FEATUR
 | Pi RPC facts (submodule / installed package) | `pi-main/packages/coding-agent/src/modes/rpc/` or npm package dist |
 | Pi session lifecycle facts | `pi-main/packages/coding-agent/src/core/agent-session.ts` |
 | Architecture and task records | `docs/` |
+| Upstream update record (changelog) | `docs/upstream/UPSTREAM_CHANGELOG.md` |
+| Upstream changelog skill | `.pi/skills/upstream-changelog/SKILL.md` |
 
 ## Session and tree rules
 
