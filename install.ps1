@@ -64,4 +64,4 @@ Write-Host ""
 Write-Host "Installed $installDir\grok-pi.exe"
 Write-Host 'Open a new terminal if this is the first install so PATH updates apply.'
 Write-Host 'Install Pi with: npm install --global @earendil-works/pi-coding-agent'
-Write-Host 'Run with: grok-pi --pi-bin pi --pi-cwd C:\path\to\project -- --no-session'
+Write-Host 'Run with: grok-pi'

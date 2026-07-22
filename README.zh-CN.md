@@ -39,18 +39,15 @@ npm install --global @earendil-works/pi-coding-agent
 
 ## 启动
 
-在当前项目中运行：
+在任意项目目录下直接运行：
 
 ```bash
 grok-pi
+# 或
+pi-grok
 ```
 
-指定项目目录或继续上一个会话：
-
-```bash
-grok-pi --pi-cwd /path/to/project
-grok-pi --continue
-```
+默认使用 PATH 上的 `pi`，并以当前工作目录作为项目目录。继续上一会话：`grok-pi --continue`。
 
 常用命令：
 
@@ -121,13 +118,8 @@ grok-pi -- --model openai/gpt-4o
 
 ```bash
 ./build.sh
-PI_BIN=pi ./run-local.sh /path/to/project
-```
-
-直接运行开发版本：
-
-```bash
-cargo run -p xai-grok-pager-bin --bin grok-pi -- --pi-bin pi --pi-cwd /path/to/project
+./target/debug/grok-pi
+# 或: PI_BIN=pi ./run-local.sh
 ```
 
 运行验证：

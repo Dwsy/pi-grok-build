@@ -39,18 +39,15 @@ npm install --global @earendil-works/pi-coding-agent
 
 ## Start
 
-Run in the current project:
+From any project directory:
 
 ```bash
 grok-pi
+# or
+pi-grok
 ```
 
-Run in another directory or continue the previous session:
-
-```bash
-grok-pi --pi-cwd /path/to/project
-grok-pi --continue
-```
+Defaults: system `pi` on PATH, current working directory as the project. Continue the previous session with `grok-pi --continue`.
 
 Useful commands:
 
@@ -121,13 +118,8 @@ Requirements: Rust **1.92.0**, Node.js **22.19.0 or newer**, npm, and a system P
 
 ```bash
 ./build.sh
-PI_BIN=pi ./run-local.sh /path/to/project
-```
-
-For direct development invocation:
-
-```bash
-cargo run -p xai-grok-pager-bin --bin grok-pi -- --pi-bin pi --pi-cwd /path/to/project
+./target/debug/grok-pi
+# or: PI_BIN=pi ./run-local.sh
 ```
 
 Run verification with:
