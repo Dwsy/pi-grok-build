@@ -1998,6 +1998,7 @@ fn make_session_info(
         session_id: "test-session-id".into(),
         cwd: "/tmp/test".into(),
         session_file: None,
+        cache_metrics: None,
         data: SessionInfoData {
             agent_name: None,
             model: Some(model.into()),

@@ -1212,6 +1212,22 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "pi_cache_graph" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("pi_cache_graph", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_pi_cache_graph(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "review_file_tree" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("review_file_tree", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_review_file_tree(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
         "session_recap" => {
             let SettingValue::Bool(b) = value else {
                 return Err(kind_mismatch("session_recap", "Bool", &value));

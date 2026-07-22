@@ -553,6 +553,54 @@ pub fn model_display_name(
     model.to_string()
 }
 
+/// Per-turn assistant usage row for cache hit graph/stats (pi-cache-graph shape).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantUsageMetric {
+    pub sequence: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_branch_sequence: Option<u32>,
+    pub entry_id: String,
+    pub timestamp: String,
+    pub provider: String,
+    pub model: String,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub total_tokens: u64,
+    pub cache_hit_percent: f64,
+    pub is_on_active_branch: bool,
+    /// True when input/output were estimated from content (provider usage was 0).
+    #[serde(default)]
+    pub usage_estimated: bool,
+}
+
+/// Aggregate token totals for cache stats.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CacheUsageTotals {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub total_tokens: u64,
+    pub assistant_messages: u64,
+}
+
+/// Session-wide cache metrics for Context modal graph/stats views.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CacheSessionMetrics {
+    pub all_messages: Vec<AssistantUsageMetric>,
+    pub active_branch_messages: Vec<AssistantUsageMetric>,
+    pub tree_totals: CacheUsageTotals,
+    pub active_branch_totals: CacheUsageTotals,
+    /// How many assistant rows used content-size estimates (provider wrote 0 usage).
+    #[serde(default)]
+    pub estimated_count: u32,
+}
+
 /// Full wire response for `x.ai/session/info`.
 ///
 /// Wraps `SessionInfoData` with session-level fields (`session_id`, `cwd`)
@@ -566,6 +614,9 @@ pub struct SessionInfoResponse {
     /// Absent for in-memory / Grok cloud-only sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_file: Option<String>,
+    /// Optional Pi cache-hit series for Context modal graph/stats (grok-pi).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_metrics: Option<CacheSessionMetrics>,
     #[serde(flatten)]
     pub data: SessionInfoData,
 }

@@ -359,7 +359,11 @@ pub(crate) fn scrollback_has_user_messages(
 /// return-from-away recap. For the manual path we clear the prompt and, when
 /// no session exists yet, surface a toast; the auto path is best-effort and
 /// silently no-ops without an active session.
-pub(super) fn dispatch_send_recap(app: &mut AppView, auto: bool) -> Vec<Effect> {
+pub(super) fn dispatch_send_recap(
+    app: &mut AppView,
+    auto: bool,
+    custom_instructions: Option<String>,
+) -> Vec<Effect> {
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
@@ -456,6 +460,10 @@ pub(super) fn dispatch_send_recap(app: &mut AppView, auto: bool) -> Vec<Effect> 
 
     let terminal_width = agent.last_terminal_size.0;
 
+    let custom_instructions = custom_instructions
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
     vec![Effect::SendRecap {
         session_id,
         auto,
@@ -463,6 +471,7 @@ pub(super) fn dispatch_send_recap(app: &mut AppView, auto: bool) -> Vec<Effect> 
         thinking_level,
         recap_mermaid: app.current_ui.recap_mermaid.unwrap_or(false),
         terminal_width,
+        custom_instructions,
     }]
 }
 

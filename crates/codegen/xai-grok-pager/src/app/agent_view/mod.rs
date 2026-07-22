@@ -154,6 +154,7 @@ pub(crate) use input::ExternalPromptEditorAccess;
 mod interactions;
 mod fork_picker;
 mod jump;
+mod review;
 mod links;
 mod media;
 mod modals;
@@ -1315,6 +1316,8 @@ pub struct AgentView {
     pub(crate) rewind_state: Option<crate::views::rewind::RewindState>,
     pub(crate) rewind_points: Option<Vec<crate::views::rewind::RewindPointInfo>>,
     pub(crate) jump_state: Option<crate::views::jump::JumpState>,
+    /// Session / turn code-review modal (file list + patch preview).
+    pub(crate) review_state: Option<crate::views::review::ReviewState>,
     /// Pi message-level `/fork` picker (prompt-area list overlay, like `/jump`).
     pub(crate) fork_state: Option<crate::views::fork_picker::ForkPickerState>,
     /// In-place edit of a previous user prompt. See `inline_edit.rs`.

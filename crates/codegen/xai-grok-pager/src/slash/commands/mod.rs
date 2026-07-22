@@ -56,6 +56,7 @@ pub mod release_notes;
 pub mod remember;
 pub mod rename;
 pub mod resume;
+pub mod review;
 pub mod rewind;
 pub mod screen_mode_switch;
 pub mod scroll_debug;
@@ -69,6 +70,7 @@ pub mod timestamps;
 pub mod toggle_mouse_reporting;
 pub mod transcript;
 pub mod tree;
+pub mod tree_map;
 pub mod usage;
 pub mod plan_mode;
 pub mod view_plan;
@@ -131,6 +133,7 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(view_plan::ViewPlanCommand),
         Arc::new(resume::ResumeCommand),
         Arc::new(tree::TreeCommand),
+        Arc::new(tree_map::TreeMapCommand),
         Arc::new(notify::NotifyCommand),
         Arc::new(mcps::McpsCommand),
         Arc::new(workflow::WorkflowCommand),
@@ -151,6 +154,8 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(settings_cmd::SettingsCommand),
         Arc::new(privacy::PrivacyCommand),
         Arc::new(rewind::RewindCommand),
+        Arc::new(review::ReviewSessionCommand),
+        Arc::new(review::ReviewMessageCommand),
         Arc::new(jump::JumpCommand),
         Arc::new(login::LoginCommand),
         Arc::new(logout::LogoutCommand),
@@ -230,7 +235,6 @@ mod tests {
             session_id: None,
             bundle_state: &DEFAULT_BUNDLE_STATE,
             screen_mode: crate::app::ScreenMode::Inline,
-           billing_surface_visible: false,
             billing_surface_visible: true,
             pager_state: crate::settings::PagerLocalSnapshot {
                 multiline_mode: false,
@@ -813,8 +817,19 @@ mod tests {
         let result = cmd.run(&mut ctx, "");
         assert!(matches!(
             result,
-            CommandResult::Action(Action::SendRecap { auto: false })
+            CommandResult::Action(Action::SendRecap {
+                auto: false,
+                custom_instructions: None,
+            })
         ));
+        let focused = cmd.run(&mut ctx, " focus on the API ");
+        match focused {
+            CommandResult::Action(Action::SendRecap {
+                auto: false,
+                custom_instructions: Some(text),
+            }) => assert_eq!(text, "focus on the API"),
+            other => panic!("expected focused SendRecap, got {other:?}"),
+        }
     }
     #[test]
     fn recap_hidden_by_default_in_registry_until_revealed() {

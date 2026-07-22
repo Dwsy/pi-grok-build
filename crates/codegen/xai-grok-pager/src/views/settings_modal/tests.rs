@@ -317,6 +317,8 @@ fn setting_row_visible_hides_external_only_in_normal_profile() {
         "pi_tree_file_rollback",
         "pi_workflows",
         "pi_goal",
+        "pi_cache_graph",
+        "review_file_tree",
     ] {
         let child = meta_for(&reg, key);
         assert!(child.external_only, "{key} must be external_only");

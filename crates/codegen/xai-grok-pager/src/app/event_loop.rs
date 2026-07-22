@@ -2404,7 +2404,13 @@ pub(crate) async fn run(
             // user returns. Cheap no-op while focused / not-yet-eligible.
             _ = recap_poll => {
                 if should_pregenerate_away_recap(&app) {
-                    let effs = dispatch::dispatch(Action::SendRecap { auto: true }, &mut app);
+                    let effs = dispatch::dispatch(
+                        Action::SendRecap {
+                            auto: true,
+                            custom_instructions: None,
+                        },
+                        &mut app,
+                    );
                     if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
                         break;
                     }

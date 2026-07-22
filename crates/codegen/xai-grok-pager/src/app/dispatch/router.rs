@@ -78,7 +78,7 @@ use super::session::modal::dispatch_rename_session;
 use super::session::tree::{
     dispatch_label_session_tree_entry, dispatch_navigate_session_tree,
     dispatch_rollback_files_execute, dispatch_rollback_files_preview,
-    dispatch_session_tree_closed, dispatch_show_session_tree,
+    dispatch_session_tree_closed, dispatch_show_session_tree, dispatch_show_tree_map,
 };
 use super::settings::setters::{
     clear_default_model, clear_fork_secondary_model, clear_recap_model, preview_auto_dark_theme,
@@ -91,7 +91,8 @@ use super::settings::setters::{
     set_display_refresh_auto_cadence, set_fork_secondary_model, set_group_tool_verbs,
     set_hunk_tracker_mode, set_invert_scroll, set_keep_text_selection, set_max_thoughts_width,
     set_multiline_mode, set_page_flip_on_send, set_pi_builtin_tool, set_pi_tree_file_rollback,
-    set_pi_goal, set_pi_workflows, set_progress_bar, set_prompt_suggestions, set_psm_resume_index,
+    set_pi_cache_graph, set_pi_goal, set_pi_workflows, set_progress_bar, set_prompt_suggestions,
+    set_psm_resume_index, set_review_file_tree,
     set_recap_mermaid,
     set_recap_model, set_remember_tool_approvals, set_remote_tui_footer, set_render_mermaid,
     set_respect_manual_folds, set_screen_mode, set_scroll_lines, set_scroll_mode, set_scroll_speed,
@@ -233,6 +234,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::RefreshExternalSessionCatalog => dispatch_refresh_external_session_catalog(app),
         Action::ShowSessionPicker => dispatch_show_session_picker(app),
         Action::ShowSessionTree => dispatch_show_session_tree(app),
+        Action::ShowTreeMap => dispatch_show_tree_map(app),
         Action::ShowNotifications => dispatch_show_notifications(app),
         Action::NavigateSessionTree {
             entry_id,
@@ -1029,7 +1031,10 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::SendRememberNote(text) => dispatch_send_remember_note(app, text),
         Action::SaveRememberNoteFromModal => dispatch_save_remember_note_from_modal(app),
         Action::SendBtw(question) => dispatch_send_btw(app, question),
-        Action::SendRecap { auto } => dispatch_send_recap(app, auto),
+        Action::SendRecap {
+            auto,
+            custom_instructions,
+        } => dispatch_send_recap(app, auto, custom_instructions),
         Action::ShowPrivacyInfo => dispatch_show_privacy_info(app),
         Action::SetCodingDataSharing { opted_in } => set_coding_data_sharing(app, opted_in),
         Action::ToggleYolo => dispatch_toggle_yolo(app),
@@ -1095,6 +1100,8 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::SetPiTreeFileRollback(enabled) => set_pi_tree_file_rollback(app, enabled),
         Action::SetPiWorkflows(enabled) => set_pi_workflows(app, enabled),
         Action::SetPiGoal(enabled) => set_pi_goal(app, enabled),
+        Action::SetPiCacheGraph(enabled) => set_pi_cache_graph(app, enabled),
+        Action::SetReviewFileTree(enabled) => set_review_file_tree(app, enabled),
         Action::SetMaxThoughtsWidth(v) => set_max_thoughts_width(app, v),
         Action::SetShowTips(v) => set_show_tips(app, v),
         Action::SetAutoUpdate(v) => set_auto_update(app, v),
@@ -1478,6 +1485,10 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::JumpShowPicker => dispatch_jump_show_picker(app),
         Action::JumpPickerSelect(id) => dispatch_jump_picker_select(app, id),
         Action::JumpDismiss => dispatch_jump_dismiss(app),
+        Action::ReviewShowSession => super::review::dispatch_review_show_session(app),
+        Action::ReviewShowMessagePicker => super::review::dispatch_review_show_message_picker(app),
+        Action::ReviewOpenForTurn(id) => super::review::dispatch_review_open_for_turn(app, id),
+        Action::ReviewDismiss => super::review::dispatch_review_dismiss(app),
         Action::RewindPickerSelect(prompt_index) => {
             dispatch_rewind_picker_select(app, prompt_index)
         }

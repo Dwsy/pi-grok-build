@@ -446,6 +446,14 @@ pub(crate) fn build_session_info_response(
     response
 }
 
+/// Attach optional `cacheMetrics` (pi-cache-graph shape) to session/info JSON.
+pub(crate) fn attach_cache_metrics(mut response: Value, cache_metrics: Value) -> Value {
+    if let Some(obj) = response.as_object_mut() {
+        obj.insert("cacheMetrics".into(), cache_metrics);
+    }
+    response
+}
+
 /// Approximate context tokens from a Pi assistant `usage` object.
 ///
 /// Mirrors Pi's `calculateContextTokens`: prefer `totalTokens`, else sum

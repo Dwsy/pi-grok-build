@@ -492,17 +492,56 @@ pub(super) fn handle_context_info_complete(
     agent_id: AgentId,
     info: Box<xai_grok_shell::session::SessionInfoResponse>,
 ) -> Vec<Effect> {
+    // Read F2 gate before mutably borrowing agents.
+    let cache_graph_enabled = app.current_ui.pi_cache_graph;
     if let Some(agent) = app.agents.get_mut(&agent_id) {
         let model = info.data.model.as_deref().unwrap_or("unknown").to_string();
-        let snapshot = info.data.context;
+        let snapshot = info.data.context.clone();
         agent.apply_full_context_info(snapshot.clone());
+        // Preserve view mode across refresh (`r`) so graph/stats stay put.
+        let prev_view = match &agent.active_modal {
+            Some(ActiveModal::ContextInfo { view, .. }) => *view,
+            _ => crate::views::cache_graph::CacheGraphView::Breakdown,
+        };
+        let export_basename = info
+            .session_file
+            .as_deref()
+            .and_then(|p| {
+                std::path::Path::new(p)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(str::to_owned)
+            })
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                agent
+                    .session
+                    .session_id
+                    .as_ref()
+                    .map(|id| id.0.to_string())
+            })
+            .unwrap_or_else(|| "session".into());
+        let export_basename =
+            crate::views::cache_graph::sanitize_export_name(&export_basename);
+        let cache_metrics = if cache_graph_enabled {
+            info.cache_metrics.clone()
+        } else {
+            None
+        };
+        let view = if cache_metrics.is_some() {
+            prev_view
+        } else {
+            crate::views::cache_graph::CacheGraphView::Breakdown
+        };
         // Context is a transient inspection surface, not conversation history.
-        // Replacing this native modal makes repeated clicks refresh one snapshot
-        // instead of appending duplicate blocks to scrollback.
         agent.active_modal = Some(ActiveModal::ContextInfo {
             block: crate::scrollback::blocks::ContextInfoBlock::new(snapshot, model),
             scroll: 0,
             window: ModalWindowState::new(),
+            cache_metrics,
+            view,
+            export_cwd: info.cwd.clone(),
+            export_basename,
         });
     }
     vec![]

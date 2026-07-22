@@ -541,6 +541,42 @@ impl AgentView {
             viewer.handle_scroll(lines);
             return;
         }
+        // Code-review modal: dual-pane wheel (same path as block_viewer / pi-config).
+        // Must run before scrollback hit-test or trackpad events leak through.
+        if let Some(ref mut review) = self.review_state {
+            use crate::views::review::ReviewFocus;
+            let in_list = review.list_area.area() > 0
+                && review.list_area.contains((col, row).into());
+            let in_preview = review.preview_area.area() > 0
+                && review.preview_area.contains((col, row).into());
+            if in_list {
+                review.focus = ReviewFocus::List;
+                review.move_sel(lines.signum());
+                review.ensure_viewer(&self.scrollback);
+            } else if in_preview || review.popup_area.contains((col, row).into()) {
+                // Preview under cursor, or anywhere else on the modal chrome.
+                review.focus = ReviewFocus::Preview;
+                review.ensure_viewer(&self.scrollback);
+                if let Some(viewer) = review.viewer.as_mut() {
+                    viewer.handle_scroll(lines);
+                }
+            } else {
+                // Outside popup: still absorb the wheel so scrollback does not move.
+                match review.focus {
+                    ReviewFocus::List => {
+                        review.move_sel(lines.signum());
+                        review.ensure_viewer(&self.scrollback);
+                    }
+                    ReviewFocus::Preview => {
+                        review.ensure_viewer(&self.scrollback);
+                        if let Some(viewer) = review.viewer.as_mut() {
+                            viewer.handle_scroll(lines);
+                        }
+                    }
+                }
+            }
+            return;
+        }
         if self.rewind_state.is_some() {
             if let Some(ref mut rw) = self.rewind_state {
                 crate::views::rewind::move_cursor(&mut rw.phase, lines.signum());
@@ -793,6 +829,38 @@ mod scroll_granularity_tests {
             agent.scrollback.scroll_info().0,
             before,
             "wheel must not leak through the goal detail overlay"
+        );
+        agent.show_goal_detail = false;
+
+        // /review-session modal must also absorb wheel (no scrollback leak).
+        use crate::views::review::{ReviewFileItem, ReviewFileKind, ReviewKindFilter, ReviewState};
+        use crate::scrollback::entry::EntryId;
+        agent.review_state = Some(ReviewState::new(
+            "test",
+            vec![ReviewFileItem {
+                path: "a.rs".into(),
+                kind: ReviewFileKind::Edit,
+                entry_id: EntryId::new(1),
+                additions: 1,
+                deletions: 0,
+                is_error: false,
+                op_count: 1,
+                plain_fallback: "+line\n".into(),
+            }],
+            ReviewKindFilter::Changes,
+        ));
+        // Populate hit areas as if a frame had rendered.
+        if let Some(ref mut review) = agent.review_state {
+            review.popup_area = Rect::new(0, 0, 80, 20);
+            review.list_area = Rect::new(0, 0, 20, 18);
+            review.preview_area = Rect::new(20, 0, 60, 18);
+        }
+        agent.handle_scroll(3, 40, 8);
+        agent.handle_scroll(-3, 5, 4);
+        assert_eq!(
+            agent.scrollback.scroll_info().0,
+            before,
+            "wheel must not leak through the review modal"
         );
     }
 }

@@ -114,6 +114,31 @@ impl AgentView {
         use crate::views::shortcuts_bar::HintItem;
         if let Some(ref viewer) = self.block_viewer {
             viewer.shortcuts_hints()
+        } else if let Some(ref review) = self.review_state {
+            use crate::views::review::ReviewFocus;
+            match review.focus {
+                ReviewFocus::List => vec![
+                    HintItem::new(key!(Esc), "close"),
+                    HintItem::paired(key!(Up), key!(Down), "files"),
+                    HintItem::new(key!('/'), "filter"),
+                    HintItem::new(key!(Enter), "preview"),
+                    HintItem::paired(key!('n'), key!('p'), "next file"),
+                ],
+                ReviewFocus::Preview => {
+                    if let Some(ref viewer) = review.viewer {
+                        let mut hints = viewer.shortcuts_hints();
+                        // Replace viewer Esc=close with review shell meaning.
+                        hints.insert(
+                            1,
+                            HintItem::paired(key!('n'), key!('p'), "file"),
+                        );
+                        hints.push(HintItem::new(key!(Left), "files"));
+                        hints
+                    } else {
+                        vec![HintItem::new(key!(Esc), "close")]
+                    }
+                }
+            }
         } else if !self.permission_queue.is_empty() {
             use crate::views::permission_view::PermissionFocus;
             if let Some(perm) = self.permission_queue.front() {
@@ -3645,6 +3670,38 @@ impl AgentView {
                 HintItem::new(key!(Esc), "quit"),
                 HintItem::new(key!(' '), "fire"),
             ];
+            ShortcutsBar::new(&hints).render(layout.shortcuts, buf);
+            self.pane_areas = layout.pane_areas();
+            return (None, prompt_post_flush);
+        }
+        if self.review_state.is_some() {
+            use ratatui::widgets::{Clear, Widget};
+            let overlay_area = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: layout.shortcuts.y.saturating_sub(area.y),
+            };
+            let popup_w = ((overlay_area.width as f32 * 0.96) as u16)
+                .max(40)
+                .min(overlay_area.width);
+            let popup_h = ((overlay_area.height as f32 * 0.92) as u16)
+                .max(10)
+                .min(overlay_area.height.saturating_sub(1));
+            let popup_x = overlay_area.x + (overlay_area.width.saturating_sub(popup_w)) / 2;
+            let popup_y = overlay_area.y + (overlay_area.height.saturating_sub(popup_h)) / 2;
+            let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+            crate::views::file_search::line_viewer::dim_area(buf, overlay_area, theme.bg_base, 0.5);
+            Clear.render(popup_area, buf);
+            if let Some(ref mut review) = self.review_state {
+                crate::views::review::render_review_modal(
+                    buf,
+                    popup_area,
+                    review,
+                    &self.scrollback,
+                );
+            }
+            let hints = self.current_shortcut_hints(registry);
             ShortcutsBar::new(&hints).render(layout.shortcuts, buf);
             self.pane_areas = layout.pane_areas();
             return (None, prompt_post_flush);

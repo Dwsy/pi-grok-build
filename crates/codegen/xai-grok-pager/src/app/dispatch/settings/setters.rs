@@ -2151,6 +2151,48 @@ pub(in crate::app::dispatch) fn set_pi_goal(app: &mut AppView, enabled: bool) ->
     }]
 }
 
+pub(in crate::app::dispatch) fn set_pi_cache_graph(app: &mut AppView, enabled: bool) -> Vec<Effect> {
+    let previous = app.current_ui.pi_cache_graph;
+    if previous == enabled {
+        return vec![];
+    }
+    app.current_ui.pi_cache_graph = enabled;
+    refresh_open_settings_modals(app);
+    let value = if enabled { "on" } else { "off" };
+    app.show_toast(&format!("\u{2713} Pi cache graph in Context: {value}"));
+    vec![Effect::PersistSetting {
+        key: "pi_cache_graph",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
+pub(in crate::app::dispatch) fn set_review_file_tree(
+    app: &mut AppView,
+    enabled: bool,
+) -> Vec<Effect> {
+    let previous = app.current_ui.review_file_tree;
+    if previous == enabled {
+        return vec![];
+    }
+    app.current_ui.review_file_tree = enabled;
+    // Keep open review modal in sync without forcing a full reopen.
+    if let crate::app::app_view::ActiveView::Agent(id) = app.active_view
+        && let Some(agent) = app.agents.get_mut(&id)
+        && let Some(review) = agent.review_state.as_mut()
+    {
+        review.set_tree_mode(enabled);
+    }
+    refresh_open_settings_modals(app);
+    let value = if enabled { "tree" } else { "flat" };
+    app.show_toast(&format!("\u{2713} Review file list: {value}"));
+    vec![Effect::PersistSetting {
+        key: "review_file_tree",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
 /// State-only mutation for auto session-recap toggle.
 pub(super) fn set_session_recap_inner(app: &mut AppView, enabled: bool) {
     app.current_ui.session_recap = Some(enabled);

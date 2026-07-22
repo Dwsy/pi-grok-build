@@ -123,6 +123,11 @@ impl AgentView {
             return self.handle_session_tree_input(&ev);
         }
 
+        // Tree map has its own simple key handler (↑↓/Enter/Esc).
+        if matches!(modal, ActiveModal::TreeMap { .. }) {
+            return self.handle_tree_map_input(key);
+        }
+
         // Picker-based modals: route Esc through ModalWindow chrome first,
         // then delegate remaining keys to the picker input handler.
         if matches!(
@@ -288,8 +293,21 @@ impl AgentView {
         }
 
         // DocViewer / ContextInfo: route through ModalWindow chrome, then handle scroll.
+        // Cache graph keys (1/2/3/s/e/r/v/0) when metrics present.
         if matches!(modal, ActiveModal::ContextInfo { .. }) {
-            let ActiveModal::ContextInfo { window, scroll, .. } = modal else {
+            use crate::views::cache_graph::{build_cache_stats_csv, CacheGraphView};
+            use crossterm::event::KeyCode;
+
+            let ActiveModal::ContextInfo {
+                window,
+                scroll,
+                cache_metrics,
+                view,
+                export_cwd,
+                export_basename,
+                ..
+            } = modal
+            else {
                 unreachable!();
             };
             let chrome_cfg = mw::ModalWindowConfig {
@@ -307,6 +325,50 @@ impl AgentView {
                 ModalWindowOutcome::Unhandled => {
                     if crate::views::modal::apply_doc_scroll(key.code, scroll) {
                         return InputOutcome::Changed;
+                    }
+                    // View switching / export when cache metrics are attached.
+                    if cache_metrics.is_some() {
+                        let next = match key.code {
+                            KeyCode::Char('0') | KeyCode::Char('c') => Some(CacheGraphView::Breakdown),
+                            KeyCode::Char('1') => Some(CacheGraphView::PerTurn),
+                            KeyCode::Char('2') => Some(CacheGraphView::CumulativePercent),
+                            KeyCode::Char('3') => Some(CacheGraphView::CumulativeTotal),
+                            KeyCode::Char('s') => Some(CacheGraphView::Stats),
+                            KeyCode::Char('v') => Some(view.cycle_forward()),
+                            _ => None,
+                        };
+                        if let Some(next_view) = next {
+                            if next_view != *view {
+                                *view = next_view;
+                                *scroll = 0;
+                            }
+                            return InputOutcome::Changed;
+                        }
+                        if matches!(key.code, KeyCode::Char('e')) {
+                            if let Some(metrics) = cache_metrics.as_ref() {
+                                let path = std::path::Path::new(export_cwd)
+                                    .join(format!("{export_basename}.csv"));
+                                let csv = build_cache_stats_csv(metrics);
+                                match std::fs::write(&path, csv) {
+                                    Ok(()) => {
+                                        self.show_toast(&format!(
+                                            "Exported cache stats to {}",
+                                            path.display()
+                                        ));
+                                    }
+                                    Err(err) => {
+                                        self.show_toast(&format!("Cache export failed: {err}"));
+                                    }
+                                }
+                                return InputOutcome::Changed;
+                            }
+                        }
+                        if matches!(key.code, KeyCode::Char('r')) {
+                            // Re-fetch session/info; view preserved in complete handler.
+                            return InputOutcome::Action(
+                                crate::app::actions::Action::ShowContextInfo,
+                            );
+                        }
                     }
                     return InputOutcome::Unchanged;
                 }
@@ -544,6 +606,7 @@ impl AgentView {
             | ActiveModal::ArgPicker { .. }
             | ActiveModal::Notifications { .. }
             | ActiveModal::SessionTree { .. }
+            | ActiveModal::TreeMap { .. }
             | ActiveModal::SessionPicker { .. }
             | ActiveModal::DocPicker { .. }
             | ActiveModal::DocViewer { .. }
@@ -1894,6 +1957,11 @@ impl AgentView {
             }
         }
 
+        // TreeMap: chrome first, then row click / scroll.
+        if matches!(self.active_modal, Some(ActiveModal::TreeMap { .. })) {
+            return self.handle_tree_map_mouse(mouse);
+        }
+
         // MemoryBrowser: route through ModalWindow chrome, then delegate.
         if let Some(ActiveModal::MemoryBrowser { state }) = &mut self.active_modal {
             let outcome =
@@ -2399,6 +2467,50 @@ impl AgentView {
                 if let Some(mca) = mw::render_modal_window(buf, area, window, &modal_config, &theme)
                 {
                     render_session_tree(buf, mca.content, state, &theme);
+                }
+            } else if let modal::ActiveModal::TreeMap { state, window } = active_modal {
+                use crate::views::tree_map::render_tree_map;
+                let shortcuts = [
+                    mw::Shortcut {
+                        label: "↑/↓ nav",
+                        clickable: false,
+                        id: 0,
+                    },
+                    mw::Shortcut {
+                        label: "click go",
+                        clickable: false,
+                        id: 0,
+                    },
+                    mw::Shortcut {
+                        label: "Esc close",
+                        clickable: false,
+                        id: 0,
+                    },
+                ];
+                let title = if state.loading {
+                    "Branch map · loading".to_string()
+                } else {
+                    format!("Branch map · {} messages", state.nodes.len())
+                };
+                let modal_config = ModalWindowConfig {
+                    title: title.as_str(),
+                    tabs: None,
+                    shortcuts: &shortcuts,
+                    sizing: ModalSizing {
+                        width_pct: 0.60,
+                        max_width: 90,
+                        min_width: 44,
+                        v_margin: 3,
+                        h_pad: 1,
+                        v_pad: 0,
+                        footer_lines: 1,
+                    }
+                    .with_compact(compact),
+                    fold_info: None,
+                };
+                if let Some(mca) = mw::render_modal_window(buf, area, window, &modal_config, &theme)
+                {
+                    render_tree_map(buf, mca.content, state, &theme);
                 }
             } else if let modal::ActiveModal::SessionPicker {
                 entries,
@@ -2912,11 +3024,25 @@ impl AgentView {
                 block,
                 scroll,
                 window,
+                cache_metrics,
+                view,
+                ..
             } = active_modal
             {
                 let compact = self.scrollback.appearance().prompt.compact;
+                // F2 gate is applied when metrics are attached (open path).
+                let cache_enabled = cache_metrics.is_some();
                 modal::render_context_info_overlay(
-                    buf, area, window, block, scroll, compact, &theme,
+                    buf,
+                    area,
+                    window,
+                    block,
+                    scroll,
+                    compact,
+                    &theme,
+                    cache_metrics.as_ref(),
+                    *view,
+                    cache_enabled,
                 );
             } else if let modal::ActiveModal::RememberNoteReview {
                 ref raw_content,
@@ -3387,6 +3513,101 @@ impl AgentView {
                 state.selected = 0;
                 state.scroll = 0;
                 state.clamp_selected();
+                InputOutcome::Changed
+            }
+            _ => InputOutcome::Unchanged,
+        }
+    }
+
+    fn handle_tree_map_input(&mut self, key: &KeyEvent) -> InputOutcome {
+        use crossterm::event::{KeyCode, KeyEventKind};
+
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return InputOutcome::Unchanged;
+        }
+
+        let Some(ActiveModal::TreeMap { state, .. }) = self.active_modal.as_mut() else {
+            return InputOutcome::Unchanged;
+        };
+
+        match key.code {
+            KeyCode::Esc => {
+                self.active_modal = None;
+                InputOutcome::Action(Action::SessionTreeClosed)
+            }
+            KeyCode::Up => {
+                state.move_selection(-1);
+                InputOutcome::Changed
+            }
+            KeyCode::Down => {
+                state.move_selection(1);
+                InputOutcome::Changed
+            }
+            KeyCode::PageUp => {
+                state.move_selection(-10);
+                InputOutcome::Changed
+            }
+            KeyCode::PageDown => {
+                state.move_selection(10);
+                InputOutcome::Changed
+            }
+            KeyCode::Enter => {
+                if let Some(entry_id) = state.selected_entry_id() {
+                    InputOutcome::Action(Action::NavigateSessionTree {
+                        entry_id,
+                        summarize: false,
+                        custom_instructions: None,
+                    })
+                } else {
+                    InputOutcome::Changed
+                }
+            }
+            _ => InputOutcome::Unchanged,
+        }
+    }
+
+    fn handle_tree_map_mouse(&mut self, mouse: &crossterm::event::MouseEvent) -> InputOutcome {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        use crate::views::modal_window as mw;
+        use crate::views::modal_window::ModalWindowOutcome;
+
+        let Some(ActiveModal::TreeMap { state, window }) = self.active_modal.as_mut() else {
+            return InputOutcome::Unchanged;
+        };
+
+        // Modal chrome (close button, etc.)
+        let outcome = mw::handle_modal_mouse(window, mouse.kind, mouse.column, mouse.row);
+        match outcome {
+            ModalWindowOutcome::CloseRequested => {
+                self.active_modal = None;
+                return InputOutcome::Action(Action::SessionTreeClosed);
+            }
+            ModalWindowOutcome::Handled => return InputOutcome::Changed,
+            ModalWindowOutcome::Unhandled => {}
+            _ => return InputOutcome::Changed,
+        }
+
+        // Content area: row selection
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(index) = state.hit_test_row(mouse.column, mouse.row) {
+                    state.selected = index;
+                    if let Some(entry_id) = state.selected_entry_id() {
+                        return InputOutcome::Action(Action::NavigateSessionTree {
+                            entry_id,
+                            summarize: false,
+                            custom_instructions: None,
+                        });
+                    }
+                }
+                InputOutcome::Changed
+            }
+            MouseEventKind::ScrollUp => {
+                state.move_selection(-1);
+                InputOutcome::Changed
+            }
+            MouseEventKind::ScrollDown => {
+                state.move_selection(1);
                 InputOutcome::Changed
             }
             _ => InputOutcome::Unchanged,

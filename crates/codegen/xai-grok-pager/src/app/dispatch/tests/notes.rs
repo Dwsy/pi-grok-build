@@ -39,7 +39,13 @@ fn manual_recap_with_no_messages_toasts_empty_state_and_skips_request() {
         assert!(!scrollback_has_user_messages(&agent.scrollback));
     }
 
-    let effects = dispatch(Action::SendRecap { auto: false }, &mut app);
+    let effects = dispatch(
+        Action::SendRecap {
+            auto: false,
+            custom_instructions: None,
+        },
+        &mut app,
+    );
 
     assert!(
         effects.is_empty(),
@@ -69,11 +75,24 @@ fn manual_recap_with_messages_requests_and_shows_spinner() {
         assert!(scrollback_has_user_messages(&agent.scrollback));
     }
 
-    let effects = dispatch(Action::SendRecap { auto: false }, &mut app);
+    let effects = dispatch(
+        Action::SendRecap {
+            auto: false,
+            custom_instructions: Some("focus on the API".into()),
+        },
+        &mut app,
+    );
 
     assert!(
-        matches!(effects.as_slice(), [Effect::SendRecap { auto: false, .. }]),
-        "expected SendRecap effect, got {effects:?}"
+        matches!(
+            effects.as_slice(),
+            [Effect::SendRecap {
+                auto: false,
+                custom_instructions: Some(text),
+                ..
+            }] if text == "focus on the API"
+        ),
+        "expected SendRecap effect with focus, got {effects:?}"
     );
     let agent = app.agents.get(&id).unwrap();
     assert!(
@@ -103,7 +122,13 @@ fn manual_recap_during_batch_load_with_prompts_still_requests() {
         assert!(scrollback_has_user_messages(&agent.scrollback));
     }
 
-    let effects = dispatch(Action::SendRecap { auto: false }, &mut app);
+    let effects = dispatch(
+        Action::SendRecap {
+            auto: false,
+            custom_instructions: None,
+        },
+        &mut app,
+    );
 
     assert!(
         matches!(effects.as_slice(), [Effect::SendRecap { auto: false, .. }]),
@@ -130,7 +155,13 @@ fn manual_recap_while_loading_replay_still_requests() {
         assert!(!scrollback_has_user_messages(&agent.scrollback));
     }
 
-    let effects = dispatch(Action::SendRecap { auto: false }, &mut app);
+    let effects = dispatch(
+        Action::SendRecap {
+            auto: false,
+            custom_instructions: None,
+        },
+        &mut app,
+    );
 
     assert!(
         matches!(effects.as_slice(), [Effect::SendRecap { auto: false, .. }]),
@@ -152,7 +183,13 @@ fn manual_recap_without_dedicated_model_skips_request_and_explains_configuration
         .scrollback
         .push_block(RenderBlock::user_prompt("hello"));
 
-    let effects = dispatch(Action::SendRecap { auto: false }, &mut app);
+    let effects = dispatch(
+        Action::SendRecap {
+            auto: false,
+            custom_instructions: None,
+        },
+        &mut app,
+    );
 
     assert!(effects.is_empty());
     let agent = app.agents.get(&id).unwrap();
@@ -178,7 +215,13 @@ fn manual_recap_uses_active_model_without_dedicated_override() {
             .push_block(RenderBlock::user_prompt("hello"));
     }
 
-    let effects = dispatch(Action::SendRecap { auto: false }, &mut app);
+    let effects = dispatch(
+        Action::SendRecap {
+            auto: false,
+            custom_instructions: None,
+        },
+        &mut app,
+    );
 
     assert!(matches!(
         effects.as_slice(),
@@ -186,6 +229,7 @@ fn manual_recap_uses_active_model_without_dedicated_override() {
             auto: false,
             model: Some(model),
             thinking_level: Some(level),
+            custom_instructions: None,
             ..
         }] if model == "provider::active-model" && level == "medium"
     ));
@@ -202,7 +246,13 @@ fn auto_recap_without_dedicated_model_is_silent() {
         .scrollback
         .push_block(RenderBlock::user_prompt("hello"));
 
-    let effects = dispatch(Action::SendRecap { auto: true }, &mut app);
+    let effects = dispatch(
+        Action::SendRecap {
+            auto: true,
+            custom_instructions: None,
+        },
+        &mut app,
+    );
 
     assert!(effects.is_empty());
     assert!(app.agents[&id].toast.is_none());

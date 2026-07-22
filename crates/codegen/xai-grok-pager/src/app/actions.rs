@@ -178,6 +178,8 @@ pub enum Action {
     ShowSessionPicker,
     /// Open the Pi session entry tree picker (`/tree`).
     ShowSessionTree,
+    /// Open the branch map: user-messages-only fork view (`/tree-map`).
+    ShowTreeMap,
     /// Open the process-local Pi notification list for the active session (`/notify`).
     ShowNotifications,
     /// Navigate the active Pi session leaf to `entry_id` (`ctx.navigateTree`).
@@ -719,6 +721,9 @@ pub enum Action {
     SetPiWorkflows(bool),
     /// Enable Grok-style /goal for grok-pi (restart required).
     SetPiGoal(bool),
+    SetPiCacheGraph(bool),
+    /// Default tree layout for `/review-*` left pane (`[ui].review_file_tree`).
+    SetReviewFileTree(bool),
     /// Commit the `show_tips` preference. Persisted to `[cli].show_tips`.
     /// Restart-required — tips are resolved once at startup.
     SetShowTips(bool),
@@ -849,8 +854,10 @@ pub enum Action {
     /// Request a session recap ("where was I" summary). `auto` is `true` for
     /// the automatic return-from-away recap, `false` for an explicit `/recap`.
     /// Bypasses the prompt queue (works while the agent is busy).
+    /// `custom_instructions` is optional free-text from `/recap …` / `/summarize …`.
     SendRecap {
         auto: bool,
+        custom_instructions: Option<String>,
     },
     /// Pick a session from content (deep search) results.
     PickContentSession {
@@ -1138,6 +1145,14 @@ pub enum Action {
     JumpPickerSelect(EntryId),
     /// Close the picker and restore the stashed viewport.
     JumpDismiss,
+    /// Open session-level code review (edit/write file changes).
+    ReviewShowSession,
+    /// Open jump-style picker; Enter opens turn-scoped review.
+    ReviewShowMessagePicker,
+    /// Open review modal for the turn owning `prompt_id`.
+    ReviewOpenForTurn(EntryId),
+    /// Close the code-review modal.
+    ReviewDismiss,
     /// Close the Pi `/fork` prompt-area message list overlay.
     PiForkDismiss,
     /// Pi `/clone`: duplicate current session at the current leaf.
@@ -2162,6 +2177,8 @@ pub enum Effect {
         /// Terminal columns at request time; extension picks Mermaid LR vs TD.
         /// `0` means unknown (extension defaults to TD).
         terminal_width: u16,
+        /// Optional focus text from `/recap …` (injected into the recap prompt).
+        custom_instructions: Option<String>,
     },
     /// Send a mid-turn interjection via x.ai/interject ext method.
     SendInterject {

@@ -4,7 +4,7 @@ use super::AgentView;
 use crate::app::actions::Action;
 use crate::app::app_view::InputOutcome;
 use crate::views::jump::{
-    JumpInput, JumpRestore, handle_jump_key, jump_activate, jump_row_at, move_cursor,
+    JumpInput, JumpPurpose, JumpRestore, handle_jump_key, jump_activate, jump_row_at, move_cursor,
     set_jump_cursor,
 };
 use crossterm::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -31,6 +31,7 @@ impl AgentView {
             || self.inline_edit.is_some()
             || self.btw_state.is_some()
             || self.fork_state.is_some()
+            || self.review_state.is_some()
             || !self.no_input_overlay_pending()
     }
 
@@ -95,13 +96,19 @@ impl AgentView {
                 self.copy_to_clipboard(&text);
                 InputOutcome::Changed
             }
+            JumpInput::Select(id) => self.jump_select_outcome(id),
             input => Self::jump_input_to_outcome(input),
         }
     }
 
     fn jump_input_to_outcome(input: JumpInput) -> InputOutcome {
         match input {
-            JumpInput::Select(id) => InputOutcome::Action(Action::JumpPickerSelect(id)),
+            JumpInput::Select(id) => {
+                // Purpose is read from jump_state when present; default Navigate.
+                // Caller paths that only have JumpInput use Navigate unless
+                // handle_jump_key routes Select through jump_select_outcome.
+                InputOutcome::Action(Action::JumpPickerSelect(id))
+            }
             JumpInput::Dismissed => InputOutcome::Action(Action::JumpDismiss),
             JumpInput::MoveUp
             | JumpInput::MoveDown
@@ -109,6 +116,15 @@ impl AgentView {
             | JumpInput::SearchBackspace
             | JumpInput::CopySelected(_)
             | JumpInput::Consumed => InputOutcome::Changed,
+        }
+    }
+
+    fn jump_select_outcome(&self, id: crate::scrollback::entry::EntryId) -> InputOutcome {
+        match self.jump_state.as_ref().map(|s| s.purpose) {
+            Some(JumpPurpose::Review) => {
+                InputOutcome::Action(Action::ReviewOpenForTurn(id))
+            }
+            _ => InputOutcome::Action(Action::JumpPickerSelect(id)),
         }
     }
 
@@ -132,7 +148,18 @@ impl AgentView {
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 set_jump_cursor(state, index);
-                Self::jump_input_to_outcome(jump_activate(state))
+                let purpose = state.purpose;
+                match jump_activate(state) {
+                    JumpInput::Select(id) => match purpose {
+                        JumpPurpose::Review => {
+                            InputOutcome::Action(Action::ReviewOpenForTurn(id))
+                        }
+                        JumpPurpose::Navigate => {
+                            InputOutcome::Action(Action::JumpPickerSelect(id))
+                        }
+                    },
+                    other => Self::jump_input_to_outcome(other),
+                }
             }
             _ => InputOutcome::Unchanged,
         }

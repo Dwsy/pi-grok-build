@@ -500,6 +500,8 @@ pub fn current_value_for(
         "pi_tree_file_rollback" => Some(SettingValue::Bool(ui.pi_tree_file_rollback)),
         "pi_workflows" => Some(SettingValue::Bool(ui.pi_workflows)),
         "pi_goal" => Some(SettingValue::Bool(ui.pi_goal)),
+        "pi_cache_graph" => Some(SettingValue::Bool(ui.pi_cache_graph)),
+        "review_file_tree" => Some(SettingValue::Bool(ui.review_file_tree)),
         // Cache is the send-path source of truth (same pattern as group_tool_verbs).
         "page_flip_on_send" => Some(SettingValue::Bool(
             crate::appearance::cache::load_page_flip_on_send(),
@@ -1254,6 +1256,22 @@ mod tests {
                         "pi_goal default drifts from UiConfig::default()"
                     );
                     assert!(!*default, "pi_goal must default OFF");
+                }
+                ("pi_cache_graph", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default,
+                        ui.pi_cache_graph,
+                        "pi_cache_graph default drifts from UiConfig::default()"
+                    );
+                    assert!(*default, "pi_cache_graph must default ON");
+                }
+                ("review_file_tree", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default,
+                        ui.review_file_tree,
+                        "review_file_tree default drifts from UiConfig::default()"
+                    );
+                    assert!(!*default, "review_file_tree must default OFF");
                 }
 
                 _ => panic!(

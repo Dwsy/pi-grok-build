@@ -6,6 +6,7 @@
 //! consumes those messages in the `grok-pi` composition binary.
 
 mod background_bash_bridge;
+mod cache_metrics;
 mod context_projection;
 mod goal_host;
 mod model;

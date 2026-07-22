@@ -136,6 +136,7 @@ async fn handle_session_info(
         session_id,
         cwd: session.info.cwd.clone(),
         session_file: None,
+        cache_metrics: None,
         data,
     };
 

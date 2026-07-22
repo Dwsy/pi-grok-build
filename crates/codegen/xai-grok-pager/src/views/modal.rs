@@ -289,6 +289,11 @@ pub enum ActiveModal {
         state: crate::views::session_tree::SessionTreeState,
         window: ModalWindowState,
     },
+    /// Branch map (`/tree-map`): user-messages-only fork view.
+    TreeMap {
+        state: crate::views::tree_map::TreeMapState,
+        window: ModalWindowState,
+    },
     /// Process-local Pi extension notification events for the active session.
     Notifications {
         state: NotificationListState,
@@ -360,10 +365,17 @@ pub enum ActiveModal {
     },
     /// Transient graphical context snapshot. It reuses ContextInfoBlock's
     /// native bar and legend renderer but never enters conversation history.
+    /// Optional `cache_metrics` enables pi-cache-graph views (1/2/3/s/e).
     ContextInfo {
         block: crate::scrollback::blocks::ContextInfoBlock,
         scroll: u16,
         window: ModalWindowState,
+        cache_metrics: Option<xai_grok_shell::session::CacheSessionMetrics>,
+        view: crate::views::cache_graph::CacheGraphView,
+        /// Project cwd for CSV export (from session/info).
+        export_cwd: String,
+        /// Basename for `{name}.csv` export.
+        export_basename: String,
     },
     /// All-shortcuts cheatsheet for the current view/state.
     /// Rendered via the unified picker (same look as CommandPalette).
@@ -731,6 +743,7 @@ impl ActiveModal {
             ActiveModal::CommandPalette { .. }
             | ActiveModal::ArgPicker { .. }
             | ActiveModal::SessionTree { .. }
+            | ActiveModal::TreeMap { .. }
             | ActiveModal::Notifications { .. }
             | ActiveModal::SessionPicker { .. }
             | ActiveModal::DocPicker { .. }
@@ -754,6 +767,7 @@ impl ActiveModal {
             }
             ActiveModal::CommandPalette { .. } => "Commands",
             ActiveModal::SessionTree { .. } => "Session tree",
+            ActiveModal::TreeMap { .. } => "Branch map",
             ActiveModal::Notifications { .. } => "Notifications",
             ActiveModal::SessionPicker { .. } => "Resume session",
             ActiveModal::ArgPicker {
@@ -1262,6 +1276,10 @@ pub fn render_doc_picker_overlay(
     );
 }
 /// Render a graphical ContextInfoBlock inside a native ModalWindow.
+///
+/// When `cache_enabled` and metrics are present, title/shortcuts follow the
+/// active [`CacheGraphView`] (0=breakdown, 1/2/3 graph, s=stats).
+#[allow(clippy::too_many_arguments)]
 pub fn render_context_info_overlay(
     buf: &mut ratatui::buffer::Buffer,
     area: Rect,
@@ -1270,22 +1288,63 @@ pub fn render_context_info_overlay(
     scroll: &mut u16,
     compact: bool,
     theme: &Theme,
+    cache_metrics: Option<&xai_grok_shell::session::CacheSessionMetrics>,
+    view: crate::views::cache_graph::CacheGraphView,
+    cache_enabled: bool,
 ) {
+    use crate::views::cache_graph::{render_cache_view_lines, CacheGraphView};
     use ratatui::widgets::{Paragraph, Widget, Wrap};
-    let shortcuts = [
-        super::modal_window::Shortcut {
-            label: "↑/↓ scroll",
-            clickable: false,
-            id: 0,
-        },
-        super::modal_window::Shortcut {
-            label: "Esc close",
-            clickable: false,
-            id: 0,
-        },
-    ];
+
+    let show_cache = cache_enabled && cache_metrics.is_some();
+    let title = if show_cache {
+        view.title_suffix()
+    } else {
+        "Context"
+    };
+    let shortcuts: Vec<super::modal_window::Shortcut> = if show_cache {
+        vec![
+            super::modal_window::Shortcut {
+                label: "0/1/2/3/s view",
+                clickable: false,
+                id: 0,
+            },
+            super::modal_window::Shortcut {
+                label: "e export",
+                clickable: false,
+                id: 0,
+            },
+            super::modal_window::Shortcut {
+                label: "r refresh",
+                clickable: false,
+                id: 0,
+            },
+            super::modal_window::Shortcut {
+                label: "↑/↓ scroll",
+                clickable: false,
+                id: 0,
+            },
+            super::modal_window::Shortcut {
+                label: "Esc close",
+                clickable: false,
+                id: 0,
+            },
+        ]
+    } else {
+        vec![
+            super::modal_window::Shortcut {
+                label: "↑/↓ scroll",
+                clickable: false,
+                id: 0,
+            },
+            super::modal_window::Shortcut {
+                label: "Esc close",
+                clickable: false,
+                id: 0,
+            },
+        ]
+    };
     let modal_config = super::modal_window::ModalWindowConfig {
-        title: "Context",
+        title,
         tabs: None,
         shortcuts: &shortcuts,
         sizing: super::modal_window::ModalSizing {
@@ -1305,7 +1364,15 @@ pub fn render_context_info_overlay(
         ..
     }) = super::modal_window::render_modal_window(buf, area, window, &modal_config, theme)
     {
-        let lines = block.modal_lines(theme, content_area.width);
+        let lines = if show_cache && view != CacheGraphView::Breakdown {
+            if let Some(metrics) = cache_metrics {
+                render_cache_view_lines(theme, metrics, content_area.width, view)
+            } else {
+                block.modal_lines(theme, content_area.width)
+            }
+        } else {
+            block.modal_lines(theme, content_area.width)
+        };
         let max_scroll = lines.len().saturating_sub(content_area.height as usize);
         *scroll = (*scroll as usize).min(max_scroll) as u16;
         let visible: Vec<ratatui::text::Line> = lines

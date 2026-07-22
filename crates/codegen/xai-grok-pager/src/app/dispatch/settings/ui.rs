@@ -855,6 +855,8 @@ pub(in crate::app::dispatch) fn action_for_reset(
         ("pi_tree_file_rollback", SettingValue::Bool(b)) => Some(Action::SetPiTreeFileRollback(*b)),
         ("pi_workflows", SettingValue::Bool(b)) => Some(Action::SetPiWorkflows(*b)),
         ("pi_goal", SettingValue::Bool(b)) => Some(Action::SetPiGoal(*b)),
+        ("pi_cache_graph", SettingValue::Bool(b)) => Some(Action::SetPiCacheGraph(*b)),
+        ("review_file_tree", SettingValue::Bool(b)) => Some(Action::SetReviewFileTree(*b)),
         ("page_flip_on_send", SettingValue::Bool(b)) => Some(Action::SetPageFlipOnSend(*b)),
         ("combine_queued_prompts", SettingValue::Bool(b)) => {
             Some(Action::SetCombineQueuedPrompts(*b))
@@ -1077,6 +1079,8 @@ pub(in crate::app::dispatch) fn apply_setting_rollback(
         }
         ("pi_workflows", SettingValue::Bool(b)) => app.current_ui.pi_workflows = *b,
         ("pi_goal", SettingValue::Bool(b)) => app.current_ui.pi_goal = *b,
+        ("pi_cache_graph", SettingValue::Bool(b)) => app.current_ui.pi_cache_graph = *b,
+        ("review_file_tree", SettingValue::Bool(b)) => app.current_ui.review_file_tree = *b,
         ("page_flip_on_send", SettingValue::Bool(b)) => set_page_flip_on_send_inner(app, *b),
         ("combine_queued_prompts", SettingValue::Bool(b)) => {
             set_combine_queued_prompts_inner(app, *b)

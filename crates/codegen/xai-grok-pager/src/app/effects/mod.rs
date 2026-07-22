@@ -4117,6 +4117,7 @@ pub(crate) fn execute(
             thinking_level,
             recap_mermaid,
             terminal_width,
+            custom_instructions,
         } => {
             let tx = acp_tx.clone();
             tasks
@@ -4135,6 +4136,14 @@ pub(crate) fn execute(
                     }
                     params["recapMermaid"] = serde_json::Value::Bool(recap_mermaid);
                     params["terminalWidth"] = serde_json::Value::from(terminal_width);
+                    if let Some(instructions) = custom_instructions
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        params["customInstructions"] =
+                            serde_json::Value::String(instructions.to_owned());
+                    }
                     let request = acp::ExtRequest::new(
                         "x.ai/recap",
                         serde_json::value::to_raw_value(&params)

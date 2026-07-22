@@ -281,6 +281,7 @@ impl AgentView {
             rewind_state: None,
             rewind_points: None,
             jump_state: None,
+            review_state: None,
             fork_state: None,
             inline_edit: None,
             pending_inline_resubmit: None,

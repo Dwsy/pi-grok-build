@@ -1439,6 +1439,8 @@ impl PiAgent {
                 .map(entries_to_messages_value),
         };
         let breakdown = self.fetch_context_breakdown().await;
+        // Best-effort raw entries for cache graph (pi-cache-graph alignment).
+        let entries_for_cache = self.rpc.request(json!({ "type": "get_entries" })).await.ok();
         let (session_id, model, cached_tokens, session_file) = {
             let state = self.state.borrow();
             (
@@ -1451,7 +1453,7 @@ impl PiAgent {
         let cwd = std::env::current_dir()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let response = build_session_info_response(
+        let mut response = build_session_info_response(
             &stats,
             messages.as_ref(),
             &session_id,
@@ -1461,6 +1463,10 @@ impl PiAgent {
             breakdown.as_ref(),
             session_file.as_deref(),
         );
+        if let Some(entries) = entries_for_cache.as_ref() {
+            let metrics = crate::cache_metrics::collect_cache_session_metrics(entries);
+            response = crate::context_projection::attach_cache_metrics(response, metrics);
+        }
         if let Some(used) = response
             .get("context")
             .and_then(|context| context.get("used"))
@@ -3431,7 +3437,8 @@ impl PiAgent {
 
     /// Fire-and-forget session recap via injected `__pi_grok_recap` extension.
     ///
-    /// Params: `{ sessionId?, auto?, model? }`. Language is taken from process locale.
+    /// Params: `{ sessionId?, auto?, model?, customInstructions? }`.
+    /// Language is taken from process locale.
     async fn handle_recap_request(&self, params_raw: &str) -> Result<acp::ExtResponse, acp::Error> {
         let params: Value = serde_json::from_str(params_raw).unwrap_or_else(|_| json!({}));
         let auto = params.get("auto").and_then(Value::as_bool).unwrap_or(false);
@@ -3452,6 +3459,13 @@ impl PiAgent {
             .or_else(|| params.get("terminal_width"))
             .and_then(Value::as_u64)
             .unwrap_or(0);
+        let custom_instructions = string(
+            &params,
+            &["customInstructions", "custom_instructions", "instructions"],
+        )
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned);
         let language = system_language_tag();
         let payload = json!({
             "auto": auto,
@@ -3460,6 +3474,7 @@ impl PiAgent {
             "recapMermaid": recap_mermaid,
             "terminalWidth": terminal_width,
             "language": language,
+            "customInstructions": custom_instructions,
         });
         let args = payload.to_string();
         // Extension emits custom message asynchronously; adapter projects it.

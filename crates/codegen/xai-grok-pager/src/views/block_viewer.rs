@@ -825,7 +825,28 @@ impl BlockViewerPane {
     }
 
     /// Create a viewer for an edit block (diff content).
+    ///
+    /// Uses the same ListPane capabilities as other block viewers: scroll,
+    /// search (`/`), filter (`f`), wrap (`w`), visual select (`v`), and copy
+    /// (`y` patch / `Y` path).
     pub fn for_edit(entry_id: EntryId, entry: &ScrollbackEntry) -> Option<Self> {
+        Self::for_edit_with_options(entry_id, entry, false)
+    }
+
+    /// Edit viewer for the session code-review modal.
+    ///
+    /// Same TUI as [`Self::for_edit`], but enables **dual line numbers**
+    /// (old + new columns) so the review pane matches a fuller GitHub-style
+    /// unified gutter.
+    pub fn for_edit_review(entry_id: EntryId, entry: &ScrollbackEntry) -> Option<Self> {
+        Self::for_edit_with_options(entry_id, entry, true)
+    }
+
+    fn for_edit_with_options(
+        entry_id: EntryId,
+        entry: &ScrollbackEntry,
+        dual_line_numbers: bool,
+    ) -> Option<Self> {
         let RenderBlock::ToolCall(ToolCallBlock::Edit(edit)) = &entry.block else {
             return None;
         };
@@ -847,7 +868,7 @@ impl BlockViewerPane {
         list_state.set_clipboard_provider(Box::new(SystemClipboard));
 
         let theme = Theme::current();
-        let (items, diff_meta) = Self::build_edit_items(edit, &theme);
+        let (items, diff_meta) = Self::build_edit_items(edit, &theme, dual_line_numbers);
 
         Some(Self {
             entry_id,
@@ -880,14 +901,19 @@ impl BlockViewerPane {
     fn build_edit_items(
         edit: &crate::scrollback::blocks::EditToolCallBlock,
         theme: &Theme,
+        dual_line_numbers: bool,
     ) -> (Vec<ContentLine>, Vec<Option<DiffLineMeta>>) {
         use crate::scrollback::blocks::DiffRenderConfig;
 
-        let config = DiffRenderConfig::default();
+        let config = DiffRenderConfig {
+            dual_line_numbers,
+            ..DiffRenderConfig::default()
+        };
         // Block-owned dispatch so the viewer paints the same highlight phase
         // (incl. the file-scoped upgrade) as the scrollback output.
+        // Width 500 keeps gutters single-line; ListPane wrap (`w`) reflows content.
         let rendered = edit.render_diff_lines(
-            theme, 500, // wide width — NoWrap mode
+            theme, 500, // wide width — NoWrap mode for gutter fidelity
             &config,
         );
 
@@ -1066,6 +1092,7 @@ impl BlockViewerPane {
                 hints.push(HintItem::new(crate::key!('Y'), "copy cmd"));
             }
             ViewerKind::Edit => {
+                hints.push(HintItem::new(crate::key!('y'), "copy patch"));
                 hints.push(HintItem::new(crate::key!('Y'), "copy path"));
             }
             ViewerKind::WebFetch => {

@@ -46,10 +46,10 @@
 | Prompt completion | 适配 | 以 Pi `agent_settled` 为完成屏障，不错误使用 `agent_end` |
 | Retry | 适配 | Grok native sticky status/toast |
 | Compaction | 原生+适配 | `/compact [instructions]` → Pi `compact`；Pi `compaction_*` → 原生 CompactionStarted/Completed/Failed/Cancelled scrollback blocks + sticky status |
-| Session recap (`/recap` + auto away) | 适配 | initialize `meta.sessionRecap`；`x.ai/recap` → 注入 extension `__pi_grok_recap`（`complete` 侧调用，不写会话历史）→ custom `pi-grok-recap/v1` → `SessionRecap`。仅使用 F2 显式配置的 `recap_model`，不回退当前会话模型；auto：≥3 turn、最后完成 turn ≥3 分钟、终端失焦期间后台生成、成功后无新 turn 不重复；manual：有 user turn即可；输入限最近 6 turn/12k 字符；正文语言优先 macOS `AppleLanguages`，再回退 locale |
+| Session recap (`/recap` + auto away) | 适配 | initialize `meta.sessionRecap`；`x.ai/recap` → 注入 extension `__pi_grok_recap`（`complete` 侧调用，不写会话历史）→ custom `pi-grok-recap/v1` → `SessionRecap`。仅使用 F2 显式配置的 `recap_model`，不回退当前会话模型；auto：≥3 turn、最后完成 turn ≥3 分钟、终端失焦期间后台生成、成功后无新 turn 不重复；manual：有 user turn即可；可选 `/recap [focus]` / `/summarize [focus]` 将 `customInstructions` 注入 recap 提示词（追加，同 `/compact`）；输入限最近 6 turn/12k 字符；正文语言优先 macOS `AppleLanguages`，再回退 locale |
 | Queue pane / count | 适配 | Pi `queue_update` 全文数组 → `x.ai/queue/changed`（稳定 id + 出队）+ status；`/queue` 面板镜像 Pi steering/follow-up。Cancel 经 `clear_queue` RPC + 空快照广播清空。Pi RPC 无单项 remove/edit，对应操作 rebroadcast + toast。队列出队模式可经 `pi/queue/mode` ext_method 设置（`one-at-a-time` / `all`） |
 | Context bar used tokens | 适配 | Pi `contextUsage` / message usage → ACP `_meta.totalTokens` → 右上角 bar |
-| Context click / `/context` | 原生+适配 | Grok `x.ai/session/info` → Pi stats + messages + `__pi_context_breakdown` extension（system/tools/AGENTS/append/skills）→ 原生 `ModalWindow` 中复用 `ContextInfoBlock` 图表；运行中即时刷新、不写 scrollback |
+| Context click / `/context` | 原生+适配 | Grok `x.ai/session/info` → Pi stats + messages + `__pi_context_breakdown` + 可选 `cacheMetrics`（`get_entries`，对齐 pi-cache-graph）→ 原生 `ModalWindow`（`ContextInfoBlock` + `0/1/2/3/s` 视图、`e` 导出、`r` 刷新）；F2 `[ui].pi_cache_graph` 默认开；运行中即时刷新、不写 scrollback |
 
 ## Model、session 与命令
 
@@ -68,6 +68,7 @@
 | Pi Config 资源管理 | 原生+Rust 兼容 | F2 或 `/pi-config`（别名 `/pi-resources`）→ Pi resources；Rust 读取 Pi `settings.json`/`trust.json`，管理 extensions/skills/prompts/themes 的 global 与 trusted-project 覆盖。按 Pi 自动扩展入口规则发现资源；来源树默认折叠，GitHub/npm/local 身份清晰可见，搜索仅展开命中来源。原生双栏支持树展开/折叠、搜索、键盘分页/滚动、点击与滚轮；右栏预览 package.json 关键字段与 README；切换后提示重启或 Pi `/reload`；不含 `install/remove/update`。 |
 | Grok cloud/session history picker | 边界 | 依赖 Grok session store，Pi profile 不暴露 `/history` |
 | Pi session tree (`/tree`) | 适配 | 原生 `SessionTree` modal：筛选/搜索/折叠/详情/复制/标签；Enter/`Shift+Enter` 经注入 extension 调 `ctx.navigateTree`（可 summarize）；`session/load` 回放；TreeX 风格详情面板；不改 Pi 源码 |
+| 会话代码审查（`/review-session`、`/review-message`） | 原生 | 参考 PSM code-review → 原生 Pager 双栏：左文件列表（flat/tree）、右 BlockViewer 预览（默认仅 changes）。F2 `review_file_tree` **默认关**并持久化；弹窗内 `t` 切换树形（按 cwd 省略前缀，折叠 Java 连续包路径为 `com.example.app`）。`/review-message` 复用 jump。不走 Pi custom UI。 |
 | Pi session fork (`/fork`) | 适配 | External：与 `/jump` 同款 prompt 区 `ListOverlay`（RPC `get_fork_messages`）；选择后 RPC `fork` 生成分支 session 文件，同 agent 换绑新 `sessionId`，`session/load` 回放并把选中文案预填 prompt；非 external 仍走 Grok peer-agent `/fork` |
 | Pi session clone (`/clone`) | 适配 | External：RPC `clone` 在当前 leaf 复制新 session 文件；同 agent 换绑新 `sessionId`，`session/load` 回放并清空 prompt（对齐 Pi） |
 | Pi 资源重载 (`/reload`) | 适配 | External：`__pi_reload` → `ctx.reload()`；流式 **与** compaction 中禁止（对齐 Pi）；adapter 刷新命令/模型目录；Pager 重扫 Pi theme（`rediscover`）并重应用当前 `pi:*` 主题；loading/成功 toast 文案对齐 Pi；不分支 session 文件 |

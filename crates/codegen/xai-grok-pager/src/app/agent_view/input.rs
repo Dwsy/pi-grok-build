@@ -49,6 +49,7 @@ impl AgentView {
             || self.image_viewer.is_some()
             || self.video_viewer.is_some()
             || self.block_viewer.is_some()
+            || self.review_state.is_some()
             || self.gboom.is_some()
             || self.show_goal_detail
             || self.btw_focused
@@ -80,6 +81,7 @@ impl AgentView {
     pub(crate) fn is_bare_scrollback(&self) -> bool {
         self.active_pane == AgentPane::Scrollback
             && self.block_viewer.is_none()
+            && self.review_state.is_none()
             && self.line_viewer.is_none()
             && self.active_modal.is_none()
             && self.image_viewer.is_none()
@@ -726,6 +728,29 @@ impl AgentView {
                     self.handle_block_viewer_key(key)
                 }
                 Event::Mouse(mouse) => self.handle_block_viewer_mouse(mouse),
+                _ => InputOutcome::Changed,
+            };
+        }
+        if self.review_state.is_some() {
+            return match ev {
+                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    // Only leave global Quit (Ctrl-Q) to the outer registry.
+                    if registry.lookup(key, When::Always) == Some(ActionId::Quit) {
+                        return InputOutcome::Unchanged;
+                    }
+                    self.handle_review_key(key)
+                }
+                Event::Mouse(mouse) => self.handle_review_mouse(mouse),
+                Event::Paste(text) => {
+                    if let Some(state) = self.review_state.as_mut()
+                        && state.focus == crate::views::review::ReviewFocus::Preview
+                        && let Some(viewer) = state.viewer.as_mut()
+                    {
+                        viewer.handle_paste(&text);
+                        return InputOutcome::Changed;
+                    }
+                    InputOutcome::Changed
+                }
                 _ => InputOutcome::Changed,
             };
         }

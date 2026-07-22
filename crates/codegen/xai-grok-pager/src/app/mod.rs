@@ -419,9 +419,14 @@ pub struct ExternalRunConfig {
     pub session_title: Option<String>,
     pub session_cwd: Option<std::path::PathBuf>,
     /// When true, skip Welcome and load `session_id` immediately (e.g.
-    /// `grok-pi --continue`). Default false lands on the native Welcome
-    /// screen so brand logo / menu match stock Grok Build.
+    /// `grok-pi --continue` / `--session <uuid>`). Default false lands on the
+    /// native Welcome screen so brand logo / menu match stock Grok Build.
     pub resume_existing_session: bool,
+    /// Print Pi-style resume command after a plain quit (not for `--no-session`).
+    pub emit_resume_hint: bool,
+    /// Explicit `--session-dir` from the host CLI; included in the resume hint
+    /// when set so re-open uses the same storage root. Env defaults omitted.
+    pub resume_session_dir: Option<String>,
     /// Product version of the external host, used only for its update checks.
     pub product_version: String,
 }
@@ -440,6 +445,8 @@ pub async fn run_external(config: ExternalRunConfig) -> anyhow::Result<()> {
         session_title,
         session_cwd,
         resume_existing_session,
+        emit_resume_hint,
+        resume_session_dir,
         product_version,
     } = config;
 
@@ -565,22 +572,53 @@ pub async fn run_external(config: ExternalRunConfig) -> anyhow::Result<()> {
     cancel.cancel();
     xai_tty_utils::global_process_scope().kill_all();
     // Ctrl+U on Welcome (pending update) → quit, then run the real installer.
-    if let Ok(run_result) = &result
-        && run_result.quit_for_update
-    {
-        match xai_grok_update::install_pi_update(&product_version, None).await {
-            Ok(ver) => {
-                eprintln!("Updated to grok-pi v{ver}. Restart grok-pi to use the new binary.");
+    if let Ok(run_result) = &result {
+        if run_result.quit_for_update {
+            match xai_grok_update::install_pi_update(&product_version, None).await {
+                Ok(ver) => {
+                    eprintln!("Updated to grok-pi v{ver}. Restart grok-pi to use the new binary.");
+                }
+                Err(e) => {
+                    eprintln!("Update failed: {e:#}");
+                    eprintln!(
+                        "Manual install:\n  curl -fsSL https://github.com/Dwsy/grok-pi/releases/latest/download/install.sh | sh"
+                    );
+                }
             }
-            Err(e) => {
-                eprintln!("Update failed: {e:#}");
-                eprintln!(
-                    "Manual install:\n  curl -fsSL https://github.com/Dwsy/grok-pi/releases/latest/download/install.sh | sh"
+        } else if emit_resume_hint {
+            // Mirror Pi interactive quit (formatResumeCommand): one-line resume.
+            if let Some(info) = run_result.exit_info.as_ref()
+                && !info.session_id.is_empty()
+            {
+                print_external_exit_resume_hint(
+                    &info.session_id,
+                    resume_session_dir.as_deref(),
+                    &mut io::stderr(),
                 );
             }
         }
     }
     result.map(|_| ())
+}
+
+/// Pi-style quit tail for external hosts (`grok-pi --session <uuid>`).
+///
+/// Matches `formatResumeCommand` in Pi interactive-mode: dim label + command.
+/// Best-effort: closed-pane EIO/BrokenPipe must not panic (`panic = "abort"`).
+fn print_external_exit_resume_hint(
+    session_id: &str,
+    session_dir: Option<&str>,
+    w: &mut impl Write,
+) {
+    let command = format_external_resume_command(session_id, session_dir);
+    let _ = writeln!(w, "\x1b[2mTo resume this session:\x1b[0m {command}");
+}
+
+fn format_external_resume_command(session_id: &str, session_dir: Option<&str>) -> String {
+    match session_dir.map(str::trim).filter(|d| !d.is_empty()) {
+        Some(dir) => format!("grok-pi --session-dir {dir} --session {session_id}"),
+        None => format!("grok-pi --session {session_id}"),
+    }
 }
 
 /// Main entry point: connect to agent, init terminal, run event loop, restore.
@@ -2043,6 +2081,32 @@ mod tests {
             summary: None,
         }
     }
+    #[test]
+    fn format_external_resume_command_session_only() {
+        assert_eq!(
+            format_external_resume_command("019f88c-full-uuid", None),
+            "grok-pi --session 019f88c-full-uuid"
+        );
+    }
+
+    #[test]
+    fn format_external_resume_command_with_session_dir() {
+        assert_eq!(
+            format_external_resume_command("abc123", Some("~/pi-sessions")),
+            "grok-pi --session-dir ~/pi-sessions --session abc123"
+        );
+    }
+
+    #[test]
+    fn print_external_exit_resume_hint_matches_pi_style() {
+        let mut buf = Vec::new();
+        print_external_exit_resume_hint("019f88c", None, &mut buf);
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            "\x1b[2mTo resume this session:\x1b[0m grok-pi --session 019f88c\n"
+        );
+    }
+
     #[test]
     fn print_exit_resume_hint_writes_expected_lines() {
         let mut buf = Vec::new();

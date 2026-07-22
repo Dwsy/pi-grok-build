@@ -215,6 +215,16 @@ pub async fn set_pi_goal(value: bool) -> Result<()> {
     update_config(|cfg| cfg.ui.pi_goal = value).await
 }
 
+/// Persist `[ui].pi_cache_graph` via `update_config`.
+pub async fn set_pi_cache_graph(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.pi_cache_graph = value).await
+}
+
+/// Persist `[ui].review_file_tree` via `update_config`.
+pub async fn set_review_file_tree(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.review_file_tree = value).await
+}
+
 /// Bounds for [`set_max_thoughts_width`]. Mirrored from the pager's
 /// registry consts; a CI test pins the agreement.
 const MAX_THOUGHTS_WIDTH_SHELL_MIN: i64 = 40;

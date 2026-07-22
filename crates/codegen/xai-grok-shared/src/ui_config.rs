@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use xai_grok_config_types::DisplayRefreshSettings;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
@@ -25,6 +29,15 @@ pub struct UiConfig {
     /// Default off; takes effect for new grok-pi sessions only.
     #[serde(default)]
     pub pi_goal: bool,
+    /// Show pi-cache-graph views (1/2/3/s/e) inside the Context modal.
+    /// Default on for grok-pi; F2 can disable without restart.
+    #[serde(default = "default_true")]
+    pub pi_cache_graph: bool,
+    /// Default file-list layout in `/review-*` modal: tree (cwd-relative,
+    /// compact Java packages) vs flat basenames. Default off; `t` in modal
+    /// toggles and persists via F2 `review_file_tree`.
+    #[serde(default)]
+    pub review_file_tree: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     /// Model ID to use for the secondary agent when forking.
@@ -324,6 +337,8 @@ impl Default for UiConfig {
             pi_tree_file_rollback: false,
             pi_workflows: false,
             pi_goal: false,
+            pi_cache_graph: true,
+            review_file_tree: false,
             theme: None,
             fork_secondary_model: xai_grok_models::default_model().to_string(),
             recap_model: String::new(),

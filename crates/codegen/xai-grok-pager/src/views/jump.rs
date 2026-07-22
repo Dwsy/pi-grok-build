@@ -28,6 +28,16 @@ pub struct JumpRestore {
     pub follow_mode: bool,
 }
 
+/// What Enter does when a jump-style message list is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JumpPurpose {
+    /// `/jump`: scroll to the selected turn and close.
+    #[default]
+    Navigate,
+    /// `/review-message`: open turn-scoped code review (live-scroll still applies).
+    Review,
+}
+
 #[derive(Debug)]
 pub struct JumpState {
     /// All timeline entries (unfiltered).
@@ -38,10 +48,20 @@ pub struct JumpState {
     pub restore: JumpRestore,
     /// Current search/filter query.
     pub query: String,
+    pub purpose: JumpPurpose,
 }
 
 impl JumpState {
     pub fn new(entries: Vec<TimelineEntry>, selected: usize, restore: JumpRestore) -> Self {
+        Self::with_purpose(entries, selected, restore, JumpPurpose::Navigate)
+    }
+
+    pub fn with_purpose(
+        entries: Vec<TimelineEntry>,
+        selected: usize,
+        restore: JumpRestore,
+        purpose: JumpPurpose,
+    ) -> Self {
         let filtered: Vec<usize> = (0..entries.len()).collect();
         let selected = selected.min(filtered.len().saturating_sub(1));
         Self {
@@ -50,6 +70,7 @@ impl JumpState {
             selected,
             restore,
             query: String::new(),
+            purpose,
         }
     }
 
@@ -177,10 +198,15 @@ pub fn render_jump_overlay(buf: &mut Buffer, area: Rect, state: &JumpState, focu
     // Fixed "HH:MM " gutter so preview columns stay aligned across rows.
     const TIME_GUTTER: usize = 6;
 
-    let title = if state.filtered.len() < total {
-        format!("Jump to which turn? ({}/{})", state.filtered.len(), total)
-    } else {
-        "Jump to which turn?".to_string()
+    let title = match state.purpose {
+        JumpPurpose::Navigate if state.filtered.len() < total => {
+            format!("Jump to which turn? ({}/{})", state.filtered.len(), total)
+        }
+        JumpPurpose::Navigate => "Jump to which turn?".to_string(),
+        JumpPurpose::Review if state.filtered.len() < total => {
+            format!("Review which turn? ({}/{})", state.filtered.len(), total)
+        }
+        JumpPurpose::Review => "Review which turn?  Enter=files  move=jump".to_string(),
     };
 
     let search = SearchLine {

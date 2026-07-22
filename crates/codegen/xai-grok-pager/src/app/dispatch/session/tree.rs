@@ -106,7 +106,10 @@ pub(in crate::app::dispatch) fn dispatch_label_session_tree_entry(
 
 pub(in crate::app::dispatch) fn dispatch_session_tree_closed(app: &mut AppView) -> Vec<Effect> {
     with_active_agent(app, |agent| {
-        if matches!(agent.active_modal, Some(ActiveModal::SessionTree { .. })) {
+        if matches!(
+            agent.active_modal,
+            Some(ActiveModal::SessionTree { .. }) | Some(ActiveModal::TreeMap { .. })
+        ) {
             agent.active_modal = None;
         }
     });
@@ -195,6 +198,9 @@ pub(in crate::app::dispatch) fn handle_session_tree_loaded(
         Some(ActiveModal::SessionTree { state, .. }) => {
             state.replace_nodes(nodes, leaf_id);
             state.status = None;
+        }
+        Some(ActiveModal::TreeMap { state, .. }) => {
+            state.replace_nodes(nodes, leaf_id);
         }
         // Modal was closed while fetch was in flight — drop the result.
         _ => return vec![],
@@ -310,5 +316,69 @@ pub(in crate::app::dispatch) fn handle_session_tree_label_failed(
     error: String,
 ) -> Vec<Effect> {
     app.show_toast(&format!("Couldn't update tree label: {error}"));
+    vec![]
+}
+
+// =========================================================================
+// /tree-map: branch map (user-messages-only fork view)
+// =========================================================================
+
+pub(in crate::app::dispatch) fn dispatch_show_tree_map(app: &mut AppView) -> Vec<Effect> {
+    if !app.external_agent {
+        app.show_toast("Branch map is only available for Pi sessions");
+        return vec![];
+    }
+    let Some(agent) = get_active_agent(app) else {
+        app.show_toast("No active session");
+        return vec![];
+    };
+    let Some(session_id) = agent.session.session_id.as_ref().map(|s| s.0.to_string()) else {
+        app.show_toast("No active session");
+        return vec![];
+    };
+    let agent_id = agent.session.id;
+    with_active_agent(app, |agent| {
+        let state = crate::views::tree_map::TreeMapState::loading();
+        agent.active_modal = Some(ActiveModal::TreeMap {
+            state,
+            window: crate::views::modal_window::ModalWindowState::new(),
+        });
+    });
+    vec![Effect::FetchSessionTree {
+        agent_id,
+        session_id,
+    }]
+}
+
+pub(in crate::app::dispatch) fn handle_tree_map_loaded(
+    app: &mut AppView,
+    agent_id: AgentId,
+    _session_id: String,
+    leaf_id: Option<String>,
+    nodes: Vec<SessionTreeNode>,
+) -> Vec<Effect> {
+    let Some(agent) = app.agents.get_mut(&agent_id) else {
+        return vec![];
+    };
+    if nodes.is_empty() {
+        agent.active_modal = None;
+        app.show_toast("Session tree is empty");
+        return vec![];
+    }
+    match agent.active_modal.as_mut() {
+        Some(ActiveModal::TreeMap { state, .. }) => {
+            state.replace_nodes(nodes, leaf_id);
+        }
+        _ => return vec![],
+    }
+    vec![]
+}
+
+pub(in crate::app::dispatch) fn dispatch_tree_map_closed(app: &mut AppView) -> Vec<Effect> {
+    with_active_agent(app, |agent| {
+        if matches!(agent.active_modal, Some(ActiveModal::TreeMap { .. })) {
+            agent.active_modal = None;
+        }
+    });
     vec![]
 }
