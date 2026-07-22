@@ -49,14 +49,45 @@ merge — never by the changelog skill.
 3. **`pi-grok-adapter` is headless and library-only.** It may translate JSONL RPC ↔ ACP, but must not render widgets, own a terminal, read keyboard events, or depend on Ratatui/Crossterm.
 4. **Reuse native Grok surfaces.** Map Pi capabilities to existing Pager prompt, slash, QuestionView, toast, banner, tool card, diff, and scrollback surfaces. Do not create a second TUI or ASCII fallback UI.
 5. **Do not modify Pi source to extend RPC.** When a Pi core capability is not exposed over RPC, prefer the official extension API. Preserve Pi semantics rather than emulating them with JSONL edits or unrelated RPCs.
+6. **Product-isolated state trees.** grok-pi must not share stock Grok’s user or project config roots (see [Product state isolation](#product-state-isolation)).
 
 Read [`NATIVE_GROK_TUI_ALIGNMENT.md`](NATIVE_GROK_TUI_ALIGNMENT.md) and [`FEATURE_MATRIX.md`](FEATURE_MATRIX.md) before changing protocol or UI behavior.
+
+## Product state isolation
+
+Stock Grok uses `~/.grok` (user) and `<repo>/.grok` (project). **grok-pi defaults are product-isolated** so UI settings, trust, skills, hooks, and workflows do not collide with stock Grok:
+
+| Layer | stock Grok | grok-pi default | Override |
+|---|---|---|---|
+| User home | `~/.grok` | `~/.grok-pi` | `$GROK_HOME` |
+| Project tree | `<repo>/.grok` | `<repo>/.grok-pi` | `$GROK_PROJECT_DIR` |
+
+Rules:
+
+- `ensure_default_grok_home()` (grok-pi startup) sets `$GROK_HOME` → `~/.grok-pi` and `$GROK_PROJECT_DIR` → `.grok-pi` when unset.
+- Resolve project paths only via `xai_grok_config::project_config_dirname()` / `project_config_dir(root)` — never hardcode `.join(".grok")` for project assets in grok-pi production code.
+- User paths go through `grok_home()` / `$GROK_HOME` (workflows → `$GROK_HOME/workflows`, config → `$GROK_HOME/config.toml`, etc.).
+- **No dual-scan of stock trees by default.** grok-pi does not auto-read `~/.grok` or `<repo>/.grok` for project discovery; migrate with `grok-pi migrate-home` (allowlisted user files only — **not** `workflows/`) or copy project trees manually into `.grok-pi`.
+- Unit tests without env keep the stock default `.grok` so upstream-style tests stay green.
+- Design note: [`docs/issues/架构/20260722-项目级.grok-pi隔离.md`](docs/issues/架构/20260722-项目级.grok-pi隔离.md).
+
+Examples under a git repo:
+
+```text
+~/.grok-pi/config.toml              # F2 / UI (e.g. [ui].pi_workflows)
+~/.grok-pi/workflows/*.rhai         # user workflows
+<repo>/.grok-pi/workflows/*.rhai    # project workflows (folder trust)
+<repo>/.grok-pi/hooks/              # project hooks
+<repo>/.grok-pi/config.toml         # project config overlay
+```
 
 ## Important paths
 
 | Concern | Path |
 |---|---|
 | Composition binary | `crates/codegen/xai-grok-pager-bin/src/bin/grok-pi.rs` |
+| Default home / project dirname | `crates/codegen/xai-grok-pager-bin/src/bin/grok_pi/home.rs` |
+| Path helpers (`grok_home`, `project_config_dir`) | `crates/codegen/xai-grok-config/src/paths.rs` |
 | Pi JSONL RPC transport | `crates/codegen/pi-grok-adapter/src/pi_rpc.rs` |
 | Pi data parsers | `crates/codegen/pi-grok-adapter/src/model.rs` |
 | ACP adapter and UI mapping | `crates/codegen/pi-grok-adapter/src/pi_adapter.rs` |
@@ -66,6 +97,7 @@ Read [`NATIVE_GROK_TUI_ALIGNMENT.md`](NATIVE_GROK_TUI_ALIGNMENT.md) and [`FEATUR
 | Architecture and task records | `docs/` |
 | Upstream update record (changelog) | `docs/upstream/UPSTREAM_CHANGELOG.md` |
 | Upstream changelog skill | `.pi/skills/upstream-changelog/SKILL.md` |
+| Project `.grok-pi` isolation issue | `docs/issues/架构/20260722-项目级.grok-pi隔离.md` |
 
 ## Session and tree rules
 

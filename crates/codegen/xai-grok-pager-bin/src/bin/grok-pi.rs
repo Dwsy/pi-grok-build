@@ -10,8 +10,14 @@ mod auth_extension;
 mod bash_extension;
 #[path = "grok_pi/cli.rs"]
 mod cli;
+#[path = "grok_pi/home.rs"]
+mod home;
+#[path = "grok_pi/migrate_home.rs"]
+mod migrate_home;
 #[path = "grok_pi/context_extension.rs"]
 mod context_extension;
+#[path = "grok_pi/export_extension.rs"]
+mod export_extension;
 #[path = "grok_pi/native_commands_extension.rs"]
 mod native_commands_extension;
 #[path = "grok_pi/plan_mode_extension.rs"]
@@ -28,6 +34,10 @@ mod rpc_compat_extension;
 mod session_paths;
 #[path = "grok_pi/subagent_extension.rs"]
 mod subagent_extension;
+#[path = "grok_pi/workflow_extension.rs"]
+mod workflow_extension;
+#[path = "grok_pi/goal_extension.rs"]
+mod goal_extension;
 #[path = "grok_pi/rollback_extension.rs"]
 mod rollback_extension;
 #[path = "grok_pi/tools_extension.rs"]
@@ -53,6 +63,7 @@ use auth_extension::write_auth_extension;
 use bash_extension::write_bash_extension;
 use cli::{Args, Command, normalize_compound_short_flags, pi_args_with_startup_flags};
 use context_extension::write_context_extension;
+use export_extension::write_export_extension;
 use native_commands_extension::write_native_commands_extension;
 use plan_mode_extension::write_plan_mode_extension;
 use pi_version::ensure_compatible_pi_host;
@@ -61,6 +72,8 @@ use remote_tui_extension::write_remote_tui_extension;
 use rpc_compat_extension::write_rpc_compat_extension;
 use session_paths::pi_session_dir;
 use subagent_extension::write_subagent_extension;
+use workflow_extension::write_workflow_extension;
+use goal_extension::write_goal_extension;
 use tools_extension::{
     configured_builtin_tools, excluded_tools, has_explicit_tools_arg, has_no_tools_arg,
     write_tools_extension,
@@ -120,6 +133,8 @@ const PI_GROK_NATIVE_COMMANDS: &[&str] = &[
     // Pager-owned dictation writes to the native prompt; Pi still receives the
     // resulting prompt only when the user submits it.
     "voice",
+    // Pager-native terminal diagnostics (`/doctor` + terminal-setup aliases).
+    "doctor",
     // Pager-native Pi resource manager (`/pi-config`, `/pi-resources`).
     "pi-config",
 ];
@@ -142,6 +157,10 @@ const GROK_PI_VERSION: &str = env!("GROK_PI_VERSION");
 const PI_WELCOME_SUBTITLE: &str = "Pi agent core in Grok Build's native terminal UI";
 
 fn main() -> Result<()> {
+    // Isolate grok-pi state from stock Grok (`~/.grok`) before any library
+    // pins `grok_home()` via OnceLock. User/test overrides of GROK_HOME win.
+    home::ensure_default_grok_home();
+
     // Keep the exact production pager process hooks. In particular, Mermaid
     // rendering re-enters this binary with an internal worker argument and
     // therefore must be handled before clap parses the public `grok-pi` CLI.
@@ -193,6 +212,34 @@ fn main() -> Result<()> {
             Ok(())
         });
     }
+    if let Some(Command::MigrateHome {
+        from,
+        into,
+        dry_run,
+        force,
+        include_auth,
+        status,
+    }) = args.command
+    {
+        return migrate_home::run_cli(from, into, dry_run, force, include_auth, status);
+    }
+    // One-shot safe copy when `~/.grok-pi` is empty and legacy `~/.grok` has data.
+    match migrate_home::maybe_auto_migrate() {
+        Ok(Some(report)) => {
+            eprintln!(
+                "grok-pi: migrated {} item(s) from {} → {}",
+                report.copied_count(),
+                home::display_home(&report.from),
+                home::display_home(&report.to),
+            );
+            eprintln!("         re-run: grok-pi migrate-home --status");
+        }
+        Ok(None) => {}
+        Err(err) => {
+            // Never block startup on migration; user can run the subcommand.
+            eprintln!("grok-pi: auto migrate-home skipped: {err}");
+        }
+    }
     runtime.block_on(LocalSet::new().run_until(run(args)))
 }
 
@@ -204,6 +251,7 @@ async fn run(mut args: Args) -> Result<()> {
 
     // Discover Pi theme JSON (embedded dark/light + ~/.pi/agent/themes + .pi/themes)
     // so `/theme` can list and apply them as `pi:<name>`.
+    // Resource discovery adapts when cwd is Pi agent home (see PiResourceCatalog).
     let _theme_report = xai_grok_pager::theme::pi::init_discovery(&cwd);
 
     let bridge_extensions_enabled = !args.no_extensions;
@@ -220,6 +268,18 @@ async fn run(mut args: Args) -> Result<()> {
         .then(|| write_subagent_extension())
         .transpose()
         .context("failed to create Pi subagent extension")?;
+    // F2 `[ui].pi_workflows` (default off). Restart required — inject at startup only.
+    let workflow_extension = if bridge_extensions_enabled && workflows_enabled() {
+        Some(write_workflow_extension().context("failed to create Pi workflow extension")?)
+    } else {
+        None
+    };
+    // F2 `[ui].pi_goal` (default off). Restart required — inject at startup only.
+    let goal_extension = if bridge_extensions_enabled && goal_enabled() {
+        Some(write_goal_extension().context("failed to create Pi goal extension")?)
+    } else {
+        None
+    };
     let recap_extension = bridge_extensions_enabled
         .then(|| write_recap_extension())
         .transpose()
@@ -234,6 +294,11 @@ async fn run(mut args: Args) -> Result<()> {
         .then(|| write_auth_extension())
         .transpose()
         .context("failed to create Pi auth extension")?;
+    // Default-on Pi HTML export / gist share (host dist). Grok `/export` is Markdown.
+    let export_extension = bridge_extensions_enabled
+        .then(|| write_export_extension())
+        .transpose()
+        .context("failed to create Pi export extension")?;
     // Pi's interactive component internals are not a stable extension API.
     // Keep this experiment opt-in so a Pi upgrade cannot block the core RPC host.
     let native_commands_extension = (bridge_extensions_enabled
@@ -274,6 +339,7 @@ async fn run(mut args: Args) -> Result<()> {
     let resource_policy = ResourcePolicy::load_from_config();
     // Mirror Pi's --approve / --no-approve so the catalog's project-resource
     // discovery matches what Pi itself will trust for this run.
+    // (Agent-home cwd is handled inside PiResourceCatalog::load_with_trust.)
     let trust_override = if args.approve {
         Some(true)
     } else if args.no_approve {
@@ -408,11 +474,18 @@ async fn run(mut args: Args) -> Result<()> {
         subagent_extension
             .as_ref()
             .map(|extension| extension.path()),
+        workflow_extension
+            .as_ref()
+            .map(|extension| extension.path()),
+        goal_extension
+            .as_ref()
+            .map(|extension| extension.source_path()),
         recap_extension.as_ref().map(|extension| extension.path()),
         context_extension
             .as_ref()
             .map(|extension| extension.source_path()),
         auth_extension.as_ref().map(|extension| extension.path()),
+        export_extension.as_ref().map(|extension| extension.path()),
         native_commands_extension
             .as_ref()
             .map(|extension| extension.path()),
@@ -445,6 +518,34 @@ async fn run(mut args: Args) -> Result<()> {
     }
     if subagent_extension.is_some() {
         env.push(("PI_GROK_SUBAGENTS".to_string(), "1".to_string()));
+    }
+    if workflow_extension.is_some() {
+        // Pi child reads this for extension factory; adapter also checks it
+        // (and F2 config). Set child env + parent process env.
+        env.push(("PI_GROK_WORKFLOWS".to_string(), "1".to_string()));
+        // SAFETY: single-threaded startup; process-local flag for this session.
+        unsafe {
+            std::env::set_var("PI_GROK_WORKFLOWS", "1");
+        }
+    } else {
+        // Avoid a stale parent env from a previous enable in the same shell.
+        unsafe {
+            std::env::remove_var("PI_GROK_WORKFLOWS");
+        }
+    }
+    if let Some(extension) = goal_extension.as_ref() {
+        env.push(("PI_GROK_GOAL".to_string(), "1".to_string()));
+        env.push((
+            "PI_GROK_GOAL_CONTROL".to_string(),
+            extension.control_path().to_string_lossy().into_owned(),
+        ));
+        unsafe {
+            std::env::set_var("PI_GROK_GOAL", "1");
+        }
+    } else {
+        unsafe {
+            std::env::remove_var("PI_GROK_GOAL");
+        }
     }
     if let Some(context_extension) = context_extension.as_ref() {
         env.push((
@@ -513,6 +614,9 @@ async fn run(mut args: Args) -> Result<()> {
     let plan_mode_control = plan_mode_extension
         .as_ref()
         .map(|extension| extension.control_path().to_path_buf());
+    let goal_control = goal_extension
+        .as_ref()
+        .map(|extension| extension.control_path().to_path_buf());
     // Hold the NamedTempFiles so the extension paths remain valid.
     let _navigate_tree_extension = navigate_tree_extension;
     let _bash_extension = bash_extension;
@@ -520,10 +624,12 @@ async fn run(mut args: Args) -> Result<()> {
     let _recap_extension = recap_extension;
     let _context_extension = context_extension;
     let _auth_extension = auth_extension;
+    let _export_extension = export_extension;
     let _native_commands_extension = native_commands_extension;
     let _remote_tui_extension = remote_tui_extension;
     let _rpc_compat_extension = rpc_compat_extension;
     let _plan_mode_extension = plan_mode_extension;
+    let _goal_extension = goal_extension;
     let _tools_extension = tools_extension;
     let _rollback_extension = rollback_ext;
 
@@ -544,6 +650,7 @@ async fn run(mut args: Args) -> Result<()> {
         bash_control_meta,
         context_breakdown,
         plan_mode_control,
+        goal_control,
     )
     .context("failed to restore Pi plan-mode state")?);
 
@@ -750,7 +857,10 @@ async fn spawn_with_extension_self_heal(
             eprintln!("  \x1b[1mSelf-healing:\x1b[0m relaunching without this extension.");
             eprintln!();
             eprintln!("  To disable all extensions:  \x1b[1mgrok-pi -ne\x1b[0m");
-            eprintln!("  To permanently block it, add to ~/.grok/config.toml:");
+            eprintln!(
+                "  To permanently block it, add to {}/config.toml:",
+                home::display_home(&home::effective_grok_home())
+            );
             eprintln!("    [pi.resources]");
             eprintln!("    block = [\"{bad_path}\"]");
             eprintln!();
@@ -795,6 +905,30 @@ async fn spawn_with_extension_self_heal(
             Ok((process, bootstrap, no_ext_args))
         }
     }
+}
+
+/// F2 `[ui].pi_workflows` — enable upstream Rhai workflows for this process.
+fn workflows_enabled() -> bool {
+    let Ok(config) = xai_grok_shell::config::load_effective_config() else {
+        return false;
+    };
+    config
+        .get("ui")
+        .and_then(|ui| ui.get("pi_workflows"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// F2 `[ui].pi_goal` — enable Grok-style /goal for this process.
+fn goal_enabled() -> bool {
+    let Ok(config) = xai_grok_shell::config::load_effective_config() else {
+        return false;
+    };
+    config
+        .get("ui")
+        .and_then(|ui| ui.get("pi_goal"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Extract all `--extension <path>` values from pi_args.
@@ -930,6 +1064,7 @@ mod env_flag_tests {
     fn grok_pi_command_profile_includes_native_navigation() {
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"jump"));
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"voice"));
+        assert!(PI_GROK_NATIVE_COMMANDS.contains(&"doctor"));
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"hotkeys"));
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"session-info"));
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"tree"));

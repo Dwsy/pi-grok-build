@@ -67,6 +67,9 @@ else
   chmod 755 "$INSTALL_DIR/grok-pi"
 fi
 
+# Create pi-grok alias (symlink) for convenience on Linux/macOS.
+ln -sf "$INSTALL_DIR/grok-pi" "$INSTALL_DIR/pi-grok"
+
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *)
@@ -77,9 +80,10 @@ case ":$PATH:" in
 esac
 
 printf '%s\n' ""
-printf '%s\n' "Installed $INSTALL_DIR/grok-pi"
+printf '%s\n' "Installed $INSTALL_DIR/grok-pi (alias: pi-grok)"
 if "$INSTALL_DIR/grok-pi" --help >/dev/null 2>&1; then
   printf '%s\n' "Binary responds to --help."
 fi
 printf '%s\n' "Install Pi with: npm install --global @earendil-works/pi-coding-agent"
 printf '%s\n' "Run with: grok-pi --pi-bin pi --pi-cwd /path/to/project -- --no-session"
+printf '%s\n' "  or:     pi-grok --pi-bin pi --pi-cwd /path/to/project -- --no-session"

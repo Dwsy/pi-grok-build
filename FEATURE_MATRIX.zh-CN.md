@@ -24,6 +24,7 @@
 | Tool cards | 原生+适配 | Pi tool events → ACP ToolCall；`read`/`bash`/`edit`/`write`/`grep`/`find`/`ls` 投影到原生卡 |
 | Todo / plan list | 原生+适配 | Pi `@juicesharp/rpiv-todo` 的 `todo` tool `details.tasks` → ACP `Plan` → 原生 TodoPane/badge；scrollback 抑制 `todo` 卡 |
 | Plan mode | 原生+适配 | Pager 原生 Plan 开关 → adapter 负责的 `Inactive/Pending/Active/ExitPending` 状态机；full/sparse system-reminder 前缀；session 私有 `.plan.md` sidecar；注入 Pi `tool_call` gate 阻止 `edit`/`write`/`bash`（仅放行计划文件）；Pi `exit_plan_mode` 打开原生 `x.ai/exit_plan_mode` 审批，并持久化 `.plan-mode.json` 状态 |
+| Goal 模式（`/goal`） | 适配（MVP legacy） | F2 `[ui].pi_goal` **默认关闭**（需重启）。注入扩展：`/goal` + `update_goal` + control 文件；adapter GoalHost 发原生 `GoalUpdated`（状态条 / detail）。Active 时 `agent_settled` follow-up 续跑。**不含** shell 完整 multi-agent classifier/planner/strategist（后续切片）。 |
 | Diff rendering | 原生+适配 | edit-like tool metadata进入 Grok tool/diff pipeline |
 | Images | 原生+适配 | Pi image blocks → ACP ImageContent；具体终端显示取决于 Grok/terminal 能力 |
 | Scroll / find / copy / transcript / export | 原生 | Grok Pager |
@@ -40,7 +41,8 @@
 | Thinking/reasoning stream | 适配 | `message_update` → AgentThoughtChunk |
 | Tool start/update/end | 适配 | ACP ToolCall/ToolCallUpdate |
 | Pi Bash 后台任务 / Send to Background | 原生+适配 | `grok-pi` 私有 Bash extension 持有前台与初始后台 Bash 子进程；前台仍复用 Pi `createBashToolDefinition` 的输出/渲染语义。Pager 原生 Send to Background 经 `x.ai/terminal/background` 以受控临时控制文件按 `toolCallId` 转交**同一**子进程，随后投影到既有 `x.ai/task_*` 卡片；原生任务卡 kill 经同一控制通道走 `x.ai/task/kill`（`op:kill` + 已发布 `runningTaskIds`）；`is_background` + `description`、`get_task_output` / `wait_tasks` / `kill_task` 保持可用。 |
-| Pi 子代理 | 原生+适配 | 内置 `pi-grok-subagents` extension 拥有 Pi child `AgentSession`；版本化 bridge 投影到原生 `SubagentBlock`、Tasks Pane、child `AgentView` 与 `x.ai/subagent/cancel`。模型驱动的手工端到端验收待执行。 |
+| Pi 子代理 | 原生+适配 |
+| Workflow（Rhai / `/workflow`） | 上游引擎 + Pi Spawn 接缝 | **会话宿主 + slash 表面：** 复用 `xai-workflow` + `ExternalWorkflowRuntime`；adapter `x.ai/workflow/{launch,pause,stop}` + `x.ai/workflows/list` + `workflow_updated`；注入 `/workflow`、`/workflows`、`/create-workflow`（及命名脚本）；隐藏 `__pi_workflow_*` 桥命令；Pager 本地处理 + F2 门控。deep-research 实机手测仍建议。`/create-workflow` 为 PassThrough 用户提示（非 Pi skill）。项目脚本目录默认 `<repo>/.grok-pi/workflows`。 | 内置 `pi-grok-subagents` extension 拥有 Pi child `AgentSession`；版本化 bridge 投影到原生 `SubagentBlock`、Tasks Pane、child `AgentView` 与 `x.ai/subagent/cancel`。模型驱动的手工端到端验收待执行。 |
 | Prompt completion | 适配 | 以 Pi `agent_settled` 为完成屏障，不错误使用 `agent_end` |
 | Retry | 适配 | Grok native sticky status/toast |
 | Compaction | 原生+适配 | `/compact [instructions]` → Pi `compact`；Pi `compaction_*` → 原生 CompactionStarted/Completed/Failed/Cancelled scrollback blocks + sticky status |
@@ -69,13 +71,13 @@
 | Pi session fork (`/fork`) | 适配 | External：与 `/jump` 同款 prompt 区 `ListOverlay`（RPC `get_fork_messages`）；选择后 RPC `fork` 生成分支 session 文件，同 agent 换绑新 `sessionId`，`session/load` 回放并把选中文案预填 prompt；非 external 仍走 Grok peer-agent `/fork` |
 | Pi session clone (`/clone`) | 适配 | External：RPC `clone` 在当前 leaf 复制新 session 文件；同 agent 换绑新 `sessionId`，`session/load` 回放并清空 prompt（对齐 Pi） |
 | Pi 资源重载 (`/reload`) | 适配 | External：`__pi_reload` → `ctx.reload()`；流式 **与** compaction 中禁止（对齐 Pi）；adapter 刷新命令/模型目录；Pager 重扫 Pi theme（`rediscover`）并重应用当前 `pi:*` 主题；loading/成功 toast 文案对齐 Pi；不分支 session 文件 |
-| Pi HTML export / share | 适配 | Grok `/export` 仍为 Markdown transcript；实验性 `/pi-export`（HTML 或 `.jsonl`）与 `/pi-share`（私有 gh gist + pi.dev 预览）经注入 extension 交给 Pi host export-html / share 路径，不另造 TUI |
+| Pi HTML export / share | 适配 | Grok `/export` 仍为 Markdown transcript；默认开启 `/export-html`（Pi HTML / `.jsonl`）与 `/pi-share`（私有 gh gist + pi.dev），经 `pi-grok-export` 注入，不另造 TUI |
 
 ## Extension UI
 
 | 方法 | 状态 | Grok 组件 |
 |---|---|---|
-| `notify` | 原生+适配 | 原生 toast；显式 `info` 同时追加原生 SystemMessage scrollback；`/notify` 用原生可搜索 modal 查看当前进程内、按 Pi session 隔离的全部 info/warning/error 事件（不持久化） |
+| `notify` | 原生+适配 | warning/error → 原生 toast；显式 `info` 单表面（短文 toast，多行 SystemMessage scrollback，不同时双写）；`/notify` 用原生可搜索 modal 查看当前进程内、按 Pi session 隔离的全部 info/warning/error 事件（不持久化） |
 | `setStatus` | 原生+适配 | sticky banner/status |
 | `setWidget` | 原生+适配 | persistent native banner surface |
 | `setTitle` | 原生+适配 | terminal title |

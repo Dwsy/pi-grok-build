@@ -57,6 +57,36 @@ pub fn user_grok_home() -> Option<PathBuf> {
     resolvable.then(grok_home)
 }
 
+static PROJECT_CONFIG_DIRNAME: OnceLock<&'static str> = OnceLock::new();
+
+/// Project-local config tree under a repo root (e.g. `.grok` or `.grok-pi`).
+///
+/// Resolution (process-wide [`OnceLock`]):
+/// 1. `$GROK_PROJECT_DIR` if non-empty (leading `.` optional)
+/// 2. default `.grok` (stock Grok / unit tests)
+///
+/// grok-pi sets `GROK_PROJECT_DIR=.grok-pi` at startup so project workflows,
+/// hooks, MCP, and skills stay product-isolated from stock Grok's `.grok/`.
+pub fn project_config_dirname() -> &'static str {
+    PROJECT_CONFIG_DIRNAME.get_or_init(|| match std::env::var("GROK_PROJECT_DIR") {
+        Ok(s) if !s.trim().is_empty() => {
+            let s = s.trim();
+            let owned = if s.starts_with('.') {
+                s.to_string()
+            } else {
+                format!(".{s}")
+            };
+            Box::leak(owned.into_boxed_str())
+        }
+        _ => ".grok",
+    })
+}
+
+/// `<root>/$GROK_PROJECT_DIR` (default `<root>/.grok`).
+pub fn project_config_dir(root: impl AsRef<std::path::Path>) -> PathBuf {
+    root.as_ref().join(project_config_dirname())
+}
+
 /// Canonical grok application path: `$GROK_HOME/bin/grok` (Unix) or `grok.exe` (Windows).
 pub fn grok_application() -> PathBuf {
     grok_application_in(&grok_home())
@@ -328,5 +358,17 @@ mod tests {
     #[test]
     fn slugify_truncates() {
         assert_eq!(slugify(&"a".repeat(100), 10).len(), 10);
+    }
+}
+
+#[cfg(test)]
+mod project_dirname_tests {
+    #[test]
+    fn project_config_dirname_defaults_to_grok_without_env() {
+        // Do not assert against a polluted env from other tests in the same process;
+        // only check that the helper returns a dotted dirname.
+        let name = super::project_config_dirname();
+        assert!(name.starts_with('.'), "got {name}");
+        assert!(!name.contains('/'));
     }
 }

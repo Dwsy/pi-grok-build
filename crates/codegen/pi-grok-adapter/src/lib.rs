@@ -7,9 +7,12 @@
 
 mod background_bash_bridge;
 mod context_projection;
+mod goal_host;
 mod model;
 mod pi_adapter;
 mod pi_rpc;
+mod pi_workflow_backend;
+mod workflow_host;
 pub mod plan_mode;
 mod prompt_bridge;
 mod psm_session_catalog;

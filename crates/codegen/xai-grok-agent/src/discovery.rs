@@ -14,8 +14,15 @@ use crate::config::{AgentDefinition, AgentScope, BuiltinAgentName};
 use crate::error::AgentBuildError;
 use crate::prompt::context::TemplateOverride;
 
-/// Project-level agent directories to scan (`.grok/agents/` + `.claude/agents/` compat).
-const PROJECT_AGENT_SUBDIRS: &[&str] = &[".grok/agents", ".claude/agents"];
+/// Project-level agent dirs: `$GROK_PROJECT_DIR/agents` + `.claude/agents` compat.
+fn project_agent_subdirs() -> [&'static str; 2] {
+    use std::sync::OnceLock;
+    static SUBDIRS: OnceLock<[&'static str; 2]> = OnceLock::new();
+    *SUBDIRS.get_or_init(|| {
+        let agents = format!("{}/agents", xai_grok_config::project_config_dirname());
+        [Box::leak(agents.into_boxed_str()), ".claude/agents"]
+    })
+}
 
 /// Existing project-level agent dirs (`.grok/agents` / `.claude/agents`), walked
 /// from `cwd` up to the git worktree root (inclusive). Returns
@@ -36,7 +43,7 @@ pub fn project_agent_dirs(cwd: Option<&Path>) -> (Vec<PathBuf>, Option<PathBuf>)
 /// never drift from discovery (adding a third project-agent dir updates both at
 /// once).
 pub fn project_agent_dirs_in(chain_dirs: &[PathBuf]) -> Vec<PathBuf> {
-    crate::repo::existing_subdirs_along(chain_dirs, PROJECT_AGENT_SUBDIRS)
+    crate::repo::existing_subdirs_along(chain_dirs, &project_agent_subdirs())
 }
 
 // ── Subagent entry types ─────────────────────────────────────────────

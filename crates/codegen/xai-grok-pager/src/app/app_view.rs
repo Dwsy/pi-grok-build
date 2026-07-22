@@ -1902,11 +1902,13 @@ impl AppView {
         }
     }
 
-    /// Queue a Pi/external-backend notification for Grok's native toast.
-    /// The Pager toast has one visible slot, so all external notifications go
+    /// Queue a Pi/external-backend notification for Grok's native surfaces.
+    /// The Pager toast has one visible slot, so external notifications go
     /// through FIFO draining rather than replacing the currently visible one.
-    /// Explicit information notices are also written to scrollback: they are
-    /// command results such as `/grok-cli-vision:status`, not transient alerts.
+    ///
+    /// Explicit `info` is a single surface (no toast+scrollback double):
+    /// multi-line command results (e.g. `/grok-cli-vision:status`) stay in
+    /// scrollback; short one-liners use toast only, matching Pi `showStatus`.
     pub fn show_external_notification(&mut self, message: &str, kind: Option<&str>) {
         if let Some(session_id) = self.active_external_session_id() {
             self.external_ui
@@ -1918,23 +1920,30 @@ impl AppView {
                     kind: kind.map(str::to_owned),
                 });
         }
+
+        if kind == Some("info") {
+            if message.contains('\n') {
+                if let ActiveView::Agent(id) = self.active_view
+                    && let Some(agent) = self.agents.get_mut(&id)
+                {
+                    agent.scrollback.push_block(
+                        crate::scrollback::block::RenderBlock::system(message),
+                    );
+                }
+            } else {
+                self.external_ui
+                    .pending_toasts
+                    .push_back(message.to_string());
+            }
+            return;
+        }
+
         let rendered = match kind {
             Some("warning") => format!("Warning: {message}"),
             Some("error") => format!("Error: {message}"),
             _ => message.to_string(),
         };
         self.external_ui.pending_toasts.push_back(rendered);
-
-        if kind != Some("info") {
-            return;
-        }
-        if let ActiveView::Agent(id) = self.active_view
-            && let Some(agent) = self.agents.get_mut(&id)
-        {
-            agent
-                .scrollback
-                .push_block(crate::scrollback::block::RenderBlock::system(message));
-        }
     }
 
     fn active_external_session_id(&self) -> Option<String> {
@@ -6216,13 +6225,28 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn explicit_info_notification_is_retained_in_scrollback() {
+    fn short_info_notification_is_toast_only() {
         let mut app = test_app_with_agent();
         let id = super::super::agent::AgentId(0);
 
-        app.show_external_notification("grok-cli-vision: ON", Some("info"));
+        app.show_external_notification(
+            "Ponytail: current full • default full",
+            Some("info"),
+        );
+
+        assert_eq!(app.agents[&id].scrollback.len(), 0);
+        assert_eq!(app.external_ui.pending_toasts.len(), 1);
+    }
+
+    #[test]
+    fn multiline_info_notification_is_scrollback_only() {
+        let mut app = test_app_with_agent();
+        let id = super::super::agent::AgentId(0);
+
+        app.show_external_notification("line-a\nline-b", Some("info"));
 
         assert_eq!(app.agents[&id].scrollback.len(), 1);
+        assert!(app.external_ui.pending_toasts.is_empty());
     }
 
     #[test]

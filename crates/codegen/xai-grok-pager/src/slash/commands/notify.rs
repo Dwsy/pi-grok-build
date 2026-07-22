@@ -55,6 +55,8 @@ mod tests {
             session_id: None,
             bundle_state: &BUNDLE,
             screen_mode: crate::app::ScreenMode::Minimal,
+           billing_surface_visible: false,
+            billing_surface_visible: false,
             pager_state: PagerLocalSnapshot::default(),
         };
         assert!(matches!(
@@ -72,6 +74,8 @@ mod tests {
             session_id: Some(&session_id),
             bundle_state: &BUNDLE,
             screen_mode: crate::app::ScreenMode::Minimal,
+           billing_surface_visible: false,
+            billing_surface_visible: false,
             pager_state: PagerLocalSnapshot::default(),
         };
         assert!(matches!(

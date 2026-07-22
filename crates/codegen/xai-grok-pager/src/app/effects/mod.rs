@@ -3028,6 +3028,121 @@ pub(crate) fn execute(
                     }
                 });
         }
+
+        Effect::WorkflowLaunch {
+            agent_id,
+            session_id,
+            name,
+            args,
+        } => {
+            let tx = acp_tx.clone();
+            let agent_id = agent_id.clone();
+            let session_id = session_id.clone();
+            let name = name.clone();
+            let args = args.clone();
+            tasks.spawn(async move {
+                let params = serde_json::json!({ "name": name, "args": args });
+                let req = acp::ExtRequest::new(
+                    "x.ai/workflow/launch",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize workflow/launch params")
+                        .into(),
+                );
+                let (message, is_error) = match acp_send(req, &tx).await {
+                    Ok(resp) => {
+                        let wrapper: serde_json::Value =
+                            serde_json::from_str(resp.0.get()).unwrap_or_default();
+                        let inner = wrapper.get("result").unwrap_or(&wrapper);
+                        let run_id = inner
+                            .get("runId")
+                            .or_else(|| inner.get("run_id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        (
+                            format!(
+                                "Workflow '{name}' started (run {run_id}). Open /workflows for progress."
+                            ),
+                            false,
+                        )
+                    }
+                    Err(e) => (
+                        sanitize_user_error(&format!("Workflow launch failed: {e}")),
+                        true,
+                    ),
+                };
+                TaskResult::WorkflowHostMessage {
+                    agent_id,
+                    session_id,
+                    message,
+                    is_error,
+                }
+            });
+        }
+        Effect::WorkflowManage {
+            agent_id,
+            session_id,
+            op,
+            target,
+        } => {
+            let tx = acp_tx.clone();
+            let agent_id = agent_id.clone();
+            let session_id = session_id.clone();
+            let op = op.clone();
+            let target = target.clone();
+            tasks.spawn(async move {
+                let method = match op.as_str() {
+                    "pause" => "x.ai/workflow/pause",
+                    "stop" => "x.ai/workflow/stop",
+                    other => {
+                        return TaskResult::WorkflowHostMessage {
+                            agent_id,
+                            session_id,
+                            message: format!("Unsupported workflow op: {other}"),
+                            is_error: true,
+                        };
+                    }
+                };
+                let params = serde_json::json!({ "runId": target, "name": target });
+                let req = acp::ExtRequest::new(
+                    method,
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize workflow manage params")
+                        .into(),
+                );
+                let (message, is_error) = match acp_send(req, &tx).await {
+                    Ok(resp) => {
+                        let wrapper: serde_json::Value =
+                            serde_json::from_str(resp.0.get()).unwrap_or_default();
+                        let inner = wrapper.get("result").unwrap_or(&wrapper);
+                        let ok = inner
+                            .get("paused")
+                            .or_else(|| inner.get("stopped"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true);
+                        if ok {
+                            (format!("Workflow {op} ok for '{target}'."), false)
+                        } else {
+                            (
+                                format!(
+                                    "Workflow {op} had no matching active run for '{target}'."
+                                ),
+                                true,
+                            )
+                        }
+                    }
+                    Err(e) => (
+                        sanitize_user_error(&format!("Workflow {op} failed: {e}")),
+                        true,
+                    ),
+                };
+                TaskResult::WorkflowHostMessage {
+                    agent_id,
+                    session_id,
+                    message,
+                    is_error,
+                }
+            });
+        }
         Effect::ToggleSkill { agent_id, session_id: _, skill_name, enabled } => {
             let tx = acp_tx.clone();
             tasks
@@ -4001,6 +4116,7 @@ pub(crate) fn execute(
             model,
             thinking_level,
             recap_mermaid,
+            terminal_width,
         } => {
             let tx = acp_tx.clone();
             tasks
@@ -4018,6 +4134,7 @@ pub(crate) fn execute(
                         params["thinkingLevel"] = serde_json::Value::String(thinking_level);
                     }
                     params["recapMermaid"] = serde_json::Value::Bool(recap_mermaid);
+                    params["terminalWidth"] = serde_json::Value::from(terminal_width);
                     let request = acp::ExtRequest::new(
                         "x.ai/recap",
                         serde_json::value::to_raw_value(&params)

@@ -261,7 +261,15 @@ pub fn project_plugin_dirs(cwd: Option<&Path>) -> (Vec<PathBuf>, Option<PathBuf>
 /// ([`crate::repo::RepoDirChain`]). The folder-trust gate reuses its one shared
 /// chain here so detection and discovery can never drift.
 pub fn project_plugin_dirs_in(chain_dirs: &[PathBuf]) -> Vec<PathBuf> {
-    crate::repo::existing_subdirs_along(chain_dirs, &[".grok/plugins", ".claude/plugins"])
+    {
+        use std::sync::OnceLock;
+        static SUBS: OnceLock<[&'static str; 2]> = OnceLock::new();
+        let subs = SUBS.get_or_init(|| {
+            let plugins = format!("{}/plugins", xai_grok_config::project_config_dirname());
+            [Box::leak(plugins.into_boxed_str()), ".claude/plugins"]
+        });
+        crate::repo::existing_subdirs_along(chain_dirs, subs)
+    }
 }
 
 /// Discover all plugins from the filesystem.

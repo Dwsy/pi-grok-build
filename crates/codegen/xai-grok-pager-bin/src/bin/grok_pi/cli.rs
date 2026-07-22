@@ -42,7 +42,14 @@ Notes:
 Update (GitHub releases only):
   grok-pi update            Install latest from Dwsy/grok-pi
   grok-pi update --check    Print current vs latest
-  Welcome Ctrl+U            Same install when an update is offered"
+  Welcome Ctrl+U            Same install when an update is offered
+
+Home (isolated from stock Grok ~/.grok):
+  Default state dir: ~/.grok-pi  (override with GROK_HOME)
+  Project config dir: <repo>/.grok-pi  (override with GROK_PROJECT_DIR)
+  grok-pi migrate-home          Copy allowlisted prefs from ~/.grok
+  grok-pi migrate-home --status Preview + marker
+  grok-pi migrate-home --dry-run"
 )]
 pub(super) struct Args {
     #[command(subcommand)]
@@ -194,6 +201,33 @@ pub(super) enum Command {
         /// Named `--to` so it does not clash with clap's global `--version`.
         #[arg(long = "to", value_name = "VERSION")]
         version: Option<String>,
+    },
+
+    /// Copy allowlisted state from stock Grok home (`~/.grok`) into grok-pi home (`~/.grok-pi`).
+    ///
+    /// Migrates pager settings, config.toml, skills, hooks, and related prefs.
+    /// Does not move Pi sessions (`~/.pi`) or stock install caches (`bin/`, downloads/).
+    /// Source is never deleted (copy only).
+    #[command(name = "migrate-home")]
+    MigrateHome {
+        /// Legacy home to read from (default: `$GROK_LEGACY_HOME` or `~/.grok`).
+        #[arg(long, value_name = "DIR")]
+        from: Option<PathBuf>,
+        /// Destination home (default: `$GROK_HOME` or `~/.grok-pi`).
+        #[arg(long, value_name = "DIR")]
+        into: Option<PathBuf>,
+        /// Print actions without writing files.
+        #[arg(long)]
+        dry_run: bool,
+        /// Overwrite files that already exist at the destination.
+        #[arg(long)]
+        force: bool,
+        /// Also copy `auth.json` (Grok cloud tokens; Pi auth is separate).
+        #[arg(long)]
+        include_auth: bool,
+        /// Report what would migrate and whether the marker is present.
+        #[arg(long)]
+        status: bool,
     },
 }
 

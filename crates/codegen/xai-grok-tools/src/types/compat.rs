@@ -365,7 +365,7 @@ impl CompatConfig {
     /// in `collect_skill_config_dirs`. When all cells are on, the returned
     /// list is identical to the historical constant.
     pub fn skill_config_dirs(&self) -> Vec<&'static str> {
-        let mut dirs = vec![".grok", ".agents"];
+        let mut dirs = vec![xai_grok_config::project_config_dirname(), ".agents"];
         if self.claude.skills {
             dirs.push(".claude");
         }
@@ -382,7 +382,12 @@ impl CompatConfig {
     /// Replaces the hard-coded `RULES_DIRS` constant. When all cells are on,
     /// the returned list is identical.
     pub fn rules_dirs(&self) -> Vec<&'static str> {
-        let mut dirs = vec![".grok/rules"];
+        use std::sync::OnceLock;
+        static GROK_RULES: OnceLock<&'static str> = OnceLock::new();
+        let grok_rules = *GROK_RULES.get_or_init(|| {
+            Box::leak(format!("{}/rules", xai_grok_config::project_config_dirname()).into_boxed_str())
+        });
+        let mut dirs = vec![grok_rules];
         if self.claude.rules {
             dirs.push(".claude/rules");
         }

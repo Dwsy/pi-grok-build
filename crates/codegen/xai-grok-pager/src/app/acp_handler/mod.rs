@@ -700,8 +700,8 @@ fn handle_ext_notification(notif: &acp::ExtNotification, app: &mut AppView) -> b
         }
         "x.ai/mcp/servers_updated" => handle_mcp_servers_updated(notif, app),
         // Pi RPC extension UI is projected onto native Grok pager surfaces.
-        // Explicit info notices are additionally retained as native system
-        // blocks; warning/error notifications remain transient alerts.
+        // info is a single surface (multi-line → scrollback, short → toast);
+        // warning/error stay transient toasts.
         "pi/ui/notify" => handle_pi_ui_notify(notif, app),
         "pi/ui/status" => handle_pi_ui_status(notif, app),
         "pi/ui/widget" => handle_pi_ui_widget(notif, app),

@@ -106,6 +106,24 @@ impl SlashCommand for ThemeCommand {
             description: format!("auto (follow system){auto_active}"),
         }];
 
+        // Transparent Pi themes right after auto for quick access.
+        let transparent_names = ["transparent", "transparent-light"];
+        for meta in pi_theme::list_themes() {
+            if transparent_names.contains(&meta.name.as_str()) {
+                let active = if !is_auto && current_id == meta.id {
+                    " (active)"
+                } else {
+                    ""
+                };
+                items.push(ArgItem {
+                    display: meta.id.clone(),
+                    match_text: format!("{} {}", meta.id, meta.name),
+                    insert_text: meta.id.clone(),
+                    description: format!("Pi builtin{active}"),
+                });
+            }
+        }
+
         // Concrete Grok themes — only show "(active)" when not in auto/custom.
         items.extend(available.iter().map(|kind| {
             let active = if !is_auto && !has_custom && kind.display_name() == current_id.as_str() {
@@ -121,8 +139,11 @@ impl SlashCommand for ThemeCommand {
             }
         }));
 
-        // Pi themes (embedded + discovered).
+        // Remaining Pi themes (embedded + discovered), excluding transparents.
         for meta in pi_theme::list_themes() {
+            if transparent_names.contains(&meta.name.as_str()) {
+                continue;
+            }
             let active = if !is_auto && current_id == meta.id {
                 " (active)"
             } else {
@@ -239,6 +260,7 @@ mod tests {
                 billing_surface_visible: true,
                 workflows_available: true,
                 screen_mode: crate::app::ScreenMode::Fullscreen,
+            billing_surface_visible: false,
             };
             let items = cmd.suggest_args(&ctx, "").expect("should return items");
             assert_eq!(items[0].insert_text, "auto");
@@ -266,6 +288,7 @@ mod tests {
                 billing_surface_visible: true,
                 workflows_available: true,
                 screen_mode: crate::app::ScreenMode::Fullscreen,
+            billing_surface_visible: false,
             };
             let items = cmd.suggest_args(&ctx, "").expect("should return items");
             assert!(
@@ -289,6 +312,7 @@ mod tests {
                 billing_surface_visible: true,
                 workflows_available: true,
                 screen_mode: crate::app::ScreenMode::Fullscreen,
+            billing_surface_visible: false,
             };
             let items = cmd.suggest_args(&ctx, "").expect("should return items");
             assert!(
@@ -313,6 +337,7 @@ mod tests {
                 billing_surface_visible: true,
                 workflows_available: true,
                 screen_mode: crate::app::ScreenMode::Fullscreen,
+            billing_surface_visible: false,
             };
             let items = cmd.suggest_args(&ctx, "").expect("should return items");
             let groknight = items
@@ -341,6 +366,7 @@ mod tests {
                 billing_surface_visible: true,
                 workflows_available: true,
                 screen_mode: crate::app::ScreenMode::Fullscreen,
+            billing_surface_visible: false,
             };
             let items = cmd.suggest_args(&ctx, "").expect("should return items");
             // No concrete theme should show "(active)" in auto mode.
@@ -369,6 +395,7 @@ mod tests {
                 session_id: None,
                 bundle_state: &bundle,
                 screen_mode: crate::app::ScreenMode::Inline,
+               billing_surface_visible: false,
                 billing_surface_visible: true,
                 pager_state: crate::settings::PagerLocalSnapshot {
                     multiline_mode: false,
@@ -404,6 +431,7 @@ mod tests {
                 session_id: None,
                 bundle_state: &bundle,
                 screen_mode: crate::app::ScreenMode::Inline,
+               billing_surface_visible: false,
                 billing_surface_visible: true,
                 pager_state: crate::settings::PagerLocalSnapshot {
                     multiline_mode: false,
@@ -435,6 +463,7 @@ mod tests {
                 session_id: None,
                 bundle_state: &bundle,
                 screen_mode: crate::app::ScreenMode::Inline,
+               billing_surface_visible: false,
                 billing_surface_visible: true,
                 pager_state: crate::settings::PagerLocalSnapshot {
                     multiline_mode: false,
@@ -464,6 +493,7 @@ mod tests {
                 session_id: None,
                 bundle_state: &bundle,
                 screen_mode: crate::app::ScreenMode::Inline,
+               billing_surface_visible: false,
                 billing_surface_visible: true,
                 pager_state: crate::settings::PagerLocalSnapshot {
                     multiline_mode: false,
@@ -493,6 +523,7 @@ mod tests {
                 session_id: None,
                 bundle_state: &bundle,
                 screen_mode: crate::app::ScreenMode::Inline,
+                billing_surface_visible: false,
                 pager_state: crate::settings::PagerLocalSnapshot {
                     multiline_mode: false,
                     yolo_mode: false,
@@ -609,6 +640,7 @@ mod tests {
                 session_id: None,
                 bundle_state: &bundle,
                 screen_mode: crate::app::ScreenMode::Inline,
+               billing_surface_visible: false,
                 billing_surface_visible: true,
                 pager_state: crate::settings::PagerLocalSnapshot {
                     multiline_mode: false,
@@ -641,6 +673,7 @@ mod tests {
                 session_id: None,
                 bundle_state: &bundle,
                 screen_mode: crate::app::ScreenMode::Inline,
+               billing_surface_visible: false,
                 billing_surface_visible: true,
                 pager_state: crate::settings::PagerLocalSnapshot {
                     multiline_mode: false,

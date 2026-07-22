@@ -78,7 +78,7 @@ pub(crate) fn find_project_configs_in(chain_dirs: &[PathBuf]) -> Vec<PathBuf> {
     chain_dirs
         .iter()
         .rev()
-        .map(|dir| dir.join(".grok").join("config.toml"))
+        .map(|dir| xai_grok_config::project_config_dir(dir).join("config.toml"))
         .filter(|config_path| config_path.is_file() && !is_user_grok_config_file(config_path))
         .collect()
 }

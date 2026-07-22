@@ -314,6 +314,9 @@ fn setting_row_visible_hides_external_only_in_normal_profile() {
         "pi_builtin_tools.grep",
         "pi_builtin_tools.find",
         "pi_builtin_tools.ls",
+        "pi_tree_file_rollback",
+        "pi_workflows",
+        "pi_goal",
     ] {
         let child = meta_for(&reg, key);
         assert!(child.external_only, "{key} must be external_only");

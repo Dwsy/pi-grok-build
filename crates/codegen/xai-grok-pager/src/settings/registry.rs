@@ -498,6 +498,8 @@ pub fn current_value_for(
         "pi_builtin_tools.ls" => Some(SettingValue::Bool(ui.pi_builtin_tools.ls)),
         "psm_resume_index" => Some(SettingValue::Bool(ui.psm_resume_index)),
         "pi_tree_file_rollback" => Some(SettingValue::Bool(ui.pi_tree_file_rollback)),
+        "pi_workflows" => Some(SettingValue::Bool(ui.pi_workflows)),
+        "pi_goal" => Some(SettingValue::Bool(ui.pi_goal)),
         // Cache is the send-path source of truth (same pattern as group_tool_verbs).
         "page_flip_on_send" => Some(SettingValue::Bool(
             crate::appearance::cache::load_page_flip_on_send(),
@@ -1220,6 +1222,38 @@ mod tests {
                         ui.recap_model.is_empty(),
                         "UiConfig::default().recap_model must be empty",
                     );
+                }
+                ("psm_resume_index", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default,
+                        ui.psm_resume_index,
+                        "psm_resume_index default drifts from UiConfig::default()"
+                    );
+                    assert!(!*default, "psm_resume_index must default OFF");
+                }
+                ("pi_tree_file_rollback", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default,
+                        ui.pi_tree_file_rollback,
+                        "pi_tree_file_rollback default drifts from UiConfig::default()"
+                    );
+                    assert!(!*default, "pi_tree_file_rollback must default OFF");
+                }
+                ("pi_workflows", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default,
+                        ui.pi_workflows,
+                        "pi_workflows default drifts from UiConfig::default()"
+                    );
+                    assert!(!*default, "pi_workflows must default OFF");
+                }
+                ("pi_goal", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default,
+                        ui.pi_goal,
+                        "pi_goal default drifts from UiConfig::default()"
+                    );
+                    assert!(!*default, "pi_goal must default OFF");
                 }
 
                 _ => panic!(

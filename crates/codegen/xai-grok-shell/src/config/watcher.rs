@@ -357,7 +357,7 @@ fn watch_cwd_dirs(debouncer: &mut Debouncer<AccessFilteredWatcher>, cwd: &Path) 
     if let Err(e) = debouncer.watcher().watch(cwd, RecursiveMode::NonRecursive) {
         log_watch_error(&e, "failed to watch project cwd (non-recursive)");
     }
-    let grok_dir = cwd.join(".grok");
+    let grok_dir = xai_grok_config::project_config_dir(cwd);
     if let Err(e) = debouncer
         .watcher()
         .watch(&grok_dir, RecursiveMode::NonRecursive)
@@ -376,7 +376,7 @@ fn unwatch_cwd_dirs(debouncer: &mut Debouncer<AccessFilteredWatcher>, cwd: &Path
     if let Err(e) = debouncer.watcher().unwatch(cwd) {
         tracing::debug!(error = %e, "failed to unwatch project cwd");
     }
-    let grok_dir = cwd.join(".grok");
+    let grok_dir = xai_grok_config::project_config_dir(cwd);
     if let Err(e) = debouncer.watcher().unwatch(&grok_dir) {
         tracing::debug!(error = %e, "failed to unwatch project .grok directory");
     }
@@ -513,7 +513,7 @@ pub struct ProjectDiscoveryWatcher {
 impl ProjectDiscoveryWatcher {
     pub fn start(cwd: &Path) -> Option<(Self, mpsc::UnboundedReceiver<DiscoveryChange>)> {
         let project_root = crate::session::workflow::registry::project_root(cwd);
-        let project_grok = project_root.join(".grok");
+        let project_grok = xai_grok_config::project_config_dir(&project_root);
         let workflows = project_grok.join("workflows");
         let (tx, rx) = mpsc::unbounded_channel();
         let project_grok_for_events = project_grok.clone();
@@ -555,11 +555,11 @@ impl ProjectDiscoveryWatcher {
         let refresh_dirs = vec![
             (project_grok, RecursiveMode::NonRecursive),
             (
-                project_root.join(".grok").join("skills"),
+                xai_grok_config::project_config_dir(&project_root).join("skills"),
                 RecursiveMode::Recursive,
             ),
             (
-                project_root.join(".grok").join("commands"),
+                xai_grok_config::project_config_dir(&project_root).join("commands"),
                 RecursiveMode::NonRecursive,
             ),
             (workflows, RecursiveMode::NonRecursive),
@@ -673,7 +673,7 @@ impl SkillsFileWatcher {
         let mut refresh_dirs = vec![(grok_home.join("workflows"), RecursiveMode::NonRecursive)];
         if let Some(cwd) = cwd {
             let project_root = crate::session::workflow::registry::project_root(cwd);
-            let project_grok = project_root.join(".grok");
+            let project_grok = xai_grok_config::project_config_dir(&project_root);
             let parent_watch = if project_grok.is_dir() {
                 project_grok.clone()
             } else {

@@ -2114,6 +2114,43 @@ pub(in crate::app::dispatch) fn set_pi_tree_file_rollback(
     }]
 }
 
+pub(in crate::app::dispatch) fn set_pi_workflows(app: &mut AppView, enabled: bool) -> Vec<Effect> {
+    let previous = app.current_ui.pi_workflows;
+    if previous == enabled {
+        return vec![];
+    }
+    app.current_ui.pi_workflows = enabled;
+    refresh_open_settings_modals(app);
+    // restart_required: extension inject happens only at grok-pi process start.
+    let value = if enabled { "on" } else { "off" };
+    app.show_toast(&format!(
+        "\u{2713} Pi workflows: {value} \u{2014} restart grok-pi to apply"
+    ));
+    vec![Effect::PersistSetting {
+        key: "pi_workflows",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
+pub(in crate::app::dispatch) fn set_pi_goal(app: &mut AppView, enabled: bool) -> Vec<Effect> {
+    let previous = app.current_ui.pi_goal;
+    if previous == enabled {
+        return vec![];
+    }
+    app.current_ui.pi_goal = enabled;
+    refresh_open_settings_modals(app);
+    let value = if enabled { "on" } else { "off" };
+    app.show_toast(&format!(
+        "\u{2713} Pi goal mode: {value} \u{2014} restart grok-pi to apply"
+    ));
+    vec![Effect::PersistSetting {
+        key: "pi_goal",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
 /// State-only mutation for auto session-recap toggle.
 pub(super) fn set_session_recap_inner(app: &mut AppView, enabled: bool) {
     app.current_ui.session_recap = Some(enabled);

@@ -1517,7 +1517,7 @@ impl AgentView {
         let config = PickerConfig {
             title: None,
             show_search_hint: false,
-            expandable: false,
+            expandable: true,
             esc_clears_query: true,
             shortcuts: Some(crate::views::picker::picker_shortcuts()),
             pending_hint: None,
@@ -1538,6 +1538,29 @@ impl AgentView {
         match handle_picker_input(ev, &mut state.picker, entry_count, &config) {
             PickerOutcome::Closed => {
                 self.active_modal = None;
+                InputOutcome::Changed
+            }
+            PickerOutcome::Expand(i) => {
+                if let Some(ActiveModal::Notifications { state, .. }) = self.active_modal.as_mut() {
+                    state.picker.expanded.insert(i);
+                }
+                InputOutcome::Changed
+            }
+            PickerOutcome::Collapse(i) => {
+                if let Some(ActiveModal::Notifications { state, .. }) = self.active_modal.as_mut() {
+                    state.picker.expanded.remove(&i);
+                }
+                InputOutcome::Changed
+            }
+            PickerOutcome::Copy(i) => {
+                if let Some(ActiveModal::Notifications { state, .. }) = self.active_modal.as_mut() {
+                    let filtered = state.filtered_notifications();
+                    if let Some(notification) = filtered.get(i) {
+                        let text = notification.message.clone();
+                        let _ = crate::clipboard::SystemClipboard::try_set(&text);
+                        self.show_toast("Copied notification");
+                    }
+                }
                 InputOutcome::Changed
             }
             PickerOutcome::Unchanged => InputOutcome::Unchanged,
@@ -2249,30 +2272,49 @@ impl AgentView {
                         )
                     })
                     .collect();
+                let desc_lines: Vec<Vec<&str>> = notifications
+                    .iter()
+                    .map(|(msg, _)| vec![msg.as_str()])
+                    .collect();
                 let picker_entries: Vec<PickerEntry> = notifications
                     .iter()
                     .enumerate()
                     .map(|(index, (label, kind))| {
+                        let is_expanded = state.picker.expanded.contains(&index);
                         PickerEntry::Row(PickerRow {
                             label,
                             right_label: kind,
                             selected: state.picker.hovered == Some(index)
                                 || (state.picker.hovered.is_none()
                                     && index == state.picker.selected),
-                            expanded: false,
+                            expanded: is_expanded,
                             fields: &[],
-                            description_lines: &[],
+                            description_lines: if is_expanded {
+                                &desc_lines[index]
+                            } else {
+                                &[]
+                            },
                             summary_lines: &[],
                             dimmed: false,
                             indent: 0,
                             label_color: None,
                             badge: "",
                             badge_color: None,
-                            collapsible: false,
+                            collapsible: true,
                             underline_last_desc: false,
                         })
                     })
                     .collect();
+                picker_shortcuts.push(Shortcut {
+                    label: "e expand",
+                    clickable: false,
+                    id: 0,
+                });
+                picker_shortcuts.push(Shortcut {
+                    label: "y copy",
+                    clickable: false,
+                    id: 0,
+                });
                 mw::push_vim_nav_search_hint(&mut picker_shortcuts, state.picker.search_active);
                 let modal_config = ModalWindowConfig {
                     title: "Notifications",

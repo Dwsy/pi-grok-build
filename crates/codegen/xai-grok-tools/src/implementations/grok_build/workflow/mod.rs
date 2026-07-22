@@ -17,7 +17,7 @@ pub struct WorkflowToolInput {
 
     #[serde(default)]
     #[schemars(
-        description = "Name of a registered workflow (built-in, or discovered from the project `.grok/workflows/` or user `~/.grok/workflows/`). Exactly one of `name`, `script`, or `script_path` must be set."
+        description = "Name of a registered workflow (built-in, or discovered from the project `$GROK_PROJECT_DIR/workflows/` (default `.grok` / grok-pi `.grok-pi`) or user `$GROK_HOME/workflows/`). Exactly one of `name`, `script`, or `script_path` must be set."
     )]
     pub name: Option<String>,
 

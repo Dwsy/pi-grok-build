@@ -454,12 +454,15 @@ pub(super) fn dispatch_send_recap(app: &mut AppView, auto: bool) -> Vec<Effect> 
         .filter(|effort| *effort != xai_grok_shell::sampling::types::ReasoningEffort::None)
         .map(|effort| effort.as_str().to_string());
 
+    let terminal_width = agent.last_terminal_size.0;
+
     vec![Effect::SendRecap {
         session_id,
         auto,
         model: Some(model.to_string()),
         thinking_level,
         recap_mermaid: app.current_ui.recap_mermaid.unwrap_or(false),
+        terminal_width,
     }]
 }
 

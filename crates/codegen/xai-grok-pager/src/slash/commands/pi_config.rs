@@ -44,6 +44,8 @@ mod tests {
             session_id: None,
             bundle_state: &bundle,
             screen_mode: ScreenMode::Fullscreen,
+           billing_surface_visible: false,
+            billing_surface_visible: false,
             pager_state: Default::default(),
         };
         assert!(matches!(

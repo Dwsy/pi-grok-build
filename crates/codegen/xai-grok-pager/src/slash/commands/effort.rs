@@ -135,6 +135,7 @@ mod tests {
             session_id: None,
             bundle_state: &EMPTY_BUNDLE,
             screen_mode: crate::app::ScreenMode::Inline,
+           billing_surface_visible: false,
             billing_surface_visible: true,
             pager_state: crate::settings::PagerLocalSnapshot {
                 multiline_mode: false,
@@ -325,6 +326,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+        billing_surface_visible: false,
         };
         assert!(cmd.suggest_args(&ctx, "").is_none());
 
@@ -339,6 +341,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+        billing_surface_visible: false,
         };
         assert!(cmd.suggest_args(&ctx, "").is_none());
     }
@@ -359,6 +362,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+        billing_surface_visible: false,
         };
         let items = cmd.suggest_args(&ctx, "").unwrap();
         assert_eq!(items.len(), EFFORT_LEVELS.len());

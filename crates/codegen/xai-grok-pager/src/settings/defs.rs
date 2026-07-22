@@ -45,6 +45,16 @@ const THEME_CHOICES: &[EnumChoice] = &[
         description: "Follow system dark/light appearance.",
     },
     EnumChoice {
+        canonical: "pi:transparent",
+        display: "Transparent",
+        description: "Dark transparent; terminal bg shows through.",
+    },
+    EnumChoice {
+        canonical: "pi:transparent-light",
+        display: "Transparent Light",
+        description: "Light transparent; terminal bg shows through.",
+    },
+    EnumChoice {
         canonical: "groknight",
         display: "Grok Night",
         description: "Neutral dark with magenta accent.",
@@ -487,6 +497,16 @@ const VOICE_STT_LANGUAGE_CHOICES: &[EnumChoice] = &[
 /// `auto_dark_theme` and `auto_light_theme`. No dark/light filtering —
 /// the user can pair any theme with any system-appearance bucket.
 const CONCRETE_THEME_CHOICES: &[EnumChoice] = &[
+    EnumChoice {
+        canonical: "pi:transparent",
+        display: "Transparent",
+        description: "Dark transparent; terminal bg shows through.",
+    },
+    EnumChoice {
+        canonical: "pi:transparent-light",
+        display: "Transparent Light",
+        description: "Light transparent; terminal bg shows through.",
+    },
     EnumChoice {
         canonical: "groknight",
         display: "Grok Night",
@@ -1793,6 +1813,49 @@ pub fn default_settings() -> Vec<SettingMeta> {
             keywords: &["pi", "tree", "rollback", "rewind", "checkpoint", "file", "undo"],
             kind: SettingKind::Bool {
                 default: ui_default.pi_tree_file_rollback,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+            external_only: true,
+        },
+        SettingMeta {
+            key: "pi_workflows",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Pi workflows",
+            description: "Enable upstream Rhai workflows in grok-pi (tool `workflow`, deep-research, .grok/workflows). Takes effect for new grok-pi sessions.",
+            keywords: &[
+                "pi",
+                "workflow",
+                "workflows",
+                "rhai",
+                "deep-research",
+                "agent",
+                "orchestration",
+            ],
+            kind: SettingKind::Bool {
+                default: ui_default.pi_workflows,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+            external_only: true,
+        },
+        SettingMeta {
+            key: "pi_goal",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "Pi goal mode",
+            description: "Enable Grok-style /goal autonomous loop in grok-pi (status bar + update_goal). Takes effect for new grok-pi sessions.",
+            keywords: &[
+                "pi",
+                "goal",
+                "/goal",
+                "autonomous",
+                "update_goal",
+                "agent",
+            ],
+            kind: SettingKind::Bool {
+                default: ui_default.pi_goal,
             },
             restart_required: true,
             hidden_in_minimal: false,

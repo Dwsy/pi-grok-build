@@ -49,14 +49,13 @@ pub(super) fn create_control_dir() -> Result<String> {
 
 /// The state root for rollback journals and blobs.
 fn state_root_path() -> String {
-    let home = std::env::var("GROK_HOME")
-        .or_else(|_| std::env::var("HOME").map(|h| format!("{h}/.grok")))
-        .unwrap_or_else(|_| "/tmp/.grok".to_string());
-    let root = if std::env::var("GROK_HOME").is_ok() {
-        format!("{home}/pi-file-rollback")
-    } else {
-        format!("{home}/pi-file-rollback")
-    };
+    // Prefer GROK_HOME (set by grok-pi to ~/.grok-pi by default).
+    let home = std::env::var("GROK_HOME").unwrap_or_else(|_| {
+        std::env::var("HOME")
+            .map(|h| format!("{h}/.grok-pi"))
+            .unwrap_or_else(|_| "/tmp/.grok-pi".to_string())
+    });
+    let root = format!("{home}/pi-file-rollback");
     std::fs::create_dir_all(&root).ok();
     #[cfg(unix)]
     {

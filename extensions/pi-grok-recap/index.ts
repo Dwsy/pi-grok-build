@@ -23,10 +23,15 @@ const MAX_EARLIER_SUMMARY_CHARS = 3_000;
 type RecapArgs = {
 	auto?: boolean;
 	recapMermaid?: boolean;
+	/** Terminal columns at request time; used to pick Mermaid LR vs TD. */
+	terminalWidth?: number;
 	model?: string;
 	thinkingLevel?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	language?: string;
 };
+
+/** Prefer LR when the terminal is wide enough to fit horizontal flowcharts. */
+const MERMAID_LR_MIN_COLS = 110;
 
 function parseArgs(raw: string | undefined): RecapArgs {
 	const text = String(raw ?? "").trim();
@@ -56,12 +61,25 @@ function languageInstruction(language: string | undefined): string {
 	return `Write the entire body in the user's operating-system language (${tag}). Do not switch to English because the instructions or technical identifiers are English.`;
 }
 
-function recapInstruction(language: string | undefined, recapMermaid: boolean): string {
+function mermaidLayoutInstruction(terminalWidth: number | undefined): string {
+	const cols = Number(terminalWidth);
+	const wide = Number.isFinite(cols) && cols >= MERMAID_LR_MIN_COLS;
+	if (wide) {
+		return "Always use left-to-right layout: `flowchart LR` / `graph LR` (or `direction LR` inside a stateDiagram). Never use top-to-bottom (TD/TB) — the terminal is wide enough for a horizontal flow. Keep node labels short so the diagram fits the terminal width.";
+	}
+	return "Always use top-to-bottom layout: `flowchart TD` / `graph TD` (or `direction TB` inside a stateDiagram). Never use left-to-right (LR/RL) — the terminal is narrow/split and horizontal diagrams wrap poorly. Keep node labels short so the diagram stays readable.";
+}
+
+function recapInstruction(
+	language: string | undefined,
+	recapMermaid: boolean,
+	terminalWidth?: number,
+): string {
 	const mermaidInstruction = recapMermaid
 		? [
 			"After the one-sentence recap, add one concise Mermaid diagram when it materially clarifies the session flow, architecture, state, or completed work.",
 			"Use a fenced ```mermaid block with valid Mermaid syntax. Keep it to at most 8 nodes and do not include a diagram when it would add no useful structure.",
-			"Always use left-to-right layout: `flowchart LR` / `graph LR` (or `direction LR` inside a stateDiagram). Never use top-to-bottom (TD/TB) — vertical diagrams are too tall for the terminal. Keep node labels short so the diagram fits the terminal width.",
+			mermaidLayoutInstruction(terminalWidth),
 		]
 		: ["Do not output Markdown, code fences, lists, or Mermaid diagrams."];
 	return [
@@ -262,6 +280,8 @@ export default function (pi: ExtensionAPI) {
 			const parsed = parseArgs(args);
 			const auto = Boolean(parsed.auto);
 			const recapMermaid = Boolean(parsed.recapMermaid);
+			const terminalWidth =
+				typeof parsed.terminalWidth === "number" ? parsed.terminalWidth : undefined;
 
 			try {
 				const branch = ctx.sessionManager.getBranch() as Array<Record<string, unknown>>;
@@ -286,7 +306,7 @@ export default function (pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: `${recapInstruction(parsed.language, recapMermaid)}\n\n<conversation>\n${conversation}\n</conversation>`,
+							text: `${recapInstruction(parsed.language, recapMermaid, terminalWidth)}\n\n<conversation>\n${conversation}\n</conversation>`,
 						},
 					],
 					timestamp: Date.now(),

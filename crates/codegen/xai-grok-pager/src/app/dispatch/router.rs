@@ -91,7 +91,8 @@ use super::settings::setters::{
     set_display_refresh_auto_cadence, set_fork_secondary_model, set_group_tool_verbs,
     set_hunk_tracker_mode, set_invert_scroll, set_keep_text_selection, set_max_thoughts_width,
     set_multiline_mode, set_page_flip_on_send, set_pi_builtin_tool, set_pi_tree_file_rollback,
-    set_progress_bar, set_prompt_suggestions, set_psm_resume_index, set_recap_mermaid,
+    set_pi_goal, set_pi_workflows, set_progress_bar, set_prompt_suggestions, set_psm_resume_index,
+    set_recap_mermaid,
     set_recap_model, set_remember_tool_approvals, set_remote_tui_footer, set_render_mermaid,
     set_respect_manual_folds, set_screen_mode, set_scroll_lines, set_scroll_mode, set_scroll_speed,
     set_session_recap, set_show_thinking_blocks, set_show_tips, set_simple_mode, set_theme,
@@ -1092,6 +1093,8 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::SetPiBuiltinTool { tool, enabled } => set_pi_builtin_tool(app, tool, enabled),
         Action::SetPsmResumeIndex(enabled) => set_psm_resume_index(app, enabled),
         Action::SetPiTreeFileRollback(enabled) => set_pi_tree_file_rollback(app, enabled),
+        Action::SetPiWorkflows(enabled) => set_pi_workflows(app, enabled),
+        Action::SetPiGoal(enabled) => set_pi_goal(app, enabled),
         Action::SetMaxThoughtsWidth(v) => set_max_thoughts_width(app, v),
         Action::SetShowTips(v) => set_show_tips(app, v),
         Action::SetAutoUpdate(v) => set_auto_update(app, v),
@@ -1433,6 +1436,43 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             });
             vec![]
         }
+        Action::WorkflowLaunch { name, args } => {
+            let ActiveView::Agent(agent_id) = app.active_view else {
+                return vec![];
+            };
+            let Some(agent) = app.agents.get_mut(&agent_id) else {
+                return vec![];
+            };
+            let Some(session_id) = agent.session.session_id.clone() else {
+                agent.show_toast("Session is still starting");
+                return vec![];
+            };
+            vec![Effect::WorkflowLaunch {
+                agent_id,
+                session_id,
+                name,
+                args,
+            }]
+        }
+        Action::WorkflowManage { op, target } => {
+            let ActiveView::Agent(agent_id) = app.active_view else {
+                return vec![];
+            };
+            let Some(agent) = app.agents.get_mut(&agent_id) else {
+                return vec![];
+            };
+            let Some(session_id) = agent.session.session_id.clone() else {
+                agent.show_toast("Session is still starting");
+                return vec![];
+            };
+            vec![Effect::WorkflowManage {
+                agent_id,
+                session_id,
+                op,
+                target,
+            }]
+        }
+
         Action::Rewind => dispatch_rewind(app),
         Action::RewindShowPicker => dispatch_rewind_show_picker(app),
         Action::JumpShowPicker => dispatch_jump_show_picker(app),

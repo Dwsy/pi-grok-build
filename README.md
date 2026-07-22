@@ -24,6 +24,13 @@ irm https://github.com/Dwsy/grok-pi/releases/latest/download/install.ps1 | iex
 
 The installer selects the platform binary and installs `grok-pi` to `~/.local/bin` by default on Unix systems. Set `GROK_PI_INSTALL_DIR` to use another directory.
 
+On Linux and macOS, the installer also creates a `pi-grok` alias (symlink) so you can use either name:
+
+```bash
+grok-pi --help   # original name
+pi-grok --help   # alias
+```
+
 `grok-pi` requires [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) **0.80.10 or newer**:
 
 ```bash
@@ -62,6 +69,7 @@ grok-pi update
 | **Remote TUI bridge** | Pi `ctx.ui.custom` components rendered through Grok Build's native Pager, without a second TUI |
 | Shell execution | Bash integration, background tasks, output limits, timeouts, and process-tree cleanup |
 | Parallel work | Pi sub-agents with foreground/background execution and native task views |
+| Rhai workflows | Upstream `xai-workflow` host (F2 **Pi workflows**); `/workflow`, `/workflows`, `/create-workflow`; scripts under `~/.grok-pi/workflows` and `<repo>/.grok-pi/workflows` |
 | Session workflow | Resume, tree navigation, labels, recap, context inspection, and session picker |
 | Resource management | Native manager for Pi extensions, skills, prompts, and themes |
 | Updates | GitHub Releases-based update check and installation |
@@ -95,7 +103,11 @@ Bundled bridge extensions are enabled by default where stable. Experimental nati
 | `PI_GROK_REMOTE_TUI` | `1` | Enable Pi `ctx.ui.custom` components |
 | `PI_GROK_BASH` | `1` | Enable Grok-owned Bash integration |
 | `PI_GROK_NATIVE_COMMANDS` | `0` | Enable experimental `/pi-*` commands |
+| `GROK_HOME` | `~/.grok-pi` | User state root (isolated from stock Grok `~/.grok`) |
+| `GROK_PROJECT_DIR` | `.grok-pi` | Project config/workflows/hooks dir name under repo root |
 | `GROK_PI_NO_AUTO_UPDATE` | unset | Disable background update checks |
+
+Rhai workflows are **off by default** (F2 → Agent → **Pi workflows**, then full restart). Details: [FEATURE_MATRIX.md](FEATURE_MATRIX.md), [AGENTS.md](AGENTS.md#product-state-isolation).
 
 Use `--no-extensions` to disable bundled bridge extensions. Pi startup options can be passed directly after `--`.
 

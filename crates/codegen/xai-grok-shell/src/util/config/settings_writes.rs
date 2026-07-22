@@ -205,6 +205,16 @@ pub async fn set_pi_tree_file_rollback(value: bool) -> Result<()> {
     update_config(|cfg| cfg.ui.pi_tree_file_rollback = value).await
 }
 
+/// Persist `[ui].pi_workflows` via `update_config`.
+pub async fn set_pi_workflows(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.pi_workflows = value).await
+}
+
+/// Persist `[ui].pi_goal` via `update_config`.
+pub async fn set_pi_goal(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.pi_goal = value).await
+}
+
 /// Bounds for [`set_max_thoughts_width`]. Mirrored from the pager's
 /// registry consts; a CI test pins the agreement.
 const MAX_THOUGHTS_WIDTH_SHELL_MIN: i64 = 40;

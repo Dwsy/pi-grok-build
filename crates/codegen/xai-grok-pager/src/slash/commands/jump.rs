@@ -55,6 +55,7 @@ mod tests {
             session_id: None,
             bundle_state: &DEFAULT_BUNDLE_STATE,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+           billing_surface_visible: false,
             billing_surface_visible: true,
             pager_state: PagerLocalSnapshot::default(),
         };

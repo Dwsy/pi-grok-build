@@ -24,6 +24,13 @@ irm https://github.com/Dwsy/grok-pi/releases/latest/download/install.ps1 | iex
 
 安装脚本会自动选择对应平台的二进制文件。Unix 系统默认安装到 `~/.local/bin`，可通过 `GROK_PI_INSTALL_DIR` 指定其他目录。
 
+在 Linux 和 macOS 上，安装脚本还会创建 `pi-grok` 别名（符号链接），两个名称均可使用：
+
+```bash
+grok-pi --help   # 原始名称
+pi-grok --help   # 别名
+```
+
 `grok-pi` 需要 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) **0.80.10 或更高版本**：
 
 ```bash
@@ -62,11 +69,12 @@ grok-pi update
 | **Remote TUI 桥接** | Pi `ctx.ui.custom` 组件通过 Grok Build 原生 Pager 渲染，不创建第二套 TUI |
 | Shell 执行 | Bash 集成、后台任务、输出限制、超时和进程树清理 |
 | 并行工作 | Pi 子代理，支持前台/后台执行和原生任务视图 |
+| Rhai Workflow | 上游 `xai-workflow` 宿主（F2 **Pi workflows**）；`/workflow`、`/workflows`、`/create-workflow`；脚本目录 `~/.grok-pi/workflows` 与 `<repo>/.grok-pi/workflows` |
 | 会话流程 | Resume、树导航、标签、回顾、上下文查看和会话选择器 |
 | 资源管理 | Pi 扩展、skills、prompt 和主题的原生管理器 |
 | 更新 | 基于 GitHub Releases 的更新检查与安装 |
 
-详细行为和有意边界见[功能矩阵](FEATURE_MATRIX.md)。
+详细行为和有意边界见[功能矩阵（中文）](FEATURE_MATRIX.zh-CN.md) / [English](FEATURE_MATRIX.md)。
 
 ## 架构
 
@@ -95,7 +103,11 @@ flowchart LR
 | `PI_GROK_REMOTE_TUI` | `1` | 启用 Pi `ctx.ui.custom` 组件 |
 | `PI_GROK_BASH` | `1` | 启用 Grok-owned Bash 集成 |
 | `PI_GROK_NATIVE_COMMANDS` | `0` | 启用实验性的 `/pi-*` 命令 |
+| `GROK_HOME` | `~/.grok-pi` | 用户状态根目录（与 stock Grok 的 `~/.grok` 隔离） |
+| `GROK_PROJECT_DIR` | `.grok-pi` | 仓库内项目配置/workflows/hooks 目录名 |
 | `GROK_PI_NO_AUTO_UPDATE` | 未设置 | 禁用后台更新检查 |
+
+Rhai Workflow **默认关闭**（F2 → Agent → **Pi workflows**，改完后需**整进程重启**）。细节见 [功能矩阵](FEATURE_MATRIX.zh-CN.md)、[AGENTS.md 产品态隔离](AGENTS.md#product-state-isolation)。
 
 使用 `--no-extensions` 可关闭所有内置桥接扩展。Pi 启动参数可放在 `--` 之后直接传递：
 
@@ -128,7 +140,7 @@ cargo run -p xai-grok-pager-bin --bin grok-pi -- --pi-bin pi --pi-cwd /path/to/p
 
 ## 文档
 
-- [功能矩阵](FEATURE_MATRIX.md) —— 支持的行为与有意边界
+- [功能矩阵](FEATURE_MATRIX.zh-CN.md) —— 支持的行为与有意边界（[English](FEATURE_MATRIX.md)）
 - [架构对齐](NATIVE_GROK_TUI_ALIGNMENT.md) —— 组件所有权、协议映射和迁移说明
 - [验证记录](VERIFICATION.md) —— 已完成检查与环境阻塞项
 - [更新日志](CHANGELOG.MD) —— 版本历史

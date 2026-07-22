@@ -407,7 +407,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		...nativeBash,
 		parameters: BashParameters,
-		description: `${nativeBash.description} Set is_background to true for a managed background task.`,
+		description: `${nativeBash.description}.`,
 		async execute(toolCallId, params: BashParams, signal, onUpdate, ctx: ExtensionContext) {
 			if (signal?.aborted) throw new Error("aborted");
 			if (params.is_background) {

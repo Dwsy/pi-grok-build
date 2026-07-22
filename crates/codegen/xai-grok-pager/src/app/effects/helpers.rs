@@ -1196,6 +1196,22 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "pi_workflows" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("pi_workflows", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_pi_workflows(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "pi_goal" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("pi_goal", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_pi_goal(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
         "session_recap" => {
             let SettingValue::Bool(b) = value else {
                 return Err(kind_mismatch("session_recap", "Bool", &value));

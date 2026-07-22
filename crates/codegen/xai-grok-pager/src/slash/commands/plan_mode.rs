@@ -68,6 +68,8 @@ mod tests {
             session_id: None,
             bundle_state: &bundle,
             screen_mode: crate::app::ScreenMode::Inline,
+           billing_surface_visible: false,
+            billing_surface_visible: false,
             pager_state,
         };
         match PlanModeCommand.run(&mut ctx, "") {
@@ -86,6 +88,8 @@ mod tests {
             session_id: None,
             bundle_state: &bundle,
             screen_mode: crate::app::ScreenMode::Inline,
+           billing_surface_visible: false,
+            billing_surface_visible: false,
             pager_state,
         };
         match PlanModeCommand.run(&mut ctx, "") {

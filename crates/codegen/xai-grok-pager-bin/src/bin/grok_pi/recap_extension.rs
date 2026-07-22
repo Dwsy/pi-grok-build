@@ -63,6 +63,17 @@ mod tests {
     }
 
     #[test]
+    fn recap_extension_picks_mermaid_layout_from_terminal_width() {
+        let file = write_recap_extension().expect("temp extension");
+        let source = std::fs::read_to_string(file.path()).expect("read extension");
+        assert!(source.contains("MERMAID_LR_MIN_COLS = 110"));
+        assert!(source.contains("function mermaidLayoutInstruction"));
+        assert!(source.contains("terminalWidth"));
+        assert!(source.contains("`flowchart LR`"));
+        assert!(source.contains("`flowchart TD`"));
+    }
+
+    #[test]
     fn recap_extension_keeps_mermaid_closing_fence() {
         // Regression: cleanRecapMarkdown must strip ONLY the outer
         // ```markdown wrapper, never the closing ``` of a mermaid block —

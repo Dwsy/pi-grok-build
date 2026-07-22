@@ -22,6 +22,11 @@ use crate::{
     recap_bridge::{parse_recap_message, session_recap_notification},
     subagent_projection::{BridgeOperation, bridge_parent_session_id, parse_bridge_message},
     todo_bridge::plan_update_for_tool,
+    pi_workflow_backend::{
+        BridgeCommandRequest, BridgeCommandTx, WORKFLOW_CANCEL_COMMAND, WORKFLOW_SPAWN_COMMAND,
+    },
+    goal_host::{GoalControl, GoalHost},
+    workflow_host::{WorkflowHost, WorkflowRequest, format_outcome_for_tool, outcome_to_json, parse_workflow_request},
     tool_projection::{
         bash_tool_output, edit_diff_content, history_tool_content, normalize_tool_raw_input,
         normalize_tool_raw_output, pi_result_text, tool_content, tool_kind,
@@ -216,6 +221,13 @@ pub struct PiAgent {
     bash_control_meta: Option<PathBuf>,
     /// Process-unique JSON path written by `__pi_context_breakdown`.
     context_breakdown: Option<PathBuf>,
+    /// Channel to execute workflow spawn/cancel bridge commands on the LocalSet.
+    workflow_bridge_tx: BridgeCommandTx,
+    workflow_bridge_rx: Rc<RefCell<Option<mpsc::UnboundedReceiver<BridgeCommandRequest>>>>,
+    /// Lazy session-scoped upstream workflow host (xai-workflow + Pi spawn).
+    workflow_host: Rc<RefCell<Option<std::sync::Arc<WorkflowHost>>>>,
+    /// F2 pi_goal control file + GoalHost (None when feature off).
+    goal_host: Rc<RefCell<Option<GoalHost>>>,
 }
 
 impl PiAgent {
@@ -227,6 +239,7 @@ impl PiAgent {
         bash_control_meta: Option<PathBuf>,
         context_breakdown: Option<PathBuf>,
         plan_mode_control: Option<PathBuf>,
+        goal_control: Option<PathBuf>,
     ) -> Result<Self> {
         let acp_session_id = bootstrap.state.session_id.clone();
         let plan_file = plan_file_path(&bootstrap.state, &session_dir);
@@ -237,11 +250,16 @@ impl PiAgent {
             .cloned()
             .map(|model| (model_key(&model), model))
             .collect();
+        let (workflow_bridge_tx, workflow_bridge_rx) = mpsc::unbounded_channel();
         Ok(Self {
             rpc,
             client_tx,
             bash_control_meta,
             context_breakdown,
+            workflow_bridge_tx,
+            workflow_bridge_rx: Rc::new(RefCell::new(Some(workflow_bridge_rx))),
+            workflow_host: Rc::new(RefCell::new(None)),
+            goal_host: Rc::new(RefCell::new(goal_control.map(GoalHost::new))),
             state: Rc::new(RefCell::new(AdapterState {
                 bootstrap,
                 acp_session_id,
@@ -265,6 +283,18 @@ impl PiAgent {
     }
 
     pub async fn run_events(self: Rc<Self>, mut events: mpsc::UnboundedReceiver<Value>) {
+        if let Some(mut bridge_rx) = self.workflow_bridge_rx.borrow_mut().take() {
+            let agent = self.clone();
+            tokio::task::spawn_local(async move {
+                while let Some(req) = bridge_rx.recv().await {
+                    let result = agent
+                        .run_bridge_command(&req.command, &req.args)
+                        .await
+                        .map_err(|error| error.to_string());
+                    let _ = req.reply.send(result);
+                }
+            });
+        }
         while let Some(event) = events.recv().await {
             if let Err(error) = self.handle_event(event).await {
                 tracing::warn!(%error, "failed to adapt Pi event into Grok ACP");
@@ -474,6 +504,382 @@ impl PiAgent {
         Ok(())
     }
 
+    /// True when F2 `[ui].pi_workflows` is on (and/or parent env set by grok-pi).
+    ///
+    /// Prefer disk config: env alone is unreliable because `PI_GROK_WORKFLOWS`
+    /// was historically only injected into the Pi *child* process, while the
+    /// adapter runs in the *parent* (grok-pi) process.
+    fn workflows_extension_enabled() -> bool {
+        if let Ok(config) = xai_grok_shell::config::load_effective_config() {
+            if config
+                .get("ui")
+                .and_then(|ui| ui.get("pi_workflows"))
+                .and_then(|v| v.as_bool())
+                == Some(true)
+            {
+                return true;
+            }
+        }
+        match std::env::var("PI_GROK_WORKFLOWS") {
+            Ok(v) => {
+                let v = v.trim();
+                v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on")
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn ensure_workflow_host(&self) -> Result<()> {
+        if !Self::workflows_extension_enabled() {
+            bail!(
+                "Pi workflows is off. F2 → Agent → Pi workflows → on, fully quit, then restart grok-pi (extension injects only at startup)."
+            );
+        }
+        if self.workflow_host.borrow().is_some() {
+            return Ok(());
+        }
+        let (session_id, cwd, session_dir) = {
+            let state = self.state.borrow();
+            let session_id = state.acp_session_id.clone();
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let session_dir = state
+                .bootstrap
+                .state
+                .session_file
+                .as_ref()
+                .and_then(|p| Path::new(p).parent().map(|p| p.to_path_buf()))
+                .or_else(|| Some(state.session_dir.clone()));
+            (session_id, cwd, session_dir)
+        };
+        let host = std::sync::Arc::new(WorkflowHost::new(
+            session_id,
+            cwd,
+            session_dir,
+            self.workflow_bridge_tx.clone(),
+        ));
+        *self.workflow_host.borrow_mut() = Some(host);
+        Ok(())
+    }
+
+    fn workflow_host_arc(&self) -> Result<std::sync::Arc<WorkflowHost>> {
+        self.ensure_workflow_host()?;
+        self.workflow_host
+            .borrow()
+            .clone()
+            .ok_or_else(|| anyhow!("workflow host missing after ensure"))
+    }
+
+    async fn emit_workflow_notifications(&self) {
+        let payloads = match self.workflow_host.borrow().as_ref() {
+            Some(host) => host.notification_payloads(),
+            None => Vec::new(),
+        };
+        for payload in payloads {
+            self.send_ext_notification("x.ai/session_notification", payload)
+                .await;
+        }
+    }
+
+    async fn handle_workflow_request(&self, name: &str, args: &str) -> Result<Value, acp::Error> {
+        let host = self.workflow_host_arc().map_err(acp_internal)?;
+        let request = parse_workflow_request(name, args)
+            .map_err(|e| acp::Error::invalid_params().data(e.to_string()))?;
+        match request {
+            WorkflowRequest::Launch {
+                name,
+                objective,
+                args,
+            } => {
+                let (run_id, outcome_rx) = host
+                    .launch_named(&name, objective, args)
+                    .await
+                    .map_err(acp_internal)?;
+                self.emit_workflow_notifications().await;
+                let agent = self.clone();
+                let host_bg = host.clone();
+                let run_id_ret = run_id.clone();
+                // Fire-and-forget when called without a response file (ACP methods).
+                // The tool path waits via `run_workflow_tool_to_completion`.
+                tokio::task::spawn_local(async move {
+                    let _ = host_bg
+                        .drive_until_outcome(outcome_rx, |payload| {
+                            let agent = agent.clone();
+                            tokio::task::spawn_local(async move {
+                                agent
+                                    .send_ext_notification("x.ai/session_notification", payload)
+                                    .await;
+                            });
+                        })
+                        .await;
+                    agent.emit_workflow_notifications().await;
+                });
+                Ok(json!({ "runId": run_id_ret, "started": true }))
+            }
+            WorkflowRequest::Manage { op, target } => match op.as_str() {
+                "pause" => {
+                    let ok = host.pause(&target).await;
+                    self.emit_workflow_notifications().await;
+                    Ok(json!({ "op": "pause", "target": target, "ok": ok }))
+                }
+                "stop" => {
+                    let ok = host.cancel(&target).await;
+                    self.emit_workflow_notifications().await;
+                    Ok(json!({ "op": "stop", "target": target, "ok": ok }))
+                }
+                other => Err(acp::Error::invalid_params()
+                    .data(format!("unsupported workflow op: {other}"))),
+            },
+        }
+    }
+
+    /// Launch (or manage) and block until terminal outcome — used by the Pi
+    /// `workflow` tool so the parent turn receives the real report text.
+    async fn run_workflow_tool_to_completion(
+        &self,
+        name: &str,
+        args: &str,
+    ) -> Result<Value, acp::Error> {
+        let host = self.workflow_host_arc().map_err(acp_internal)?;
+        let request = parse_workflow_request(name, args)
+            .map_err(|e| acp::Error::invalid_params().data(e.to_string()))?;
+        match request {
+            WorkflowRequest::Manage { op, target } => match op.as_str() {
+                "pause" => {
+                    let ok = host.pause(&target).await;
+                    self.emit_workflow_notifications().await;
+                    Ok(json!({ "op": "pause", "target": target, "ok": ok }))
+                }
+                "stop" => {
+                    let ok = host.cancel(&target).await;
+                    self.emit_workflow_notifications().await;
+                    Ok(json!({ "op": "stop", "target": target, "ok": ok }))
+                }
+                other => Err(acp::Error::invalid_params()
+                    .data(format!("unsupported workflow op: {other}"))),
+            },
+            WorkflowRequest::Launch {
+                name,
+                objective,
+                args,
+            } => {
+                let (run_id, outcome_rx) = host
+                    .launch_named(&name, objective, args)
+                    .await
+                    .map_err(acp_internal)?;
+                self.emit_workflow_notifications().await;
+                let agent = self.clone();
+                let host_bg = host.clone();
+                let outcome = host_bg
+                    .drive_until_outcome(outcome_rx, |payload| {
+                        let agent = agent.clone();
+                        tokio::task::spawn_local(async move {
+                            agent
+                                .send_ext_notification("x.ai/session_notification", payload)
+                                .await;
+                        });
+                    })
+                    .await
+                    .map_err(acp_internal)?;
+                agent.emit_workflow_notifications().await;
+                let text = format_outcome_for_tool(&run_id, &outcome);
+                Ok(json!({
+                    "runId": run_id,
+                    "outcome": outcome_to_json(&outcome),
+                    "text": text,
+                }))
+            }
+        }
+    }
+
+    async fn workflow_pause(&self, run_id: &str) -> Result<bool, acp::Error> {
+        let host = self.workflow_host_arc().map_err(acp_internal)?;
+        let ok = host.pause(run_id).await;
+        self.emit_workflow_notifications().await;
+        Ok(ok)
+    }
+
+    async fn workflow_cancel(&self, run_id: &str) -> Result<bool, acp::Error> {
+        let host = self.workflow_host_arc().map_err(acp_internal)?;
+        let ok = host.cancel(run_id).await;
+        self.emit_workflow_notifications().await;
+        Ok(ok)
+    }
+
+    async fn emit_goal_updated_from_control(&self, control: &GoalControl) {
+        let session_id = self.session_id().0.to_string();
+        let payload = {
+            let host = self.goal_host.borrow();
+            let Some(host) = host.as_ref() else {
+                return;
+            };
+            host.notification_payload(&session_id, control)
+        };
+        self.send_ext_notification("x.ai/session_notification", payload)
+            .await;
+    }
+
+    async fn refresh_goal_from_disk(&self) -> Option<GoalControl> {
+        let mut host = self.goal_host.borrow_mut();
+        let host = host.as_mut()?;
+        host.load()
+    }
+
+    /// Extension bridge: control file already written; reload + GoalUpdated.
+    async fn handle_goal_bridge_message(&self, event: &Value) -> Result<bool> {
+        if self.goal_host.borrow().is_none() {
+            return Ok(false);
+        }
+        let message = event
+            .get("message")
+            .or_else(|| event.get("entry"))
+            .unwrap_or(event);
+        let custom_type = message
+            .get("customType")
+            .and_then(Value::as_str)
+            .or_else(|| message.get("type").and_then(Value::as_str));
+        if custom_type != Some("pi-grok-goal/v1") {
+            return Ok(false);
+        }
+        if let Some(control) = self.refresh_goal_from_disk().await {
+            self.emit_goal_updated_from_control(&control).await;
+        } else if let Some(control) = message
+            .get("details")
+            .or_else(|| message.get("data"))
+            .and_then(|d| d.get("control"))
+            .and_then(|c| serde_json::from_value::<GoalControl>(c.clone()).ok())
+        {
+            if let Some(host) = self.goal_host.borrow_mut().as_mut() {
+                host.apply_control(control.clone());
+            }
+            self.emit_goal_updated_from_control(&control).await;
+        }
+        Ok(true)
+    }
+
+    /// On idle: if goal Active, inject follow-up continuation (legacy path).
+    async fn maybe_continue_goal(&self) {
+        if self.goal_host.borrow().is_none() {
+            return;
+        }
+        // Avoid stacking continuations when the queue already has work.
+        {
+            let snap = self.state.borrow().queue_mirror.snapshot();
+            if snap.follow_up_count > 0
+                || snap.steering_count > 0
+                || snap.running_prompt_id.is_some()
+            {
+                return;
+            }
+        }
+        let control = match self.refresh_goal_from_disk().await {
+            Some(c) if c.is_active() => c,
+            Some(c) => {
+                self.emit_goal_updated_from_control(&c).await;
+                return;
+            }
+            None => return,
+        };
+        self.emit_goal_updated_from_control(&control).await;
+        let directive = GoalHost::continuation_directive(&control);
+        if let Err(error) = self
+            .rpc
+            .request(json!({
+                "type": "prompt",
+                "message": directive,
+                "streamingBehavior": "followUp",
+            }))
+            .await
+        {
+            tracing::debug!(%error, "goal continuation follow-up failed");
+        }
+    }
+
+    async fn handle_workflow_bridge_message(&self, event: &Value) -> Result<bool> {
+        let message = event
+            .get("message")
+            .or_else(|| event.get("entry"))
+            .unwrap_or(event);
+        let custom_type = message
+            .get("customType")
+            .and_then(Value::as_str)
+            .or_else(|| message.get("type").and_then(Value::as_str));
+        if custom_type != Some("pi-grok-workflow/v1") {
+            return Ok(false);
+        }
+        let details = message
+            .get("details")
+            .or_else(|| message.get("data"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let kind = details.get("kind").and_then(Value::as_str).unwrap_or("");
+        if kind == "tool_request" {
+            let name = details
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let args = details
+                .get("args")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let response_path = details
+                .get("responsePath")
+                .or_else(|| details.get("response_path"))
+                .and_then(Value::as_str)
+                .map(std::path::PathBuf::from);
+            let agent = self.clone();
+            // Never block the RPC event loop for long Rhai runs: write the
+            // tool response file from a local task; the extension polls it.
+            tokio::task::spawn_local(async move {
+                let result = if response_path.is_some() {
+                    agent.run_workflow_tool_to_completion(&name, &args).await
+                } else {
+                    agent.handle_workflow_request(&name, &args).await
+                };
+                match (result, response_path) {
+                    (Ok(value), Some(path)) => {
+                        if let Err(error) = std::fs::write(
+                            &path,
+                            serde_json::to_vec_pretty(&value).unwrap_or_default(),
+                        ) {
+                            tracing::warn!(%error, path = %path.display(), "workflow tool response write failed");
+                        }
+                    }
+                    (Err(error), Some(path)) => {
+                        let payload = json!({
+                            "error": error.to_string(),
+                            "text": format!("Workflow request failed: {error}"),
+                        });
+                        let _ = std::fs::write(
+                            &path,
+                            serde_json::to_vec_pretty(&payload).unwrap_or_default(),
+                        );
+                        agent
+                            .send_ui_notification(
+                                &format!("Workflow request failed: {error}"),
+                                Some("error"),
+                            )
+                            .await;
+                    }
+                    (Err(error), None) => {
+                        agent
+                            .send_ui_notification(
+                                &format!("Workflow request failed: {error}"),
+                                Some("error"),
+                            )
+                            .await;
+                    }
+                    (Ok(_), None) => {}
+                }
+            });
+            return Ok(true);
+        }
+        self.emit_workflow_notifications().await;
+        Ok(true)
+    }
+
+
     /// Navigate Pi's leaf via the injected `__pi_navigate_tree` extension
     /// command (official `ctx.navigateTree`).
     async fn navigate_session_tree(
@@ -664,11 +1070,14 @@ impl PiAgent {
             state.plan_mode = load_plan_tracker(&plan_path).map_err(acp_internal)?;
         }
         self.publish_bootstrap(&bootstrap).await;
+        // Fork/clone rebinds session identity; refresh bar from the new JSONL.
+        self.refresh_context_usage().await;
         Ok(bootstrap)
     }
 
     fn replace_bootstrap(&self, bootstrap: PiBootstrap) {
         let mut state = self.state.borrow_mut();
+        let session_changed = state.acp_session_id != bootstrap.state.session_id;
         state.acp_session_id = bootstrap.state.session_id.clone();
         state.model_map = bootstrap
             .models
@@ -679,6 +1088,11 @@ impl PiAgent {
         // A session change invalidates the previous session's queue mirror.
         // Stale entries would otherwise leak into the new session's queue UI.
         state.queue_mirror = QueueMirror::default();
+        // Drop cached context usage so publish_bootstrap cannot re-stamp the
+        // previous session's totalTokens onto a fresh AgentView (context bar).
+        if session_changed {
+            state.last_context_tokens = None;
+        }
         state.bootstrap = bootstrap;
     }
 
@@ -1321,6 +1735,8 @@ impl PiAgent {
                 // drain local rows without waiting on a ghost running id.
                 self.rebroadcast_queue_mirror().await;
                 self.finish_prompts(acp::StopReason::EndTurn);
+                // Legacy goal path: keep working until update_goal(completed).
+                self.maybe_continue_goal().await;
             }
             // `agent_end` is not the Pi idle barrier. Retry, compaction and
             // extension handlers can continue after it; `agent_settled` owns
@@ -1332,8 +1748,10 @@ impl PiAgent {
             "message_end" => {
                 if self.handle_recap_bridge_message(&event).await?
                     || self.handle_background_bash_bridge_message(&event).await?
+                    || self.handle_workflow_bridge_message(&event).await?
+                    || self.handle_goal_bridge_message(&event).await?
                 {
-                    // Recap custom messages are display-only bridge traffic.
+                    // Bridge custom messages are display/control traffic.
                 } else if !self.handle_subagent_bridge_message(&event).await? {
                     self.handle_message_end(&event).await;
                 }
@@ -1342,7 +1760,11 @@ impl PiAgent {
             // cannot enter Pi's steering/follow-up queues while the parent is
             // streaming. RPC exposes that append as entry_appended.
             "entry_appended" => {
-                self.handle_subagent_bridge_message(&event).await?;
+                if !self.handle_workflow_bridge_message(&event).await?
+                    && !self.handle_goal_bridge_message(&event).await?
+                {
+                    self.handle_subagent_bridge_message(&event).await?;
+                }
             }
             "tool_execution_start" => self.handle_tool_start(&event).await,
             "tool_execution_update" => self.handle_tool_update(&event).await,
@@ -1901,6 +2323,12 @@ impl PiAgent {
         }
         self.handle_background_bash_tool_end(name, id, args.as_ref(), &output)
             .await;
+        // Goal control file is the SSOT; tool_end reloads if bridge entry lags.
+        if name.eq_ignore_ascii_case("update_goal")
+            && let Some(control) = self.refresh_goal_from_disk().await
+        {
+            self.emit_goal_updated_from_control(&control).await;
+        }
         // Live path: rpiv-todo (and future TodoSource plugins) publish a full
         // task snapshot under tool result details → native TodoPane via Plan.
         if let Some(plan) = plan_update_for_tool(name, &output, is_error) {
@@ -2218,6 +2646,11 @@ impl acp::Agent for PiAgent {
             let mut state = self.state.borrow_mut();
             let plan_path = plan_file_path(&bootstrap.state, &state.session_dir);
             state.plan_mode = crate::plan_mode::PiPlanTracker::with_plan_file(plan_path);
+        }
+        // Mirror load_session: push Pi's baseline contextUsage so the pager
+        // context bar does not keep the previous session's numerator.
+        if !cancelled {
+            self.refresh_context_usage().await;
         }
         let mut response = acp::NewSessionResponse::new(bootstrap.state.session_id.clone());
         if let Some(models) = bootstrap.acp_models() {
@@ -2790,6 +3223,54 @@ impl acp::Agent for PiAgent {
             // Grok `/context` and context-bar click fetch this; map Pi
             // get_session_stats (+ message estimate) into native ContextInfo.
             "x.ai/session/info" => self.handle_session_info().await,
+            "x.ai/workflows/list" => {
+                let cwd = std::env::current_dir().ok();
+                let listings = xai_grok_shell::session::workflow::list_workflows(cwd.as_deref());
+                let workflows: Vec<Value> = listings
+                    .into_iter()
+                    .map(|w| {
+                        json!({
+                            "name": w.name,
+                            "description": w.description,
+                            "source": w.source,
+                            "path": w.path,
+                            "builtin": w.source == "builtin",
+                        })
+                    })
+                    .collect();
+                ext_response(json!({ "workflows": workflows })).map_err(acp_internal)
+            }
+            "x.ai/workflow/launch" => {
+                let params: Value =
+                    serde_json::from_str(arguments.params.get()).map_err(acp_internal)?;
+                let name = string(&params, &["name", "workflow"])
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| acp::Error::invalid_params().data("name is required"))?;
+                let args = string(&params, &["args", "input"]).unwrap_or("");
+                let data = self.handle_workflow_request(name, args).await?;
+                ext_response(data).map_err(acp_internal)
+            }
+            "x.ai/workflow/pause" => {
+                let params: Value =
+                    serde_json::from_str(arguments.params.get()).map_err(acp_internal)?;
+                let run_id = string(&params, &["runId", "run_id", "name"])
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| acp::Error::invalid_params().data("runId is required"))?;
+                let ok = self.workflow_pause(run_id).await?;
+                ext_response(json!({ "runId": run_id, "paused": ok })).map_err(acp_internal)
+            }
+            "x.ai/workflow/stop" => {
+                let params: Value =
+                    serde_json::from_str(arguments.params.get()).map_err(acp_internal)?;
+                let run_id = string(&params, &["runId", "run_id", "name"])
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| acp::Error::invalid_params().data("runId is required"))?;
+                let ok = self.workflow_cancel(run_id).await?;
+                ext_response(json!({ "runId": run_id, "stopped": ok })).map_err(acp_internal)
+            }
             "x.ai/subagent/cancel" => {
                 let params: Value =
                     serde_json::from_str(arguments.params.get()).map_err(acp_internal)?;
@@ -2966,12 +3447,18 @@ impl PiAgent {
             .get("recapMermaid")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let terminal_width = params
+            .get("terminalWidth")
+            .or_else(|| params.get("terminal_width"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         let language = system_language_tag();
         let payload = json!({
             "auto": auto,
             "model": model,
             "thinkingLevel": thinking_level,
             "recapMermaid": recap_mermaid,
+            "terminalWidth": terminal_width,
             "language": language,
         });
         let args = payload.to_string();
@@ -3228,6 +3715,8 @@ fn is_bridge_command(name: &str) -> bool {
         || name.eq_ignore_ascii_case(SUBAGENT_CANCEL_COMMAND)
         || name.eq_ignore_ascii_case(RECAP_COMMAND)
         || name.eq_ignore_ascii_case(CONTEXT_BREAKDOWN_COMMAND)
+        || name.eq_ignore_ascii_case(WORKFLOW_SPAWN_COMMAND)
+        || name.eq_ignore_ascii_case(WORKFLOW_CANCEL_COMMAND)
 }
 
 fn bridge_command_message(command: &str, args: &str) -> String {
@@ -3288,11 +3777,12 @@ fn normalize_language_tag(value: &str) -> Option<String> {
 }
 
 fn command_catalog(commands: &[PiCommand]) -> Vec<acp::AvailableCommand> {
-    // The adapter reports Pi's command catalog verbatim (normalized and
-    // deduplicated). Grok's native CommandRegistry owns collision policy with
-    // pager-local commands such as /help, /model, and /compact.
+    // The adapter reports Pi's command catalog (normalized + deduped), minus
+    // private bridge commands. When Pi workflows are enabled, inject the
+    // upstream-aligned workflow slash surface so Pager autocomplete matches
+    // stock Grok: /workflow, /create-workflow, and named workflow scripts.
     let mut seen = HashSet::new();
-    commands
+    let mut out: Vec<acp::AvailableCommand> = commands
         .iter()
         .filter_map(|command| {
             let name = command.name.trim().trim_start_matches('/');
@@ -3318,7 +3808,85 @@ fn command_catalog(commands: &[PiCommand]) -> Vec<acp::AvailableCommand> {
             }
             Some(available)
         })
-        .collect()
+        .collect();
+
+    if workflows_extension_enabled_static() {
+        inject_workflow_slash_commands(&mut out, &mut seen);
+    }
+    out
+}
+
+fn workflows_extension_enabled_static() -> bool {
+    if let Ok(config) = xai_grok_shell::config::load_effective_config() {
+        if config
+            .get("ui")
+            .and_then(|ui| ui.get("pi_workflows"))
+            .and_then(|v| v.as_bool())
+            == Some(true)
+        {
+            return true;
+        }
+    }
+    match std::env::var("PI_GROK_WORKFLOWS") {
+        Ok(v) => {
+            let v = v.trim();
+            v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on")
+        }
+        Err(_) => false,
+    }
+}
+
+fn inject_workflow_slash_commands(
+    out: &mut Vec<acp::AvailableCommand>,
+    seen: &mut HashSet<String>,
+) {
+    let push = |out: &mut Vec<acp::AvailableCommand>,
+                seen: &mut HashSet<String>,
+                name: &str,
+                description: &str,
+                hint: Option<&str>| {
+        let key = name.to_ascii_lowercase();
+        if !seen.insert(key) {
+            return;
+        }
+        let mut cmd = acp::AvailableCommand::new(name.to_string(), description.to_string());
+        if let Some(hint) = hint {
+            cmd = cmd.input(Some(acp::AvailableCommandInput::Unstructured(
+                acp::UnstructuredCommandInput::new(hint.to_string()),
+            )));
+        }
+        out.push(cmd);
+    };
+
+    push(
+        out,
+        seen,
+        "workflow",
+        "Launch a saved workflow, or manage a run (pause, resume, stop, save)",
+        Some("<name> [args] | pause|resume|stop|save [name]"),
+    );
+    push(
+        out,
+        seen,
+        "workflows",
+        "Show workflow runs (phases, agents, progress)",
+        None,
+    );
+    push(
+        out,
+        seen,
+        "create-workflow",
+        "Author a new multi-agent workflow",
+        Some("[goal]"),
+    );
+
+    // Named project/user/builtin scripts as first-class slash entries.
+    let cwd = std::env::current_dir().ok();
+    let listings = xai_grok_shell::session::workflow::list_workflows(cwd.as_deref());
+    for listing in listings {
+        let desc = format!("Workflow: {}", listing.description);
+        push(out, seen, &listing.name, &desc, Some("<args>"));
+    }
 }
 
 fn model_key(model: &PiModel) -> String {

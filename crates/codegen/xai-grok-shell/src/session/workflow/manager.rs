@@ -7,9 +7,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use xai_workflow::{Journal, WorkflowOutcome, WorkflowRunParams};
 
-use super::host_service::{
-    HostDrainOutcome, TelemetryHook, WorkflowHostParams, spawn_workflow_host_service,
-};
+use super::backend::{GrokSubagentBackend, WorkflowAgentBackend};
+use super::backend::HostDrainOutcome;
+use super::host_service::{TelemetryHook, WorkflowHostParams, spawn_workflow_host_service};
 use super::notify::WorkflowNotifySender;
 use super::registry::{ResolvedWorkflow, WorkflowSource};
 use super::store::WorkflowRunStore;
@@ -32,7 +32,7 @@ pub(crate) struct LaunchSpec {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum LaunchError {
+pub enum LaunchError {
     #[error("workflow run not found: {0}")]
     UnknownRun(String),
     #[error("journal error: {0}")]
@@ -59,9 +59,7 @@ pub(crate) struct WorkflowManager {
     tracker: Arc<parking_lot::Mutex<WorkflowTracker>>,
     store: WorkflowRunStore,
     notify: WorkflowNotifySender,
-    subagent_event_tx: mpsc::UnboundedSender<
-        xai_grok_tools::implementations::grok_build::task::types::SubagentEvent,
-    >,
+    backend: Arc<dyn WorkflowAgentBackend>,
     telemetry: TelemetryHook,
     session_cmd_tx: mpsc::UnboundedSender<crate::session::commands::SessionCommand>,
     templates: HashMap<String, String>,
@@ -78,9 +76,7 @@ impl WorkflowManager {
         tracker: Arc<parking_lot::Mutex<WorkflowTracker>>,
         store: WorkflowRunStore,
         notify: WorkflowNotifySender,
-        subagent_event_tx: mpsc::UnboundedSender<
-            xai_grok_tools::implementations::grok_build::task::types::SubagentEvent,
-        >,
+        backend: Arc<dyn WorkflowAgentBackend>,
         telemetry: TelemetryHook,
         session_cmd_tx: mpsc::UnboundedSender<crate::session::commands::SessionCommand>,
         templates: HashMap<String, String>,
@@ -92,7 +88,7 @@ impl WorkflowManager {
             tracker,
             store,
             notify,
-            subagent_event_tx,
+            backend,
             telemetry,
             session_cmd_tx,
             templates,
@@ -244,7 +240,7 @@ impl WorkflowManager {
                 tracker: self.tracker.clone(),
                 store: self.store.clone(),
                 notify: self.notify.clone(),
-                subagent_event_tx: self.subagent_event_tx.clone(),
+                backend: self.backend.clone(),
                 parent_session_id: self.session_id.clone(),
                 allow_fork_context,
                 templates: self.templates.clone(),
@@ -407,7 +403,9 @@ impl WorkflowManager {
             tracker.clone(),
             store,
             notify,
-            mpsc::unbounded_channel().0,
+            Arc::new(crate::session::workflow::backend::MockWorkflowAgentBackend {
+                output: Arc::from("mock"),
+            }),
             Arc::new(|_, _, _| {}),
             mpsc::unbounded_channel().0,
             std::collections::HashMap::new(),
@@ -452,19 +450,7 @@ impl WorkflowManager {
     }
 
     fn cancel_children_for_run(&self, run_id: &str) -> bool {
-        let (respond_to, _response) = oneshot::channel();
-        self.subagent_event_tx
-            .send(
-                xai_grok_tools::implementations::grok_build::task::types::SubagentEvent::Cancel(
-                    xai_grok_tools::implementations::grok_build::task::types::SubagentCancelRequest {
-                        target: xai_grok_tools::implementations::grok_build::task::types::SubagentCancelTarget::WorkflowRunId(
-                            run_id.to_owned(),
-                        ),
-                        respond_to,
-                    },
-                ),
-            )
-            .is_ok()
+        self.backend.request_cancel_run_children(run_id)
     }
 
     pub(crate) fn pause(&mut self, run_id: &str) -> bool {
@@ -715,12 +701,73 @@ mod tests {
             tracker,
             store,
             notify,
-            subagent_tx,
+            Arc::new(GrokSubagentBackend {
+                subagent_event_tx: subagent_tx,
+            }),
             Arc::new(|_, _, _| {}),
             mpsc::unbounded_channel().0,
             HashMap::new(),
         );
         (manager, event_rx, cancels)
+    }
+
+    #[tokio::test]
+    async fn mock_backend_runs_agent_call_in_rhai() {
+        let dir = tempfile::tempdir().unwrap();
+        let tracker = Arc::new(parking_lot::Mutex::new(WorkflowTracker::default()));
+        let (persist_tx, mut persist_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(message) = persist_rx.recv().await {
+                if let PersistenceMsg::WorkflowRunStateAndAck { respond_to, .. } = message {
+                    let _ = respond_to.send(Ok(()));
+                }
+            }
+        });
+        let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+        let store = WorkflowRunStore::new(Some(dir.path().to_path_buf()), persist_tx.clone());
+        let notify = WorkflowNotifySender::new(
+            agent_client_protocol::SessionId::new("test-session"),
+            xai_acp_lib::AcpAgentGatewaySender::new(gateway_tx),
+            persist_tx,
+            store.clone(),
+        );
+        let mut manager = WorkflowManager::new(
+            "test-session".into(),
+            Some(dir.path().to_path_buf()),
+            std::env::temp_dir(),
+            tracker,
+            store,
+            notify,
+            Arc::new(crate::session::workflow::backend::MockWorkflowAgentBackend {
+                output: Arc::from("from-mock-backend"),
+            }),
+            Arc::new(|_, _, _| {}),
+            mpsc::unbounded_channel().0,
+            HashMap::new(),
+        );
+        let resolved = resolve_inline(
+            r#"
+let meta = #{ name: "mock-agent-run", description: "d" };
+let r = agent("hello");
+complete(r.output);
+"#
+            .into(),
+        )
+        .unwrap();
+        let (run_id, outcome_rx) = manager.launch(resolved, spec()).unwrap();
+        let outcome = outcome_rx.await.unwrap();
+        match outcome {
+            WorkflowOutcome::Completed { result } => {
+                let text = result.as_str().unwrap_or_default();
+                assert_eq!(text, "from-mock-backend");
+            }
+            other => panic!("expected completed, got {other:?}"),
+        }
+        let state = manager.tracker.lock().get(&run_id).unwrap();
+        assert_eq!(
+            state.status,
+            crate::session::workflow::tracker::WorkflowRunStatus::Complete
+        );
     }
 
     fn spec() -> LaunchSpec {

@@ -25,6 +25,7 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | Tool cards | Native+Adapted | Pi tool events → ACP `ToolCall`; `read`/`bash`/`edit`/`write`/`grep`/`find`/`ls` projected to native cards |
 | Todo / plan list | Native+Adapted | Pi `@juicesharp/rpiv-todo` `todo` tool `details.tasks` → ACP `Plan` → native TodoPane/badge; `todo` card suppressed in scrollback |
 | Plan mode | Native+Adapted | Pager-native Plan toggle → adapter-owned `Inactive/Pending/Active/ExitPending` tracker; full/sparse system-reminder prefix; session-private `.plan.md` sidecar; injected Pi `tool_call` gate blocks `edit`/`write`/`bash` except the plan file; Pi `exit_plan_mode` opens native `x.ai/exit_plan_mode` approval and persists `.plan-mode.json` state |
+| Goal mode (`/goal`) | Adapted (MVP legacy) | F2 `[ui].pi_goal` **default off** (restart required). Injected extension: `/goal` + `update_goal` + control file; adapter GoalHost emits native `GoalUpdated` (`goal_detail` / status). Active → `agent_settled` follow-up continuation. **Not** full shell multi-agent classifier/planner/strategist (residual). |
 | Diff rendering | Native+Adapted | edit-like tool metadata enters the Grok tool/diff pipeline |
 | Images | Native+Adapted | Pi image blocks → ACP `ImageContent`; actual terminal display depends on Grok/terminal capability |
 | Scroll / find / copy / transcript / export | Native | Grok Pager |
@@ -41,7 +42,8 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | Thinking/reasoning stream | Adapted | `message_update` → AgentThoughtChunk |
 | Tool start/update/end | Adapted | ACP `ToolCall`/`ToolCallUpdate` |
 | Pi Bash background task / Send to Background | Native+Adapted | `grok-pi` private Bash extension holds foreground and initial background Bash subprocesses; foreground reuses Pi `createBashToolDefinition` output/rendering semantics. Pager native Send to Background transfers control via `x.ai/terminal/background` using a controlled temp file keyed by `toolCallId` to the **same** subprocess, then projects to the existing `x.ai/task_*` card; native task-card kill uses `x.ai/task/kill` over the same control channel (`op:kill` + published `runningTaskIds`); `is_background` + `description`, `get_task_output` / `wait_tasks` / `kill_task` remain usable |
-| Pi subagents | Native+Adapted | Built-in `pi-grok-subagents` extension owns a Pi child `AgentSession`; versioned bridge projects to native `SubagentBlock`, Tasks Pane, child `AgentView`, and `x.ai/subagent/cancel`. Model-driven end-to-end acceptance is pending |
+| Pi subagents | Native+Adapted |
+| Workflow (Rhai / `/workflow`) | Upstream engine + Pi spawn seam | **Session host + slash surface:** reuses `xai-workflow` + `ExternalWorkflowRuntime`; adapter `x.ai/workflow/{launch,pause,stop}` + `x.ai/workflows/list` + `workflow_updated`; injects `/workflow`, `/workflows`, `/create-workflow` (+ named scripts); hides `__pi_workflow_*` bridge cmds; Pager local handlers + F2 gate. `/create-workflow` is Pager PassThrough user prompt (not a Pi skill). Project scripts default to `<repo>/.grok-pi/workflows`. Live deep-research handtest still recommended. | Built-in `pi-grok-subagents` extension owns a Pi child `AgentSession`; versioned bridge projects to native `SubagentBlock`, Tasks Pane, child `AgentView`, and `x.ai/subagent/cancel`. Model-driven end-to-end acceptance is pending |
 | Prompt completion | Adapted | uses Pi `agent_settled` as the completion barrier; does not misuse `agent_end` |
 | Retry | Adapted | Grok native sticky status/toast |
 | Compaction | Native+Adapted | `/compact [instructions]` → Pi `compact`; Pi `compaction_*` → native CompactionStarted/Completed/Failed/Cancelled scrollback blocks + sticky status |
@@ -70,13 +72,13 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | Pi session fork (`/fork`) | Adapted | External profile: jump-style prompt `ListOverlay` from RPC `get_fork_messages`; select → RPC `fork` creates branched session file, same agent rebinds to new `sessionId`, `session/load` replays, selected text prefills prompt; Grok peer-agent `/fork` unchanged for non-external |
 | Pi session clone (`/clone`) | Adapted | External profile: RPC `clone` duplicates current leaf into a new session file; same agent rebinds to new `sessionId`, `session/load` replays, prompt cleared (Pi parity) |
 | Pi resource reload (`/reload`) | Adapted | External: `__pi_reload` → `ctx.reload()`; blocks on streaming **and** compacting (Pi parity); adapter refreshes command/model catalogs; Pager rescan Pi themes (`rediscover`) and re-applies active `pi:*` theme; loading/success toast copy aligns with Pi interactive; no session-file branch |
-| Pi HTML export / share | Adapted | Grok `/export` stays Markdown transcript; experimental `/pi-export` (HTML or `.jsonl`) and `/pi-share` (private gh gist + pi.dev viewer) hand off to Pi host export-html / share paths via injected extension, no second TUI |
+| Pi HTML export / share | Adapted | Grok `/export` stays Markdown transcript; default-on `/export-html` (Pi HTML, or `.jsonl` path) and `/pi-share` (private gh gist + pi.dev viewer) via `pi-grok-export` injection; no second TUI |
 
 ## Extension UI
 
 | Method | Status | Grok component |
 |---|---|---|
-| `notify` | Native+Adapted | native toast; explicit `info` also appends a native `SystemMessage` scrollback; `/notify` uses a native searchable modal to view all in-process, Pi-session-isolated info/warning/error events (not persisted) |
+| `notify` | Native+Adapted | warning/error → native toast; explicit `info` is single-surface (short → toast, multi-line → `SystemMessage` scrollback, never both); `/notify` uses a native searchable modal to view all in-process, Pi-session-isolated info/warning/error events (not persisted) |
 | `setStatus` | Native+Adapted | sticky banner/status |
 | `setWidget` | Native+Adapted | persistent native banner surface |
 | `setTitle` | Native+Adapted | terminal title |

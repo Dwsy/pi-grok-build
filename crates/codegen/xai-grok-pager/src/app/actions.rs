@@ -715,6 +715,10 @@ pub enum Action {
     SetPsmResumeIndex(bool),
     /// Enable Pi tree file rollback checkpoint tracking.
     SetPiTreeFileRollback(bool),
+    /// Enable upstream Rhai workflows for grok-pi (restart required).
+    SetPiWorkflows(bool),
+    /// Enable Grok-style /goal for grok-pi (restart required).
+    SetPiGoal(bool),
     /// Commit the `show_tips` preference. Persisted to `[cli].show_tips`.
     /// Restart-required — tips are resolved once at startup.
     SetShowTips(bool),
@@ -1111,6 +1115,10 @@ pub enum Action {
     /// Toggle the expanded goal detail overlay.
     ToggleGoalDetail,
     ToggleWorkflows,
+    /// Launch a named host workflow (`/workflow <name> [args]`).
+    WorkflowLaunch { name: String, args: String },
+    /// Manage a workflow run (`pause`/`stop` for now).
+    WorkflowManage { op: String, target: String },
     Rewind,
     RewindShowPicker,
     RewindPickerSelect(usize),
@@ -1986,6 +1994,20 @@ pub enum Effect {
         agent_id: AgentId,
         session_id: acp::SessionId,
     },
+    /// Launch a named workflow via `x.ai/workflow/launch`.
+    WorkflowLaunch {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+        name: String,
+        args: String,
+    },
+    /// Pause/stop a workflow run via `x.ai/workflow/{pause,stop}`.
+    WorkflowManage {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+        op: String,
+        target: String,
+    },
     /// Toggle a skill via x.ai/skills/toggle (enable/disable without restart).
     ToggleSkill {
         agent_id: AgentId,
@@ -2137,6 +2159,9 @@ pub enum Effect {
         thinking_level: Option<String>,
         /// Whether the recap prompt may request an optional Mermaid diagram.
         recap_mermaid: bool,
+        /// Terminal columns at request time; extension picks Mermaid LR vs TD.
+        /// `0` means unknown (extension defaults to TD).
+        terminal_width: u16,
     },
     /// Send a mid-turn interjection via x.ai/interject ext method.
     SendInterject {
@@ -2767,6 +2792,13 @@ pub enum TaskResult {
         agent_id: AgentId,
         session_id: acp::SessionId,
         result: Result<Vec<crate::views::extensions_modal::WorkflowInfo>, String>,
+    },
+    /// Host workflow launch/manage finished — show toast + optional scrollback line.
+    WorkflowHostMessage {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+        message: String,
+        is_error: bool,
     },
     /// Skill toggle completed (enable/disable).
     SkillsToggleDone {

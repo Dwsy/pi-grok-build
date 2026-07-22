@@ -37,10 +37,8 @@ mod tests {
         assert!(source.contains("registerCommand(\"pi-reload\""));
         assert!(!source.contains("registerCommand(\"pi-login\""));
         assert!(!source.contains("registerCommand(\"pi-logout\""));
-        assert!(source.contains("registerCommand(\"pi-export\""));
-        assert!(source.contains("registerCommand(\"pi-share\""));
-        assert!(source.contains("exportSessionToHtml"));
-        assert!(source.contains("getShareViewerUrl"));
+        assert!(!source.contains("registerCommand(\"export-html\""));
+        assert!(!source.contains("registerCommand(\"pi-share\""));
         assert!(source.contains("ModelSelectorComponent"));
         assert!(source.contains("SessionSelectorComponent"));
         assert_eq!(

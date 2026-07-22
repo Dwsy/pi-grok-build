@@ -7528,8 +7528,12 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
+ "uuid",
  "xai-acp-lib",
+ "xai-grok-shell",
+ "xai-workflow",
 ]
 
 [[package]]

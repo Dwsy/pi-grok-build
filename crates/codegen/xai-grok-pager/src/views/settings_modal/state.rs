@@ -870,6 +870,8 @@ pub(super) fn action_for_bool(key: SettingKey, new: bool) -> Option<Action> {
         }),
         "psm_resume_index" => Some(Action::SetPsmResumeIndex(new)),
         "pi_tree_file_rollback" => Some(Action::SetPiTreeFileRollback(new)),
+        "pi_workflows" => Some(Action::SetPiWorkflows(new)),
+        "pi_goal" => Some(Action::SetPiGoal(new)),
         "simple_mode" => Some(Action::SetSimpleMode(new)),
         "contextual_hints.undo" => Some(Action::SetContextualHintUndo(new)),
         "contextual_hints.plan_mode" => Some(Action::SetContextualHintPlanMode(new)),

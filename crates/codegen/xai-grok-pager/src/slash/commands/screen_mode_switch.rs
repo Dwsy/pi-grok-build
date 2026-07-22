@@ -135,6 +135,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: mode,
+        billing_surface_visible: false,
         }
     }
 
@@ -149,6 +150,7 @@ mod tests {
             session_id: session,
             bundle_state: bundle,
             screen_mode: mode,
+           billing_surface_visible: false,
             billing_surface_visible: true,
             pager_state: crate::settings::PagerLocalSnapshot::default(),
         }

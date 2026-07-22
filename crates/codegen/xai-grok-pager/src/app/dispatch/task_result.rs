@@ -797,6 +797,23 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             }
             vec![]
         }
+        TaskResult::WorkflowHostMessage {
+            agent_id,
+            session_id,
+            message,
+            is_error: _,
+        } => {
+            if let Some(agent) = app.agents.get_mut(&agent_id)
+                && agent.session.session_id.as_ref() == Some(&session_id)
+            {
+                agent.show_toast(message.as_str());
+                agent
+                    .scrollback
+                    .push_block(crate::scrollback::RenderBlock::system(message));
+            }
+            vec![]
+        }
+
         TaskResult::SkillsToggleDone { agent_id, result } => {
             handle_skills_toggle_done(app, agent_id, result)
         }

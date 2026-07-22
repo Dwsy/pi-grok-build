@@ -121,7 +121,7 @@ impl WorkflowRegistry {
         if let Some(cwd) = session_cwd
             && crate::agent::folder_trust::project_scope_allowed(cwd)
         {
-            dirs.push((project_root(cwd).join(".grok").join("workflows"), "project"));
+            dirs.push((xai_grok_config::project_config_dir(project_root(cwd)).join("workflows"), "project"));
         }
         dirs.push((user_workflow_dir(), "user"));
 
@@ -485,7 +485,7 @@ pub(crate) fn save_project_workflow(
         path: root.display().to_string(),
         error: error.to_string(),
     })?;
-    let dir = canonical_root.join(".grok").join("workflows");
+    let dir = xai_grok_config::project_config_dir(&canonical_root).join("workflows");
     create_contained_workflow_dir(&canonical_root, &dir)?;
     let canonical_dir = dunce::canonicalize(&dir).map_err(|error| ResolveError::Io {
         path: dir.display().to_string(),
@@ -597,7 +597,7 @@ fn atomic_rename_noreplace_windows(source: &Path, target: &Path) -> io::Result<(
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct WorkflowListing {
+pub struct WorkflowListing {
     pub name: String,
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -607,7 +607,7 @@ pub(crate) struct WorkflowListing {
     pub path: Option<String>,
 }
 
-pub(crate) fn list_workflows(session_cwd: Option<&Path>) -> Vec<WorkflowListing> {
+pub fn list_workflows(session_cwd: Option<&Path>) -> Vec<WorkflowListing> {
     WorkflowRegistry::scan(session_cwd).list()
 }
 

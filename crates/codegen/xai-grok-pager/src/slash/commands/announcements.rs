@@ -78,6 +78,7 @@ mod tests {
             session_id: None,
             bundle_state: &bundle,
             screen_mode: crate::app::ScreenMode::Inline,
+           billing_surface_visible: false,
             billing_surface_visible: true,
             pager_state: crate::settings::PagerLocalSnapshot::default(),
         };
@@ -124,6 +125,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+        billing_surface_visible: false,
         };
         let items = AnnouncementsCommand
             .suggest_args(&ctx, "")
@@ -145,6 +147,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+        billing_surface_visible: false,
         }));
         assert!(cmd.visible(&AppCtx {
             models: &models,
@@ -153,6 +156,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+        billing_surface_visible: false,
         }));
     }
 

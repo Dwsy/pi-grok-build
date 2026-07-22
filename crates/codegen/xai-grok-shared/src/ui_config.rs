@@ -17,6 +17,14 @@ pub struct UiConfig {
     /// Default off; takes effect for new grok-pi sessions only.
     #[serde(default)]
     pub pi_tree_file_rollback: bool,
+    /// Enable upstream-compatible Rhai workflows in grok-pi (xai-workflow + Pi spawn).
+    /// Default off; takes effect for new grok-pi sessions only.
+    #[serde(default)]
+    pub pi_workflows: bool,
+    /// Enable Grok-style `/goal` loop for grok-pi (GoalHost + update_goal).
+    /// Default off; takes effect for new grok-pi sessions only.
+    #[serde(default)]
+    pub pi_goal: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     /// Model ID to use for the secondary agent when forking.
@@ -314,6 +322,8 @@ impl Default for UiConfig {
             pi_builtin_tools: PiBuiltinTools::default(),
             psm_resume_index: false,
             pi_tree_file_rollback: false,
+            pi_workflows: false,
+            pi_goal: false,
             theme: None,
             fork_secondary_model: xai_grok_models::default_model().to_string(),
             recap_model: String::new(),

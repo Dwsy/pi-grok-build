@@ -173,10 +173,20 @@ impl PiResourceCatalog {
     /// - `Some(true)`  — treat the project as trusted for this run (like `--approve`)
     /// - `Some(false)` — treat the project as untrusted for this run (like `--no-approve`)
     /// - `None`        — fall back to the persisted `trust.json` decision
+    ///
+    /// **Agent-home adaptation** (matches Pi `getAgentDir()`):
+    /// When `cwd` *is* the agent home, that directory is the user config/plugin root
+    /// (`extensions/`, `settings.json`, packages), not a product project. User-scope
+    /// discovery still runs (plugins load). Project-scope discovery is skipped unless
+    /// `trust_override == Some(true)`, so `cwd/.pi` is not double-scanned as a project
+    /// on top of the same tree.
     pub fn load_with_trust(cwd: PathBuf, trust_override: Option<bool>) -> Result<Self> {
         let agent_dir = agent_dir()?;
+        let at_agent_home = canonical_or_clean(&cwd) == agent_dir;
+        // Agent home = user resource root, never a project workspace by default.
         let project_trusted = match trust_override {
             Some(override_val) => override_val,
+            None if at_agent_home => false,
             None => project_is_trusted(&agent_dir, &cwd)?,
         };
         let user_settings = SettingsDocument::load(&agent_dir.join("settings.json"))?;
@@ -188,16 +198,19 @@ impl PiResourceCatalog {
         };
 
         let mut resources = Vec::new();
+        // User plugins always resolve from agent home (works when cwd is agent home).
         resources.extend(discover_scope(
             PiResourceScope::User,
             &agent_dir,
             &user_settings,
+            &agent_dir,
         ));
         if project_trusted {
             resources.extend(discover_scope(
                 PiResourceScope::Project,
                 &project_dir,
                 &project_settings,
+                &agent_dir,
             ));
         }
 
@@ -338,10 +351,13 @@ impl PackageSource {
     }
 }
 
+// `agent_dir` is Pi home (`getAgentDir()`): npm/git packages always resolve
+// here, even when `config_dir` is a project `.pi` directory.
 fn discover_scope(
     scope: PiResourceScope,
     config_dir: &Path,
     settings: &SettingsDocument,
+    agent_dir: &Path,
 ) -> Vec<PiResource> {
     let mut resources = Vec::new();
     for kind in RESOURCE_TYPES {
@@ -373,7 +389,9 @@ fn discover_scope(
     }
 
     for package in settings.packages() {
-        let Some(package_dir) = package_dir(&package.source, config_dir, config_dir) else {
+        // base_dir = settings root (user agent dir or project `.pi`);
+        // agent_dir = Pi home for npm:/git: layout (matches PackageManager).
+        let Some(package_dir) = package_dir(&package.source, config_dir, agent_dir) else {
             continue;
         };
         for kind in RESOURCE_TYPES {
@@ -915,12 +933,59 @@ fn project_is_trusted(agent_dir: &Path, cwd: &Path) -> Result<bool> {
     }
 }
 
-fn agent_dir() -> Result<PathBuf> {
-    if let Some(path) = env::var_os("PI_CODING_AGENT_DIR") {
-        return Ok(canonical_or_clean(Path::new(&path)));
+/// Resolve Pi agent home, matching `getAgentDir()` in
+/// `pi-main/packages/coding-agent/src/config.ts`:
+/// 1. `PI_CODING_AGENT_DIR` (tilde-expanded) when set and non-empty
+/// 2. else `~/.pi/agent`
+///
+/// Result is canonicalized when the path exists.
+pub fn resolve_pi_agent_dir() -> Result<PathBuf> {
+    if let Ok(path) = env::var("PI_CODING_AGENT_DIR") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return Ok(canonical_or_clean(&expand_tilde(Path::new(trimmed))));
+        }
     }
     let home = dirs::home_dir().context("could not resolve home directory for Pi config")?;
-    Ok(home.join(".pi/agent"))
+    Ok(canonical_or_clean(&home.join(CONFIG_DIR_NAME).join("agent")))
+}
+
+fn agent_dir() -> Result<PathBuf> {
+    resolve_pi_agent_dir()
+}
+
+/// True when `cwd` is Pi's agent home (config/cache root, not a project workspace).
+///
+/// Uses the same resolution as [`resolve_pi_agent_dir`] so a custom
+/// `PI_CODING_AGENT_DIR` is recognized, not only `~/.pi/agent`.
+pub fn is_pi_agent_home(cwd: &Path) -> bool {
+    let Ok(agent) = resolve_pi_agent_dir() else {
+        return false;
+    };
+    canonical_or_clean(cwd) == agent
+}
+
+/// Expand a leading `~` / `~/` like Pi `normalizePath({ expandTilde: true })`.
+fn expand_tilde(path: &Path) -> PathBuf {
+    let raw = path.as_os_str();
+    if raw == "~" {
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+    }
+    let Some(s) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if let Some(rest) = s.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    #[cfg(windows)]
+    if let Some(rest) = s.strip_prefix("~\\") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    path.to_path_buf()
 }
 
 fn resolve_path(base_dir: &Path, value: &str) -> PathBuf {
@@ -1276,7 +1341,7 @@ mod tests {
                 .clone(),
         };
 
-        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings)
+        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings, temp.path())
             .into_iter()
             .filter(|resource| resource.origin == PiResourceOrigin::Package)
             .collect::<Vec<_>>();
@@ -1301,7 +1366,7 @@ mod tests {
                 .clone(),
         };
 
-        let auto = discover_scope(PiResourceScope::User, temp.path(), &settings)
+        let auto = discover_scope(PiResourceScope::User, temp.path(), &settings, temp.path())
             .into_iter()
             .find(|resource| resource.path == canonical_or_clean(&extensions.join("auto.ts")))
             .expect("auto-discovered extension");
@@ -1374,7 +1439,7 @@ mod tests {
             .clone(),
         };
 
-        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings)
+        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings, temp.path())
             .into_iter()
             .filter(|resource| resource.origin == PiResourceOrigin::Package)
             .collect::<Vec<_>>();
@@ -1401,7 +1466,7 @@ mod tests {
                 .clone(),
         };
 
-        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings)
+        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings, temp.path())
             .into_iter()
             .filter(|resource| resource.origin == PiResourceOrigin::Package)
             .collect::<Vec<_>>();
@@ -1428,7 +1493,7 @@ mod tests {
                 .clone(),
         };
 
-        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings)
+        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings, temp.path())
             .into_iter()
             .filter(|resource| resource.origin == PiResourceOrigin::Package)
             .collect::<Vec<_>>();
@@ -1548,7 +1613,7 @@ mod tests {
             .clone(),
         };
 
-        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings)
+        let resources = discover_scope(PiResourceScope::User, temp.path(), &settings, temp.path())
             .into_iter()
             .filter(|resource| resource.origin == PiResourceOrigin::Package)
             .collect::<Vec<_>>();
@@ -1635,6 +1700,95 @@ mod tests {
         assert_eq!(
             discover_resource_path(&skills, PiResourceType::Skills),
             vec![canonical_or_clean(&skill)]
+        );
+    }
+
+    #[test]
+    fn resolve_pi_agent_dir_respects_env_and_tilde() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let custom = temp.path().join("custom-agent");
+        fs::create_dir_all(&custom).expect("custom agent dir");
+
+        let previous = env::var_os("PI_CODING_AGENT_DIR");
+        // SAFETY: test-only env mutation; restored below.
+        unsafe { env::set_var("PI_CODING_AGENT_DIR", &custom) };
+        let resolved = resolve_pi_agent_dir().expect("resolve custom agent dir");
+        assert_eq!(resolved, canonical_or_clean(&custom));
+        assert!(is_pi_agent_home(&custom));
+        assert!(!is_pi_agent_home(temp.path()));
+
+        match previous {
+            Some(value) => unsafe { env::set_var("PI_CODING_AGENT_DIR", value) },
+            None => unsafe { env::remove_var("PI_CODING_AGENT_DIR") },
+        }
+    }
+
+    #[test]
+    fn agent_home_cwd_loads_user_plugins_not_project_scope() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let agent = temp.path().join("agent");
+        let ext_dir = agent.join("extensions");
+        fs::create_dir_all(&ext_dir).expect("extensions");
+        fs::write(ext_dir.join("plugin.ts"), "export default () => {}; ").expect("plugin");
+        // Nested project-looking package under agent/.pi — must NOT load as Project
+        // when cwd is agent home (unless trust_override forces it).
+        let project_pkg = agent.join(".pi");
+        fs::create_dir_all(project_pkg.join("extensions")).expect("project ext");
+        fs::write(
+            project_pkg.join("extensions/project-only.ts"),
+            "export default () => {}; ",
+        )
+        .expect("project ext");
+        fs::write(
+            project_pkg.join("settings.json"),
+            r#"{"extensions":["+extensions/project-only.ts"]}"#,
+        )
+        .expect("project settings");
+        fs::write(
+            agent.join("settings.json"),
+            r#"{"extensions":["+extensions/plugin.ts"]}"#,
+        )
+        .expect("user settings");
+
+        let previous = env::var_os("PI_CODING_AGENT_DIR");
+        unsafe { env::set_var("PI_CODING_AGENT_DIR", &agent) };
+
+        let catalog = PiResourceCatalog::load_with_trust(agent.clone(), None).expect("catalog");
+        assert!(!catalog.project_trusted);
+        let paths: Vec<_> = catalog
+            .resources
+            .iter()
+            .filter(|r| r.resource_type == PiResourceType::Extensions && r.enabled)
+            .map(|r| r.path.clone())
+            .collect();
+        assert!(
+            paths.iter().any(|p| p.ends_with("plugin.ts")),
+            "user plugin must load when cwd is agent home: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.ends_with("project-only.ts")),
+            "project-scope under agent/.pi must not load by default: {paths:?}"
+        );
+
+        // Explicit --approve still allows project scope for power users.
+        let approved =
+            PiResourceCatalog::load_with_trust(agent.clone(), Some(true)).expect("approved");
+        assert!(approved.project_trusted);
+
+        match previous {
+            Some(value) => unsafe { env::set_var("PI_CODING_AGENT_DIR", value) },
+            None => unsafe { env::remove_var("PI_CODING_AGENT_DIR") },
+        }
+    }
+
+    #[test]
+    fn expand_tilde_matches_pi_normalize_path() {
+        let home = dirs::home_dir().expect("home");
+        assert_eq!(expand_tilde(Path::new("~")), home);
+        assert_eq!(expand_tilde(Path::new("~/agent")), home.join("agent"));
+        assert_eq!(
+            expand_tilde(Path::new("/abs/path")),
+            PathBuf::from("/abs/path")
         );
     }
 }

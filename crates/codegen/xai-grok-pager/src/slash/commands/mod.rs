@@ -74,6 +74,8 @@ pub mod plan_mode;
 pub mod view_plan;
 pub mod vim_mode;
 pub mod voice;
+pub mod workflow;
+pub mod create_workflow;
 pub mod workflows;
 use super::command::SlashCommand;
 use std::sync::Arc;
@@ -131,6 +133,8 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(tree::TreeCommand),
         Arc::new(notify::NotifyCommand),
         Arc::new(mcps::McpsCommand),
+        Arc::new(workflow::WorkflowCommand),
+        Arc::new(create_workflow::CreateWorkflowCommand),
         Arc::new(workflows::WorkflowsCommand),
         Arc::new(btw::BtwCommand),
         Arc::new(recap::RecapCommand),
@@ -226,6 +230,7 @@ mod tests {
             session_id: None,
             bundle_state: &DEFAULT_BUNDLE_STATE,
             screen_mode: crate::app::ScreenMode::Inline,
+           billing_surface_visible: false,
             billing_surface_visible: true,
             pager_state: crate::settings::PagerLocalSnapshot {
                 multiline_mode: false,
@@ -370,6 +375,8 @@ mod tests {
             "vim-mode",
             "voice",
             "welcome",
+            "workflow",
+            "create-workflow",
             "workflows",
             "yolo",
         ];
@@ -552,6 +559,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+        billing_surface_visible: false,
         };
         let cmd = model::ModelCommand;
         let items = cmd.suggest_args(&ctx, "").expect("should have suggestions");
@@ -577,6 +585,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+        billing_surface_visible: false,
         };
         let cmd = model::ModelCommand;
         assert!(cmd.suggest_args(&ctx, "").is_none());
@@ -660,6 +669,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+        billing_surface_visible: false,
         };
         let cmd = usage::UsageCommand;
         assert!(cmd.takes_args_now(&ctx));
@@ -676,6 +686,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: false,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+        billing_surface_visible: false,
         };
         let items = usage::UsageCommand.suggest_args(&ctx, "").unwrap();
         assert_eq!(
@@ -742,6 +753,7 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
+        billing_surface_visible: false,
         };
         assert!(
             !gboom::GboomCommand.visible(&ctx),

@@ -853,6 +853,8 @@ pub(in crate::app::dispatch) fn action_for_reset(
         }),
         ("psm_resume_index", SettingValue::Bool(b)) => Some(Action::SetPsmResumeIndex(*b)),
         ("pi_tree_file_rollback", SettingValue::Bool(b)) => Some(Action::SetPiTreeFileRollback(*b)),
+        ("pi_workflows", SettingValue::Bool(b)) => Some(Action::SetPiWorkflows(*b)),
+        ("pi_goal", SettingValue::Bool(b)) => Some(Action::SetPiGoal(*b)),
         ("page_flip_on_send", SettingValue::Bool(b)) => Some(Action::SetPageFlipOnSend(*b)),
         ("combine_queued_prompts", SettingValue::Bool(b)) => {
             Some(Action::SetCombineQueuedPrompts(*b))
@@ -1070,6 +1072,11 @@ pub(in crate::app::dispatch) fn apply_setting_rollback(
             app.current_ui.pi_builtin_tools = value.clone()
         }
         ("psm_resume_index", SettingValue::Bool(b)) => app.current_ui.psm_resume_index = *b,
+        ("pi_tree_file_rollback", SettingValue::Bool(b)) => {
+            app.current_ui.pi_tree_file_rollback = *b
+        }
+        ("pi_workflows", SettingValue::Bool(b)) => app.current_ui.pi_workflows = *b,
+        ("pi_goal", SettingValue::Bool(b)) => app.current_ui.pi_goal = *b,
         ("page_flip_on_send", SettingValue::Bool(b)) => set_page_flip_on_send_inner(app, *b),
         ("combine_queued_prompts", SettingValue::Bool(b)) => {
             set_combine_queued_prompts_inner(app, *b)
