@@ -4,6 +4,21 @@ All notable changes to **grok-pi** (Pi agent core in Grok Build's production TUI
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.0.8] - 2026-07-22
+
+### Added
+
+- Product state isolation: default `~/.grok-pi` and project `.grok-pi`, plus `grok-pi migrate-home`
+- Pi workflows bridge (F2 `pi_workflows`, Pi spawn backend, `/workflow` surfaces)
+- Goal mode bridge (F2 `pi_goal`, GoalHost + native Goal UI)
+- Session export extension
+- Marketing/docs website under `website/`
+- Manual GitHub Actions workflow for website build
+
+### Changed
+
+- `pi-main` submodule advanced to latest earendil-works/pi `main`
+
 ## [0.0.6] - 2026-07-20
 
 ### Added
