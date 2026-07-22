@@ -35,7 +35,7 @@ Each entry records:
 
 ## [3af4d5d] — 2026-07-22
 
-> **Status:** Pending — not yet merged into grok-pi.
+> **Status:** Merged into grok-pi (branch `sync/upstream-3af4d5d` @ `a5ffbcb`, pending merge back to `main`).
 
 - **Sync range:** `a881e67..3af4d5d` (`a881e6703f46b01d8c7d4a5437683546df30449d` → `3af4d5d39897855bdcc74f23e690024a5dc05573`)
 - **Upstream commits:** 1 (`Synced from monorepo`)
