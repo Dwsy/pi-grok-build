@@ -2,6 +2,7 @@
 
 import { useDict } from "@/i18n/provider";
 import { CodeBlock } from "@/components/ui/CodeBlock";
+import { withBase } from "@/lib/paths";
 
 export function Migration() {
   const dict = useDict();
@@ -14,7 +15,13 @@ export function Migration() {
           {migration.title}
         </h2>
         <p className="mt-3 text-text-secondary text-center max-w-xl mx-auto">
-          {migration.subtitle}
+          {migration.subtitle}{" "}
+          <a
+            href={withBase("/docs/migration/")}
+            className="text-accent hover:underline"
+          >
+            Docs → Migration
+          </a>
         </p>
 
         {/* Steps — numbered sequence, no decorative markers */}

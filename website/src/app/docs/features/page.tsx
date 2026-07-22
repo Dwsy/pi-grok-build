@@ -1,8 +1,14 @@
 "use client";
 
 import { useDict } from "@/i18n/provider";
+import Link from "next/link";
 
-type Status = "Native" | "Adapted" | "Native+Adapted" | "Boundary" | "Experimental";
+type Status =
+  | "Native"
+  | "Adapted"
+  | "Native+Adapted"
+  | "Boundary"
+  | "Experimental";
 
 const statusColors: Record<Status, string> = {
   Native: "text-grok bg-grok-dim",
@@ -20,59 +26,62 @@ interface FeatureRow {
 
 const sections: { title: string; rows: FeatureRow[] }[] = [
   {
-    title: "Terminal & Display",
+    title: "Terminal & display",
     rows: [
       { feature: "Terminal init/restore", status: "Native", notes: "Grok init_terminal / restore_terminal" },
-      { feature: "Fullscreen / alternate screen", status: "Native", notes: "Grok screen mode, selected at startup" },
-      { feature: "Minimal / scrollback-native", status: "Native", notes: "xai-grok-pager-minimal" },
-      { feature: "Welcome / logo", status: "Native+Adapted", notes: "Defaults to Welcome; π block art injected" },
-      { feature: "Welcome session prewarm", status: "Adapted", notes: "Background new_session; first keystroke attaches" },
-      { feature: "Update check/install", status: "Adapted", notes: "GitHub-only releases JSON + install scripts" },
-      { feature: "Agent Dashboard", status: "Native+Adapted", notes: "/dashboard · Ctrl+\\ · Pi session catalog" },
-      { feature: "Prompt editing", status: "Native", notes: "PromptWidget" },
-      { feature: "Theme / timestamps / mouse", status: "Native+Adapted", notes: "Pi theme JSON → Grok Theme via theme::pi" },
+      { feature: "Welcome / logo", status: "Native+Adapted", notes: "Welcome default; π block art; --continue skips Welcome" },
+      { feature: "Update check/install", status: "Adapted", notes: "GitHub Releases + JSP proxy fallback; grok-pi update" },
+      { feature: "Theme / timestamps / mouse", status: "Native+Adapted", notes: "Pi theme JSON → Grok Theme; pi:transparent*" },
       { feature: "Voice dictation", status: "Native+Adapted", notes: "/voice · Ctrl+Space/F8 · xAI STT" },
-      { feature: "Markdown / code blocks", status: "Native+Adapted", notes: "Pi text → ACP chunks → xai-grok-markdown" },
-      { feature: "Tool cards", status: "Native+Adapted", notes: "read/bash/edit/write/grep/find/ls → native cards" },
-      { feature: "Todo / plan list", status: "Native+Adapted", notes: "Pi todo → ACP Plan → native TodoPane" },
-      { feature: "Plan mode", status: "Native+Adapted", notes: "Native toggle → adapter tracker → Pi tool gate" },
-      { feature: "Diff rendering", status: "Native+Adapted", notes: "edit-like metadata → Grok tool/diff pipeline" },
-      { feature: "Images", status: "Native+Adapted", notes: "Pi image blocks → ACP ImageContent" },
+      { feature: "Markdown / tool cards / diffs", status: "Native+Adapted", notes: "ACP chunks → native Pager surfaces" },
+      { feature: "Todo / plan list", status: "Native+Adapted", notes: "rpiv-todo → ACP Plan → TodoPane" },
+      { feature: "Plan mode", status: "Native+Adapted", notes: "Ctrl+Shift+T · tool gate · exit_plan_mode" },
+      { feature: "Goal mode", status: "Adapted", notes: "F2 pi_goal default off; /goal + agent_settled follow-up" },
     ],
   },
   {
-    title: "Agent & Streaming",
+    title: "Agent & streaming",
     rows: [
-      { feature: "Prompt", status: "Adapted", notes: "ACP prompt → Pi prompt" },
-      { feature: "Mid-turn send now", status: "Adapted", notes: "Grok sendNow → Pi steer" },
-      { feature: "Follow-up queue", status: "Adapted", notes: "Default active-turn → Pi followUp" },
-      { feature: "Abort", status: "Adapted", notes: "ACP cancel → Pi abort; abort_bash for Bash" },
-      { feature: "Text stream", status: "Adapted", notes: "message_update → AgentMessageChunk" },
-      { feature: "Thinking stream", status: "Adapted", notes: "message_update → AgentThoughtChunk" },
-      { feature: "Tool lifecycle", status: "Adapted", notes: "ACP ToolCall / ToolCallUpdate" },
-      { feature: "Bash background tasks", status: "Native+Adapted", notes: "Send to Background via x.ai/terminal/background" },
-      { feature: "Sub-agents", status: "Native+Adapted", notes: "SubagentBlock, Tasks Pane, child AgentView" },
+      { feature: "Prompt / steer / follow-up", status: "Adapted", notes: "ACP prompt; sendNow→steer; default mid-turn→followUp" },
+      { feature: "Abort + queue clear", status: "Adapted", notes: "clear_queue then abort; queue mirror via x.ai/queue/changed" },
+      { feature: "Bash + Send to Background", status: "Native+Adapted", notes: "pi-grok-bash; x.ai/terminal/background; task kill" },
+      { feature: "Sub-agents", status: "Native+Adapted", notes: "pi-grok-subagents → SubagentBlock / Tasks Pane" },
+      { feature: "Rhai workflows", status: "Native+Adapted", notes: "F2 pi_workflows; /workflow /workflows /create-workflow" },
       { feature: "Compaction", status: "Native+Adapted", notes: "/compact → Pi compact; native progress blocks" },
-      { feature: "Session recap", status: "Adapted", notes: "/recap + auto away; recap_model only" },
-      { feature: "Context bar", status: "Adapted", notes: "Pi contextUsage → ACP totalTokens → top-right bar" },
-      { feature: "Context click / /context", status: "Native+Adapted", notes: "Native ModalWindow with ContextInfoBlock chart" },
+      { feature: "Session recap", status: "Adapted", notes: "/recap · auto away ≥3 min · optional Mermaid F2" },
+      { feature: "Context bar + /context", status: "Native+Adapted", notes: "Live breakdown modal; not written to history" },
     ],
   },
   {
-    title: "Model, Session & Commands",
+    title: "Model, session & commands",
     rows: [
-      { feature: "Model catalog", status: "Adapted", notes: "get_available_models → native model selector" },
-      { feature: "Thinking effort", status: "Adapted", notes: "Pi levels → Grok effort selector" },
-      { feature: "New session", status: "Adapted", notes: "/new → Pi new_session" },
-      { feature: "Rename", status: "Adapted", notes: "/rename → Pi set_session_name" },
-      { feature: "Resume catalog", status: "Adapted", notes: "/resume reads Pi JSONL metadata" },
-      { feature: "Session info", status: "Adapted", notes: "/session-info → Pi stats + context breakdown" },
-      { feature: "Session tree", status: "Adapted", notes: "Native SessionTree modal with filter/search/tags" },
-      { feature: "Session fork", status: "Adapted", notes: "ListOverlay → RPC fork → rebind + replay" },
-      { feature: "Session clone", status: "Adapted", notes: "RPC clone → new session file → rebind" },
-      { feature: "Resource reload", status: "Adapted", notes: "__pi_reload → ctx.reload(); blocks on streaming" },
-      { feature: "HTML export / share", status: "Adapted", notes: "default-on /export-html + /pi-share" },
-      { feature: "Pi Config manager", status: "Native+Adapted", notes: "F2 or /pi-config — two-pane resource manager" },
+      { feature: "Model catalog", status: "Adapted", notes: "get_available_models → native picker" },
+      { feature: "Resume / session picker", status: "Adapted", notes: "Pi JSONL catalog; Ctrl+F full-text search" },
+      { feature: "Session tree", status: "Adapted", notes: "navigateTree; non-destructive (≠ Grok Rewind)" },
+      { feature: "Fork / clone", status: "Adapted", notes: "/fork /clone · rebind + session/load" },
+      { feature: "Jump / review", status: "Native+Adapted", notes: "/jump turns; /review-session · /review-message" },
+      { feature: "Reload", status: "Adapted", notes: "/reload blocks streaming+compacting; theme rediscover" },
+      { feature: "HTML export / share", status: "Adapted", notes: "/export-html · /pi-share (default-on)" },
+      { feature: "Pi resource manager", status: "Native+Adapted", notes: "Rust /pi-config two-pane; not install/remove" },
+    ],
+  },
+  {
+    title: "Reliability & isolation",
+    rows: [
+      { feature: "Product home isolation", status: "Adapted", notes: "~/.grok-pi + <repo>/.grok-pi; migrate-home" },
+      { feature: "Extension self-heal", status: "Adapted", notes: "Bootstrap bisect on crashing --extension; -ne escape" },
+      { feature: "Resource admission policy", status: "Adapted", notes: "Allow/block lists + heuristics at spawn" },
+      { feature: "Remote TUI", status: "Experimental", notes: "PI_GROK_REMOTE_TUI=1; ctx.mode facade tui; no Pi fork" },
+    ],
+  },
+  {
+    title: "Boundaries (deliberate)",
+    rows: [
+      { feature: "Grok cloud history / usage", status: "Boundary", notes: "Pi owns local sessions" },
+      { feature: "Adapter TUI / second renderer", status: "Boundary", notes: "adapter stays headless" },
+      { feature: "Pi source RPC patches", status: "Boundary", notes: "prefer official extension API" },
+      { feature: "rpiv-ask pure JSONL", status: "Boundary", notes: "needs Remote TUI custom host" },
+      { feature: "Grok destructive Rewind", status: "Boundary", notes: "use SessionTree navigation instead" },
     ],
   },
 ];
@@ -81,13 +90,40 @@ export default function FeaturesPage() {
   const dict = useDict();
   return (
     <div>
-      <h1 className="text-3xl font-bold tracking-tight">{dict.docs.sidebar.features}</h1>
+      <h1 className="text-3xl font-bold tracking-tight">
+        {dict.docs.sidebar.features}
+      </h1>
       <p className="mt-4 text-lg leading-relaxed text-text-secondary">
-        Field-level behavior and intentional boundaries. Status definitions:{" "}
-        <strong className="text-grok">Native</strong> = Grok Pager component ·{" "}
-        <strong className="text-accent-bright">Adapted</strong> = Pi semantics projected ·{" "}
-        <strong className="text-success">Native+Adapted</strong> = both ·{" "}
-        <strong className="text-text-tertiary">Boundary</strong> = deliberately not implemented.
+        Field-level map for{" "}
+        <strong className="text-text-primary">v0.0.8</strong>. Full SSOT:{" "}
+        <a
+          href="https://github.com/Dwsy/grok-pi/blob/main/FEATURE_MATRIX.md"
+          className="text-accent hover:underline"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          FEATURE_MATRIX.md
+        </a>
+        . Status:{" "}
+        <strong className="text-grok">Native</strong> ·{" "}
+        <strong className="text-accent-bright">Adapted</strong> ·{" "}
+        <strong className="text-success">Native+Adapted</strong> ·{" "}
+        <strong className="text-text-tertiary">Boundary</strong> ·{" "}
+        <strong className="text-warning">Experimental</strong>.
+      </p>
+      <p className="mt-3 text-sm text-text-secondary">
+        Deep dives:{" "}
+        <Link href="/docs/extensions/" className="text-accent hover:underline">
+          Extensions
+        </Link>
+        {" · "}
+        <Link href="/docs/commands/" className="text-accent hover:underline">
+          Commands
+        </Link>
+        {" · "}
+        <Link href="/docs/configuration/" className="text-accent hover:underline">
+          Configuration
+        </Link>
       </p>
 
       {sections.map((section) => (
@@ -97,21 +133,36 @@ export default function FeaturesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-surface/80">
-                  <th className="px-4 py-3 text-left font-semibold text-text-secondary">Feature</th>
-                  <th className="px-4 py-3 text-left font-semibold text-text-secondary">Status</th>
-                  <th className="px-4 py-3 text-left font-semibold text-text-secondary">Notes</th>
+                  <th className="px-4 py-3 text-left font-semibold text-text-secondary">
+                    Feature
+                  </th>
+                  <th className="px-4 py-3 text-left font-semibold text-text-secondary">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-left font-semibold text-text-secondary">
+                    Notes
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {section.rows.map((row, i) => (
-                  <tr key={row.feature} className={`border-b border-border/50 ${i % 2 === 1 ? "bg-surface/20" : ""}`}>
-                    <td className="px-4 py-3 font-medium text-text-primary whitespace-nowrap">{row.feature}</td>
+                  <tr
+                    key={row.feature}
+                    className={`border-b border-border/50 ${i % 2 === 1 ? "bg-surface/20" : ""}`}
+                  >
+                    <td className="px-4 py-3 font-medium text-text-primary whitespace-nowrap">
+                      {row.feature}
+                    </td>
                     <td className="px-4 py-3">
-                      <span className={`inline-block px-2 py-0.5 rounded-sm text-xs font-medium ${statusColors[row.status]}`}>
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded-sm text-xs font-medium ${statusColors[row.status]}`}
+                      >
                         {row.status}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-text-secondary text-xs">{row.notes}</td>
+                    <td className="px-4 py-3 text-text-secondary text-xs">
+                      {row.notes}
+                    </td>
                   </tr>
                 ))}
               </tbody>
