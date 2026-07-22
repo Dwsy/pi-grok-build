@@ -35,7 +35,7 @@
 | Prompt | 适配 | ACP prompt → Pi `prompt` |
 | Mid-turn send now | 适配 | Grok `sendNow` → Pi `steer`；队列行 send-now → `x.ai/queue/interject` → steer |
 | Follow-up queue | 适配 | 默认 active-turn prompt → Pi `followUp`（`sendNow`/`followUp:false` 才走 steer） |
-| Abort | 适配 | ACP cancel → Pi `abort`；Bash 时用 `abort_bash` |
+| Abort | 适配 | ACP cancel → `clear_queue`（清空 Pi steering/follow-up 队列，对齐 Pi TUI abort 前的 `clearAllQueues`）→ Pi `abort`；Bash 时用 `abort_bash`；settle 兜底在 Pi 空闲时清空 queue mirror 并完成 prompts |
 | Text stream | 适配 | `message_update` → AgentMessageChunk |
 | Thinking/reasoning stream | 适配 | `message_update` → AgentThoughtChunk |
 | Tool start/update/end | 适配 | ACP ToolCall/ToolCallUpdate |
@@ -45,7 +45,7 @@
 | Retry | 适配 | Grok native sticky status/toast |
 | Compaction | 原生+适配 | `/compact [instructions]` → Pi `compact`；Pi `compaction_*` → 原生 CompactionStarted/Completed/Failed/Cancelled scrollback blocks + sticky status |
 | Session recap (`/recap` + auto away) | 适配 | initialize `meta.sessionRecap`；`x.ai/recap` → 注入 extension `__pi_grok_recap`（`complete` 侧调用，不写会话历史）→ custom `pi-grok-recap/v1` → `SessionRecap`。仅使用 F2 显式配置的 `recap_model`，不回退当前会话模型；auto：≥3 turn、最后完成 turn ≥3 分钟、终端失焦期间后台生成、成功后无新 turn 不重复；manual：有 user turn即可；输入限最近 6 turn/12k 字符；正文语言优先 macOS `AppleLanguages`，再回退 locale |
-| Queue pane / count | 适配 | Pi `queue_update` 全文数组 → `x.ai/queue/changed`（稳定 id + 出队）+ status；`/queue` 面板镜像 Pi steering/follow-up。Pi RPC 无 clear/remove/edit，对应操作 rebroadcast + toast |
+| Queue pane / count | 适配 | Pi `queue_update` 全文数组 → `x.ai/queue/changed`（稳定 id + 出队）+ status；`/queue` 面板镜像 Pi steering/follow-up。Cancel 经 `clear_queue` RPC + 空快照广播清空。Pi RPC 无单项 remove/edit，对应操作 rebroadcast + toast。队列出队模式可经 `pi/queue/mode` ext_method 设置（`one-at-a-time` / `all`） |
 | Context bar used tokens | 适配 | Pi `contextUsage` / message usage → ACP `_meta.totalTokens` → 右上角 bar |
 | Context click / `/context` | 原生+适配 | Grok `x.ai/session/info` → Pi stats + messages + `__pi_context_breakdown` extension（system/tools/AGENTS/append/skills）→ 原生 `ModalWindow` 中复用 `ContextInfoBlock` 图表；运行中即时刷新、不写 scrollback |
 

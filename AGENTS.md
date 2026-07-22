@@ -63,6 +63,8 @@ cargo check -p xai-grok-pager-bin --bin grok-pi
 
 `./verify.sh` additionally runs architecture, mock, syntax, and Pager checks. Current known infrastructure blockers are documented in [`VERIFICATION.md`](VERIFICATION.md): Python tree-sitter dependencies are not provisioned, and Pager focused lib tests have an upstream cross-crate test-helper configuration issue. Do not claim full verification is green unless those blockers are resolved.
 
+For a standalone change under `extensions/`, validate the extension source and diff only; do **not** run Cargo unless Rust code, the embedded-extension loader, or its Rust contract changed, or the user asks.
+
 Before reporting completion:
 
 1. Run the narrowest relevant tests and build/check.

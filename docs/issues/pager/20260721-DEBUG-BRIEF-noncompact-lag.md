@@ -1,187 +1,222 @@
-# Debug Brief: Pi-Grok × Non-Compact × Expanded Edit = Lag
+# Debug Brief: Pi-Grok 滚动/渲染卡顿 — 完整研究记录
 
-## Confirmed Bug Matrix
+> 状态：**已修复** | 创建：2026-07-21 | 最终确认：2026-07-22
 
-| Scenario | Compact ON | Compact OFF |
+## 1. 问题为什么出现
+
+### 现象矩阵（初始报告）
+
+| 场景 | Compact ON | Compact OFF |
 |---|---|---|
-| **Pi-Grok** live turn + expanded Edit | ✅ Smooth | ❌ **LAG** |
-| **Pi-Grok** resume/idle + expanded Edit | ✅ Smooth | ❌ **LAG** |
-| **Upstream Grok** (any state, any content) | ✅ Smooth | ✅ Smooth |
+| **Pi-Grok** live turn + expanded Edit | ✅ 流畅 | ❌ **卡** |
+| **Pi-Grok** resume/idle + expanded Edit | ✅ 流畅 | ❌ **卡** |
+| **上游 Grok**（任何状态、任何内容） | ✅ 流畅 | ✅ 流畅 |
 
-## Key Constraints
+### 关键约束
 
-1. **Resume proves it's NOT event-driven.** No ACP messages, no spinner tick, no live-turn loop. The lag persists with zero external events.
-2. **Upstream Grok proves it's NOT the Pager render engine alone.** Same binary, same render code, same compact OFF + sticky headers + expanded Edit → smooth.
-3. **Compact toggle is an instant fix.** Same session, same scroll position, toggle compact → immediately smooth. Toggle back → immediately laggy.
-4. **The lag is per-frame.** It's not a one-time cost (expand animation). Every scroll tick, every key press, every redraw stutters.
+1. **Resume 证明不是事件驱动的。** 无 ACP 消息、无 spinner tick、无 live-turn 循环，卡顿仍然存在。
+2. **上游 Grok 证明不是 Pager 渲染引擎本身。** 同一二进制、同一渲染代码、compact OFF + sticky headers + expanded Edit → 流畅。
+3. **Compact 切换是即时修复。** 同一会话、同一滚动位置，toggle compact → 立即流畅。切回 → 立即卡顿。
+4. **卡顿是每帧的。** 不是一次性开销。每次滚动 tick、每次按键、每次重绘都卡顿。
 
-## What Compact Mode Changes (the ONLY differences)
+### 后续发现（2026-07-22）
 
-```rust
-// crates/codegen/xai-grok-pager-render/src/appearance/config.rs
-eff_outer_vpad:  1 → 0   (scrollback area gains 2 rows)
-eff_hpad_left:   2 → 1   (scrollback area gains 1 col)
-eff_hpad_right:  2 → 1   (scrollback area gains 1 col)
-sticky_headers:  ON → OFF (render path skips sticky entirely)
-prompt.compact:  false → true (prompt chrome simplified)
-```
+经过错误修复后，问题变为 **compact ON 也卡**。最终确认：根因与 compact 无关，是 `prepare_layout` 宽度振荡导致**每帧全量 rebuild**，任何模式都卡。
 
-**Entry content width** (the width used for block.output() and caching) is determined by `HorizontalLayout` using `block_pad_left/right` (always 2/2) — **NOT affected by compact mode**. The 2-col outer hpad difference changes the scrollback viewport width passed to `prepare_layout`, which changes `entry_area_width` by 2 cols, which changes `content_width` by 2 cols.
+## 2. 问题是如何发生的（根因）
 
-## Render Path (non-compact, steady-state frame)
+### 真正的根因：`prepare_layout` 宽度振荡
 
-```
-AgentView::draw()
-  → scrollback.set_cwd(...)          // no-op if unchanged
-  → scrollback.prepare_layout(w, h)  // Case 3: compute_total_height + settle_visible_measurements
-  → ScrollbackPane::render_with_scratch_and_selection_boundaries()
-    → render_with_sticky_headers()
-      → build_prompt_descriptors_for_range()  // O(prompts) from cache
-      → compute_sticky_layout()               // O(prompts), cheap
-      → [if pinned] render_sticky_header()
-        → render_entry_with_ctx_static()
-          → entry.block.output(ctx)           // ⚠️ UNCACHED — full re-render every frame
-      → render_content()
-        → render_scrolled_entries_with_selection_boundaries()
-          → per visible entry:
-            → EntryRenderer::render()
-              → entry.ensure_cached(width, ...) // CACHED (hit after first frame)
-            → entry.ensure_cached(...) again for selection model
-```
+**文件：** `crates/codegen/xai-grok-pager/src/app/agent_view/render.rs`
 
-## Hypothesis 1 (HIGHEST PRIORITY): Sticky Header Uncached Render
-
-**File:** `crates/codegen/xai-grok-pager/src/scrollback/scrollback_pane.rs:730`
+**Bug：** 我们在 timeline rail 重构时，把第二次 `prepare_layout` 的参数从 `scrollback_content` 改成了 `scrollback`：
 
 ```rust
-fn render_entry_with_ctx_static(...) {
-    let output = entry.block.output(ctx);  // ← FULL RE-RENDER, NO CACHE
-    ...
-}
+// 上游（正确）：
+self.scrollback.prepare_layout(
+    layout.scrollback_content.width,   // 内容区宽度（减去 scrollbar/timeline）
+    layout.scrollback_content.height,
+);
+
+// 我们（错误）：
+self.scrollback.prepare_layout(
+    layout.scrollback.width,           // 外层容器宽度（含 scrollbar/timeline）
+    layout.scrollback.height,
+);
 ```
 
-This is called every frame for the pinned/pushed sticky header. It bypasses `ensure_cached()` entirely. For a UserPromptBlock with markdown, this means re-parsing markdown + word-wrap every frame.
+### 机制
 
-**Why Pi-specific:** Pi user prompts may be longer/more complex (multi-paragraph instructions with code blocks). Upstream Grok prompts might be shorter.
+每帧 `AgentView::draw()` 调用两次 `prepare_layout`：
 
-**Why compact fixes it:** Compact mode disables sticky headers entirely → this code path never executes.
+1. **第一次**（timeline 分支，line ~1146）：`scrollback_content.width` → 设 `last_width = W_content`
+2. **第二次**（主渲染，line ~1428）：`scrollback.width` → `W_scrollback ≠ W_content`
 
-**Test:** In `render_sticky_header`, replace `entry.block.output(ctx)` with a cached lookup (call `entry.ensure_cached(...)` first, then use `entry.cached_output_ref()`). If lag disappears, this is the root cause.
-
-**Counter-argument:** This would also affect upstream Grok with long prompts + non-compact. Unless Pi prompts are systematically longer, or the issue is specifically the Edit block being the pinned entry (but sticky only pins user prompts).
-
-## Hypothesis 2: settle_visible_measurements Non-Convergence
-
-**File:** `crates/codegen/xai-grok-pager/src/scrollback/state/layout.rs:697`
+由于两次宽度不同，`prepare_layout` 内部的 Case 1 判断 **每帧都触发**：
 
 ```rust
-pub(super) fn settle_visible_measurements(&mut self, width: u16) {
-    let max_iters = self.entries.len().saturating_add(2);
-    for _ in 0..max_iters {
-        let Some((start, end)) = self.measurement_window() else { return; };
-        if !self.measure_window_exact(width, start, end) { return; }
-        self.rebuild_virtual_y_from_heights();
-        self.compute_total_height_from_cache();
-        if self.follow_mode { self.follow_scroll_to_bottom(); } else { ... }
+// Case 1: Cache missing or width changed - full rebuild
+if self.layout_cache.is_none() || width != self.last_width {
+    for entry in self.entries.values_mut() {
+        entry.invalidate_cache();  // ← 每帧清空所有缓存！
     }
+    self.ensure_layout_cache(width);           // 全量重建
+    self.settle_visible_measurements(width);   // 重新测量
 }
 ```
 
-Each iteration measures visible entries. If an exact height differs from the estimate, virtual_y shifts, revealing new entries at the viewport edge, which need measurement, which shifts again...
+**结果：每帧都做 O(n) 全量 rebuild + 所有 entry 缓存失效 + 重新 markdown 解析/word-wrap。**
 
-**Why Pi-specific:** Pi's Edit blocks (from `write` tool → full file content as diff) can be VERY tall (hundreds of lines). The estimate (`estimate_content_lines` using `searchable_text()`) might be wildly wrong for Edit blocks (it counts raw text lines, not syntax-highlighted wrapped diff lines). This causes large estimate→exact deltas, triggering many iterations.
+### 为什么上游不卡
 
-**Why compact fixes it:** With 2 extra rows of viewport height, the measurement window is slightly larger, potentially converging in fewer iterations. OR: the 2-col width difference changes wrap points just enough to avoid the cascade.
+上游两次调用都用 `scrollback_content`，宽度稳定，不触发 Case 1。第二次调用走 Case 3（仅 `compute_total_height_from_cache`，O(visible)）。
 
-**Test:** Add a counter to `settle_visible_measurements` and log iteration count per frame. If it's >2 consistently in non-compact Pi sessions, this is the cause.
+### 为什么之前误判为 compact 相关
 
-## Hypothesis 3: Edit Block estimate_height is Pathologically Wrong
+- Compact OFF 时 viewport 更小（outer vpad 占 2 行），可见 entry 更多，rebuild 更贵 → 卡顿更明显
+- Compact ON 时 viewport 更大，可见 entry 相对少 → 卡顿较轻但仍存在
+- 初始测试时 compact ON 的卡顿被其他因素掩盖
 
-**File:** `crates/codegen/xai-grok-pager/src/scrollback/wrappers/entry_renderer.rs:431`
+## 3. 错误的修复尝试（已回退）
+
+### 3.1 `5f03be4` — suppress sticky headers（错误）
 
 ```rust
-fn estimate_content_lines(&self, content_width: u16) -> u16 {
-    ...
-    match self.entry.block.searchable_text() {
-        Some(text) => estimate_wrapped_line_count(&text, content_width),
-        None => 1,
-    }
-}
+// render.rs draw() 中：
+self.scrollback
+    .set_suppress_sticky_headers(!self.session.state.is_idle());
 ```
 
-For EditToolCallBlock, `searchable_text()` returns the raw diff text. But the RENDERED height includes:
-- Gutter (line numbers): ~6-8 chars per line
-- Indent: 2 chars
-- Content gap: 2 chars
-- Syntax highlighting doesn't change line count, but the gutter reduces effective content width
+**意图：** 误判 sticky header 每帧重绘是卡顿原因。
+**后果：** Live turn 时 non-compact 模式的用户消息黏性滚动完全消失。
+**状态：** ❌ 已删除。
 
-So the estimate uses full `content_width` for wrapping, but the actual render uses `content_width - gutter_width`. This means the estimate UNDERESTIMATES height for Edit blocks.
+### 3.2 `9a1b281` — expanded edit viewport 节流（过度防御）
 
-**Why this matters:** If the estimate is 50 lines but exact is 80 lines, the virtual_y shift is 30 rows, which reveals 30 new rows of entries below, which need measurement, which might reveal more...
+```rust
+// event_loop.rs：
+let draw_interval = if app.active_agent().is_some_and(|a| {
+    a.scrollback.has_expanded_edit_in_viewport()
+}) {
+    min_draw_interval.max(Duration::from_millis(120))
+} else {
+    min_draw_interval
+};
 
-**Why compact fixes it:** The 2-col width difference might coincidentally reduce the estimate error, or the larger viewport absorbs the shift without revealing new unmeasured entries.
+// app_view.rs tick()：
+let heavy_expanded_edit = agent.scrollback.has_expanded_edit_in_viewport();
+let scrollback_anim_redraw = agent.scrollback.tick();
+if !heavy_expanded_edit {
+    needs_redraw |= scrollback_anim_redraw;
+}
 
-**Test:** In `measure_window_exact`, log `|exact - estimate|` for Edit blocks. If consistently >20% off, fix the estimate to account for gutter width.
+// app_view.rs tick_demand()：
+let heavy_expanded_edit = agent.scrollback.has_expanded_edit_in_viewport();
+let scrollback_anim = agent.scrollback.needs_animation() && !heavy_expanded_edit;
+let fast = scrollback_anim || ...
+```
 
-## Hypothesis 4: Pi Edit Blocks Have Enormous Hunks
+**意图：** 误判展开 Edit 的每帧重绘是卡顿原因。
+**后果：** 展开 Edit 时动画冻结、帧率被人为压低。
+**状态：** ❌ tick/tick_demand 中的门控已回退到上游。event_loop 的 120ms 节流保留（无害，但非必需）。
 
-Pi's `write` tool creates an Edit with `old_text: None, new_text: <entire file>`. The resulting diff is a single hunk with the entire file as insertions. For a 500-line file, the expanded Edit block is 500+ rendered lines.
+### 3.3 `046efed` — sticky header cache + edit gutter estimate（正确但非根因）
 
-Combined with Hypothesis 2/3, this makes the measurement cascade much worse than upstream Grok's typical small edits.
+- `ensure_header_cached()`：sticky header 渲染走缓存而非每帧 `block.output()`
+- `estimate_reserved_cols()`：Edit block 高度估算考虑 gutter 宽度
+- `MAX_SETTLE_ITERS_PER_FRAME = 4`：防止 settle 迭代爆炸
 
-**Test:** Check the hunk sizes in a Pi session's Edit blocks. If they're 100+ lines, this amplifies H2/H3.
+**状态：** ✅ 保留。这些是正确的优化，即使不是根因也改善了性能。
 
-## Hypothesis 5: Width-Dependent Cache Thrashing
+## 4. 最终修复
 
-The 2-col width difference between compact/non-compact means:
-- Non-compact: content_width = W
-- Compact: content_width = W+2
+### 4.1 根因修复：`prepare_layout` 宽度统一
 
-If any code path alternates between these widths (e.g., sticky header uses one width, content render uses another), the `CachedOutput` thrashes every frame.
+```rust
+// render.rs line ~1428，改回上游：
+self.scrollback.prepare_layout(
+    layout.scrollback_content.width,
+    layout.scrollback_content.height,
+);
+```
 
-**Check:** `render_sticky_header` uses `layout.content_width()` from the HEADER area (full viewport width). Content render uses `entry_row_layout.content_width()` from the CONTENT area (below header). If the header takes some width... no, headers are full-width. But the content area's `HorizontalLayout` is created from `content_area` which is the same width as the full area. So widths should match.
+### 4.2 删除错误的 sticky suppress
 
-## Already Ruled Out
+```rust
+// render.rs draw() 中删除：
+- self.scrollback
+-     .set_suppress_sticky_headers(!self.session.state.is_idle());
+```
 
-- ❌ ACP event frequency (resume has no events)
-- ❌ Live-turn tick/spinner (resume is idle)
-- ❌ `has_expanded_edit_in_viewport` throttle (only affects live turn)
-- ❌ `suppress_sticky_headers` (only affects live turn)
-- ❌ SPINNER_DIVISOR change (irrelevant to resume)
-- ❌ Terminal output volume (resume has no output)
-- ❌ The render engine itself (upstream Grok is fine)
+### 4.3 回退 tick/tick_demand 中的 expanded edit 门控
 
-## Suggested Fix Priority
+```rust
+// app_view.rs tick()，恢复上游：
+- let heavy_expanded_edit = agent.scrollback.has_expanded_edit_in_viewport();
+- let scrollback_anim_redraw = agent.scrollback.tick();
+- if !heavy_expanded_edit {
+-     needs_redraw |= scrollback_anim_redraw;
+- }
++ needs_redraw |= agent.scrollback.tick();
 
-1. **Cache the sticky header render** (H1): Use `ensure_cached()` in `render_sticky_header` instead of raw `block.output()`. This is a clear correctness bug regardless of whether it's THE cause.
+// app_view.rs tick_demand()，恢复上游：
+- let heavy_expanded_edit = agent.scrollback.has_expanded_edit_in_viewport();
+- let scrollback_anim = agent.scrollback.needs_animation() && !heavy_expanded_edit;
+- let fast = scrollback_anim
++ let fast = agent.scrollback.needs_animation()
+```
 
-2. **Fix Edit block height estimate** (H3): Account for gutter width in `estimate_content_lines` for Edit blocks. This prevents measurement cascades.
+## 5. 对上游的修改清单
 
-3. **Cap settle_visible_measurements iterations** (H2): If iterations > 3, accept the current state and mark remaining entries for lazy measurement.
+### 保留的正确修改（相比上游 `a881e67`）
 
-4. **If none of the above fixes it:** Add `tracing::info!` timing around `prepare_layout`, `render_with_sticky_headers`, and `render_content` in a debug build. Have the user reproduce with `RUST_LOG=xai_grok_pager=info` and capture the per-frame breakdown.
+| 文件 | 修改 | 原因 |
+|---|---|---|
+| `scrollback/scrollback_pane.rs` | `ensure_header_cached()` 替代裸 `block.output()` | Sticky header 每帧重渲染是真实性能问题 |
+| `scrollback/entry.rs` | `CachedHeaderOutput` + `ensure_header_cached` + `cached_header_output_ref` | 上述缓存的基础设施 |
+| `scrollback/wrappers/entry_renderer.rs` | `estimate_reserved_cols()` 调用 | Edit block 高度估算修正 |
+| `scrollback/blocks/tool/edit.rs` | `estimate_reserved_cols()` 实现 | 考虑 gutter 宽度 |
+| `scrollback/block.rs` | `estimate_reserved_cols()` trait 方法 + delegate | 接口定义 |
+| `scrollback/state/types.rs` | `MAX_SETTLE_ITERS_PER_FRAME = 4` | 防止 settle 迭代爆炸 |
+| `scrollback/state/layout.rs` | settle 迭代上限 `.min(MAX_SETTLE_ITERS_PER_FRAME)` | 同上 |
+| `scrollback/state/mod.rs` | `has_expanded_edit_in_viewport()` | 保留（event_loop 120ms 节流仍引用） |
+| `app/event_loop.rs` | expanded edit 时 `min_draw_interval.max(120ms)` | 保留（无害防御） |
 
-## File Map
+### 已回退的错误修改
 
-| File | Role |
+| 文件 | 回退内容 | 原因 |
+|---|---|---|
+| `app/agent_view/render.rs` | `prepare_layout(layout.scrollback.width, ...)` → 改回 `scrollback_content` | **根因** |
+| `app/agent_view/render.rs` | `set_suppress_sticky_headers(!is_idle())` → 删除 | 误杀 sticky header |
+| `app/app_view.rs` tick() | `heavy_expanded_edit` 门控 → 恢复 `needs_redraw \|= agent.scrollback.tick()` | 误冻结动画 |
+| `app/app_view.rs` tick_demand() | `heavy_expanded_edit` 门控 → 恢复 `agent.scrollback.needs_animation()` | 误降帧率 |
+
+## 6. 教训
+
+1. **不要在不理解根因的情况下"修"性能问题。** 三次错误修复（suppress sticky、freeze animation、throttle draw）都是在错误假设上叠加的。
+2. **Diff 上游是最快的定位方式。** 最终通过 `git diff a881e67..HEAD` 在 5 分钟内找到了宽度振荡，而之前花了数小时在错误方向上。
+3. **`prepare_layout` 是幂等的前提是宽度不变。** 任何改变传入宽度的重构都必须确保同一帧内多次调用使用相同值。
+4. **性能问题的"即时修复"（toggle compact）可能是误导。** Compact 改变了 viewport 大小，让 rebuild 成本变化，但根因是 rebuild 本身不应该发生。
+
+## 7. 复现步骤
+
+1. 启动 `grok-pi`（Pi 集成模式）
+2. 让 Pi 写/编辑一个文件（产生 Edit block）
+3. 展开 Edit block（Enter）
+4. 滚动或按任意键 → 观察每帧卡顿
+5. 切换 compact 模式 → 卡顿程度变化但都存在（修复前）
+6. 修复后：任何模式下滚动/按键均流畅
+
+## 8. 文件地图
+
+| 文件 | 角色 |
 |---|---|
-| `crates/codegen/xai-grok-pager/src/scrollback/scrollback_pane.rs` | Sticky header render (H1) |
-| `crates/codegen/xai-grok-pager/src/scrollback/state/layout.rs` | prepare_layout, settle_visible_measurements (H2) |
-| `crates/codegen/xai-grok-pager/src/scrollback/wrappers/entry_renderer.rs` | estimate_content_lines (H3) |
-| `crates/codegen/xai-grok-pager/src/scrollback/blocks/tool/edit.rs` | EditToolCallBlock::rendered_output |
-| `crates/codegen/xai-grok-pager/src/scrollback/entry.rs` | CachedOutput, ensure_cached |
-| `crates/codegen/xai-grok-pager/src/scrollback/render.rs` | render_scrolled_entries (per-frame entry render) |
-| `crates/codegen/xai-grok-pager/src/scrollback/state/mod.rs` | prepare_layout entry point, tick |
-| `crates/codegen/xai-grok-pager/src/app/agent_view/render.rs` | AgentView::draw (calls prepare_layout + render) |
-| `crates/codegen/pi-grok-adapter/src/tool_projection.rs` | edit_diff_content (Pi→ACP diff creation) |
-| `crates/codegen/xai-grok-pager-render/src/appearance/config.rs` | LayoutConfig, compact mode differences |
-
-## Reproduction
-
-1. Start `grok-pi` (Pi integration mode)
-2. Ask Pi to write/edit a file (creates an Edit block)
-3. Expand the Edit block (Enter on it)
-4. Toggle compact mode OFF (`/compact-mode`)
-5. Scroll or press any key → observe per-frame stutter
-6. Toggle compact mode ON → immediately smooth
-7. For resume variant: exit, resume the same session, expand Edit, observe lag with compact OFF
+| `app/agent_view/render.rs` | **根因所在** — `prepare_layout` 调用点 |
+| `scrollback/state/mod.rs` | `prepare_layout` 入口，Case 1/2/3 分支 |
+| `scrollback/state/layout.rs` | `settle_visible_measurements`、`measure_window_exact` |
+| `scrollback/scrollback_pane.rs` | Sticky header 渲染（H1 缓存修复） |
+| `scrollback/entry.rs` | `CachedOutput`、`ensure_cached`、`ensure_header_cached` |
+| `scrollback/wrappers/entry_renderer.rs` | `estimate_content_lines`（H3 gutter 修复） |
+| `scrollback/blocks/tool/edit.rs` | `estimate_reserved_cols` 实现 |
+| `app/app_view.rs` | `tick()`、`tick_demand()`（已回退门控） |
+| `app/event_loop.rs` | draw throttle（保留 120ms 下限） |

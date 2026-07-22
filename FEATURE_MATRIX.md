@@ -36,7 +36,7 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | Prompt | Adapted | ACP prompt → Pi `prompt` |
 | Mid-turn send now | Adapted | Grok `sendNow` → Pi `steer`; queue-line send-now → `x.ai/queue/interject` → steer |
 | Follow-up queue | Adapted | default active-turn prompt → Pi `followUp` (only `sendNow`/`followUp:false` goes to steer) |
-| Abort | Adapted | ACP cancel → Pi `abort`; uses `abort_bash` for Bash |
+| Abort | Adapted | ACP cancel → `clear_queue` (drain Pi steering/follow-up queues, mirrors Pi TUI `clearAllQueues` before abort) → Pi `abort`; uses `abort_bash` for Bash; settle backstop clears queue mirror + finishes prompts when Pi goes idle |
 | Text stream | Adapted | `message_update` → AgentMessageChunk |
 | Thinking/reasoning stream | Adapted | `message_update` → AgentThoughtChunk |
 | Tool start/update/end | Adapted | ACP `ToolCall`/`ToolCallUpdate` |
@@ -46,7 +46,7 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | Retry | Adapted | Grok native sticky status/toast |
 | Compaction | Native+Adapted | `/compact [instructions]` → Pi `compact`; Pi `compaction_*` → native CompactionStarted/Completed/Failed/Cancelled scrollback blocks + sticky status |
 | Session recap (`/recap` + auto away) | Adapted | initialize `meta.sessionRecap`; `x.ai/recap` → inject extension `__pi_grok_recap` (called on `complete` side, does not write session history) → custom `pi-grok-recap/v1` → `SessionRecap`. Uses only the `recap_model` explicitly configured via F2, never falls back to the current session model; auto: ≥3 turns, last completed turn ≥3 minutes old, generated in background while terminal unfocused, not repeated if no new turn after success; manual: any user turn qualifies; input limited to last 6 turns/12k chars; body language prefers macOS `AppleLanguages`, then locale |
-| Queue pane / count | Adapted | Pi `queue_update` full-array → `x.ai/queue/changed` (stable id + dequeue) + status; `/queue` panel mirrors Pi steering/follow-up. Pi RPC has no clear/remove/edit, so those ops rebroadcast + toast |
+| Queue pane / count | Adapted | Pi `queue_update` full-array → `x.ai/queue/changed` (stable id + dequeue) + status; `/queue` panel mirrors Pi steering/follow-up. Cancel clears via `clear_queue` RPC + empty snapshot broadcast. Pi RPC has no remove/edit single-item, so those ops rebroadcast + toast. Queue drain mode settable via `pi/queue/mode` ext_method (`one-at-a-time` / `all`) |
 | Context bar used tokens | Adapted | Pi `contextUsage` / message usage → ACP `_meta.totalTokens` → top-right bar |
 | Context click / `/context` | Native+Adapted | Grok `x.ai/session/info` → Pi stats + messages + `__pi_context_breakdown` extension (system/tools/AGENTS/append/skills) → native `ModalWindow` reusing `ContextInfoBlock` chart; live refresh while running, not written to scrollback |
 
