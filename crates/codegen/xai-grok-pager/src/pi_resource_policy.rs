@@ -31,6 +31,10 @@ pub(crate) const DEFAULT_BLOCKED_SOURCES: &[&str] = &[
     // Pi-TUI-only footer/header overlays; no value under Pager.
     "npm:pi-custom-header",
     "npm:pi-custom-footer",
+    // Pi-TUI pretty printers (syntax-highlighted reads, colored bash, tree
+    // listings). Hijacks tool output rendering; conflicts with Pager cards.
+    "npm:@heyhuynhgiabuu/pi-pretty",
+    "npm:pi-pretty",
 ];
 
 /// File-name fragments that indicate a Pi-TUI renderer extension.
@@ -39,12 +43,27 @@ const RENDERER_NAME_HINTS: &[&str] = &[
     "tool-display",
     "custom-header",
     "custom-footer",
+    // Scoped or path-cloned installs of pi-pretty (package / dir name).
+    "pi-pretty",
 ];
 
 // ── Policy configuration ─────────────────────────────────────────────────────
 
-/// User-facing policy knobs, persisted under `[pi.resources]` in
-/// `~/.grok/config.toml`.
+/// Dedicated project-local sidecar file under `$GROK_PROJECT_DIR`
+/// (default `.grok-pi/pi-resources.toml` for grok-pi).
+///
+/// Hand-edited 外挂: edit freely without touching full `config.toml`.
+pub const PROJECT_SIDECAR_FILE: &str = "pi-resources.toml";
+
+/// User-facing policy knobs.
+///
+/// Layered load (later layers merge on top):
+/// 1. user `$GROK_HOME/config.toml` → `[pi.resources]`
+/// 2. nearest project `$GROK_PROJECT_DIR/config.toml` → `[pi.resources]`
+/// 3. nearest project `$GROK_PROJECT_DIR/pi-resources.toml` (flat or `[pi.resources]`)
+///
+/// Lists (`allow` / `block`) are unioned. `disable_heuristics` is overridden
+/// only when the key is present in a later layer.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ResourcePolicy {
@@ -61,29 +80,68 @@ pub struct ResourcePolicy {
 }
 
 impl ResourcePolicy {
-    /// Load the policy from `~/.grok/config.toml` (`[pi.resources]`).
-    /// Returns `Default` when the file or table is missing.
+    /// Load layered policy: user home → project config → project sidecar.
+    /// Returns `Default` when no layers exist.
     pub fn load_from_config() -> Self {
-        let path = xai_grok_tools::util::grok_home::grok_home().join("config.toml");
-        Self::load_from_path(&path)
+        let mut policy = Self::default();
+        let home = xai_grok_tools::util::grok_home::grok_home().join("config.toml");
+        policy.merge_partial(&load_partial_from_path(&home));
+
+        if let Ok(cwd) = std::env::current_dir() {
+            if let Some((project_config, sidecar)) = project_policy_paths(&cwd) {
+                policy.merge_partial(&load_partial_from_path(&project_config));
+                policy.merge_partial(&load_partial_from_path(&sidecar));
+            }
+        }
+        policy
     }
 
-    /// Path-injectable variant for testing.
+    /// Merge another full policy: list union; `disable_heuristics` overwritten.
+    pub fn merge_layer(&mut self, other: &Self) {
+        for item in &other.allow {
+            if !self.allow.iter().any(|x| x == item) {
+                self.allow.push(item.clone());
+            }
+        }
+        for item in &other.block {
+            if !self.block.iter().any(|x| x == item) {
+                self.block.push(item.clone());
+            }
+        }
+        self.disable_heuristics = other.disable_heuristics;
+    }
+
+    /// Merge a partial layer: list union; heuristics only if key was present.
+    fn merge_partial(&mut self, other: &PartialPolicy) {
+        for item in &other.allow {
+            if !self.allow.iter().any(|x| x == item) {
+                self.allow.push(item.clone());
+            }
+        }
+        for item in &other.block {
+            if !self.block.iter().any(|x| x == item) {
+                self.block.push(item.clone());
+            }
+        }
+        if let Some(flag) = other.disable_heuristics {
+            self.disable_heuristics = flag;
+        }
+    }
+
+    /// Path-injectable variant for testing / single-file load.
+    /// Accepts either `[pi.resources]` or top-level `allow`/`block` keys
+    /// (sidecar style).
     pub fn load_from_path(path: &Path) -> Self {
-        let Ok(content) = std::fs::read_to_string(path) else {
-            return Self::default();
-        };
-        let Ok(doc) = toml::from_str::<toml::Value>(&content) else {
-            return Self::default();
-        };
-        doc.get("pi")
-            .and_then(|pi| pi.get("resources"))
-            .and_then(|res| res.clone().try_into().ok())
-            .unwrap_or_default()
+        let partial = load_partial_from_path(path);
+        ResourcePolicy {
+            allow: partial.allow,
+            block: partial.block,
+            disable_heuristics: partial.disable_heuristics.unwrap_or(false),
+        }
     }
 
-    /// Persist the policy to `~/.grok/config.toml` under `[pi.resources]`,
-    /// preserving all other tables and keys.
+    /// Persist the policy to `$GROK_HOME/config.toml` under `[pi.resources]`,
+    /// preserving all other tables and keys. Project sidecar is hand-edited.
     pub fn save_to_config(&self) -> std::io::Result<()> {
         let path = xai_grok_tools::util::grok_home::grok_home().join("config.toml");
         self.save_to_path(&path)
@@ -126,6 +184,72 @@ impl ResourcePolicy {
 
         std::fs::write(path, doc.to_string())
     }
+}
+
+/// Partial layer so missing `disable_heuristics` does not clobber earlier layers.
+#[derive(Debug, Clone, Default)]
+struct PartialPolicy {
+    allow: Vec<String>,
+    block: Vec<String>,
+    disable_heuristics: Option<bool>,
+}
+
+fn load_partial_from_path(path: &Path) -> PartialPolicy {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return PartialPolicy::default();
+    };
+    let Ok(doc) = toml::from_str::<toml::Value>(&content) else {
+        return PartialPolicy::default();
+    };
+
+    // Prefer `[pi.resources]`; fall back to top-level keys for the sidecar.
+    let table = doc
+        .get("pi")
+        .and_then(|pi| pi.get("resources"))
+        .or_else(|| {
+            if doc.get("allow").is_some()
+                || doc.get("block").is_some()
+                || doc.get("disable_heuristics").is_some()
+            {
+                Some(&doc)
+            } else {
+                None
+            }
+        });
+
+    let Some(table) = table else {
+        return PartialPolicy::default();
+    };
+
+    PartialPolicy {
+        allow: table
+            .get("allow")
+            .and_then(|v| v.clone().try_into().ok())
+            .unwrap_or_default(),
+        block: table
+            .get("block")
+            .and_then(|v| v.clone().try_into().ok())
+            .unwrap_or_default(),
+        disable_heuristics: table.get("disable_heuristics").and_then(|v| v.as_bool()),
+    }
+}
+
+/// Nearest project that has either `config.toml` or `pi-resources.toml`
+/// under `$GROK_PROJECT_DIR` (default `.grok-pi` for grok-pi).
+fn project_policy_paths(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
+    for dir in cwd.ancestors() {
+        let proj = xai_grok_config::project_config_dir(dir);
+        let config = proj.join("config.toml");
+        let sidecar = proj.join(PROJECT_SIDECAR_FILE);
+        if config.is_file() || sidecar.is_file() {
+            return Some((config, sidecar));
+        }
+        // Stop at repo root so we do not pick an unrelated parent project.
+        if dir.join(".git").exists() {
+            break;
+        }
+    }
+    None
 }
 
 impl ResourcePolicy {
@@ -452,6 +576,58 @@ mod tests {
     }
 
     #[test]
+    fn pi_pretty_blocked_by_default() {
+        let catalog = make_catalog(vec![
+            make_resource(
+                "/home/user/.pi/agent/npm/node_modules/@heyhuynhgiabuu/pi-pretty/index.ts",
+                "npm:@heyhuynhgiabuu/pi-pretty",
+                PiResourceType::Extensions,
+                true,
+            ),
+            make_resource(
+                "/home/user/.pi/agent/npm/node_modules/pi-pretty/index.ts",
+                "npm:pi-pretty",
+                PiResourceType::Extensions,
+                true,
+            ),
+            make_resource(
+                "/home/user/.pi/agent/extensions/my-tool/index.ts",
+                "local",
+                PiResourceType::Extensions,
+                true,
+            ),
+        ]);
+        let policy = ResourcePolicy::default();
+        let plan = policy.evaluate(&catalog);
+
+        assert_eq!(plan.extensions.len(), 1);
+        assert!(plan.extensions[0].ends_with("my-tool/index.ts"));
+        assert_eq!(plan.blocked.len(), 2);
+        assert!(plan
+            .blocked
+            .iter()
+            .any(|b| b.reason.contains("pi-pretty")));
+    }
+
+    #[test]
+    fn pi_pretty_user_allow_overrides_default() {
+        let catalog = make_catalog(vec![make_resource(
+            "/home/user/.pi/agent/npm/node_modules/@heyhuynhgiabuu/pi-pretty/index.ts",
+            "npm:@heyhuynhgiabuu/pi-pretty",
+            PiResourceType::Extensions,
+            true,
+        )]);
+        let policy = ResourcePolicy {
+            allow: vec!["npm:@heyhuynhgiabuu/pi-pretty".to_owned()],
+            ..Default::default()
+        };
+        let plan = policy.evaluate(&catalog);
+
+        assert_eq!(plan.extensions.len(), 1);
+        assert!(plan.blocked.is_empty());
+    }
+
+    #[test]
     fn user_allow_overrides_default_block() {
         let catalog = make_catalog(vec![make_resource(
             "/home/user/.pi/agent/npm/node_modules/pi-tool-display/index.ts",
@@ -638,6 +814,16 @@ mod tests {
     }
 
     #[test]
+    fn explicit_path_blocks_pi_pretty() {
+        let policy = ResourcePolicy::default();
+        let reason = policy.check_explicit_path(
+            "/home/user/.pi/agent/npm/node_modules/@heyhuynhgiabuu/pi-pretty/index.ts",
+        );
+        assert!(reason.is_some());
+        assert!(reason.unwrap().contains("pi-pretty"));
+    }
+
+    #[test]
     fn explicit_path_allows_normal_extension() {
         let policy = ResourcePolicy::default();
         assert!(policy.check_explicit_path("/home/user/my-ext/index.ts").is_none());
@@ -737,5 +923,72 @@ mod tests {
         assert_eq!(policy.allow, vec!["npm:foo"]);
         assert!(policy.block.is_empty());
         assert!(!policy.disable_heuristics);
+    }
+
+    #[test]
+    fn sidecar_flat_toml_loads_block_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(PROJECT_SIDECAR_FILE);
+        std::fs::write(
+            &path,
+            "# project sidecar\nblock = [\"npm:@heyhuynhgiabuu/pi-pretty\", \"npm:pi-pretty\"]\nallow = []\n",
+        )
+        .unwrap();
+
+        let policy = ResourcePolicy::load_from_path(&path);
+        assert_eq!(
+            policy.block,
+            vec![
+                "npm:@heyhuynhgiabuu/pi-pretty".to_owned(),
+                "npm:pi-pretty".to_owned()
+            ]
+        );
+        assert!(policy.allow.is_empty());
+        assert!(!policy.disable_heuristics);
+    }
+
+    #[test]
+    fn merge_partial_unions_lists_and_preserves_heuristics() {
+        let mut policy = ResourcePolicy {
+            allow: vec!["npm:a".to_owned()],
+            block: vec!["npm:b".to_owned()],
+            disable_heuristics: true,
+        };
+        // Layer without disable_heuristics key must not reset the flag.
+        policy.merge_partial(&PartialPolicy {
+            allow: vec!["npm:c".to_owned()],
+            block: vec!["npm:b".to_owned(), "npm:d".to_owned()],
+            disable_heuristics: None,
+        });
+        assert_eq!(policy.allow, vec!["npm:a".to_owned(), "npm:c".to_owned()]);
+        assert_eq!(
+            policy.block,
+            vec!["npm:b".to_owned(), "npm:d".to_owned()]
+        );
+        assert!(policy.disable_heuristics);
+
+        policy.merge_partial(&PartialPolicy {
+            allow: vec![],
+            block: vec![],
+            disable_heuristics: Some(false),
+        });
+        assert!(!policy.disable_heuristics);
+    }
+
+    #[test]
+    fn project_sidecar_blocks_via_user_policy() {
+        let catalog = make_catalog(vec![make_resource(
+            "/home/user/.pi/agent/extensions/noisy/index.ts",
+            "npm:noisy",
+            PiResourceType::Extensions,
+            true,
+        )]);
+        let policy = ResourcePolicy {
+            block: vec!["npm:noisy".to_owned()],
+            ..Default::default()
+        };
+        let plan = policy.evaluate(&catalog);
+        assert!(plan.extensions.is_empty());
+        assert!(plan.blocked[0].reason.contains("user policy"));
     }
 }

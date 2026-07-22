@@ -102,6 +102,8 @@ const PI_GROK_NATIVE_COMMANDS: &[&str] = &[
     "session-info",
     // Pi session entry tree via native ArgPicker + adapter navigate.
     "tree",
+    // Branch map: user-messages-only fork view (native modal).
+    "tree-map",
     // Pi message-level session fork (RPC get_fork_messages + fork).
     "fork",
     // Pi session clone at current leaf (RPC clone).
@@ -118,6 +120,9 @@ const PI_GROK_NATIVE_COMMANDS: &[&str] = &[
     "copy",
     "find",
     "jump",
+    // Code review (edit/write file changes) — session + jump-style message pick.
+    "review-session",
+    "review-message",
     "transcript",
     "export",
     "expand",
@@ -710,15 +715,23 @@ async fn run(mut args: Args) -> Result<()> {
     // Set GROK_PI_NO_AUTO_UPDATE=1 to disable the background check.
     pager_args.no_auto_update = std::env::var_os("GROK_PI_NO_AUTO_UPDATE").is_some();
 
+    // Skip Welcome when Pi already selected a concrete session (--continue,
+    // --session path|uuid, --session-id, or --fork). Fresh starts stay on Welcome.
+    let resume_existing_session = args.continue_last_session
+        || args.session.is_some()
+        || args.session_id.is_some()
+        || args.fork.is_some();
+
     run_external(ExternalRunConfig {
         args: pager_args,
         connection,
         session_id,
         session_title,
         session_cwd: Some(cwd),
-        // Stock Grok lands on Welcome with logo unless --continue/--resume.
-        // Only `-c/--continue` skips Welcome and attaches the Pi session now.
-        resume_existing_session: args.continue_last_session,
+        resume_existing_session,
+        // Ephemeral runs cannot be resumed from disk.
+        emit_resume_hint: !args.no_session,
+        resume_session_dir: args.session_dir.clone(),
         product_version: GROK_PI_VERSION.to_string(),
     })
     .await
@@ -863,7 +876,13 @@ async fn spawn_with_extension_self_heal(
             );
             eprintln!("    [pi.resources]");
             eprintln!("    block = [\"{bad_path}\"]");
+            eprintln!(
+                "  Or project sidecar: .grok-pi/pi-resources.toml  block = [\"...\"]"
+            );
             eprintln!();
+
+            // After successful bisection: Y / any key = report, only N = skip.
+            prompt_and_maybe_report_ext_crash(&bad_path, "crash");
 
             // Step 3: Relaunch without the culprit.
             let healed_args = remove_extension_path(&pi_args, &bad_path);
@@ -891,6 +910,8 @@ async fn spawn_with_extension_self_heal(
             eprintln!("  To do this manually:  \x1b[1mgrok-pi -ne\x1b[0m");
             eprintln!();
 
+            prompt_and_maybe_report_ext_crash("combo", "combo");
+
             let process = PiRpc::spawn(SpawnConfig {
                 program: args.pi_bin.clone(),
                 prefix_args: args.pi_prefix_args.clone(),
@@ -904,6 +925,193 @@ async fn spawn_with_extension_self_heal(
                 .context("fallback no-extension launch failed")?;
             Ok((process, bootstrap, no_ext_args))
         }
+    }
+}
+
+// ── Extension crash telemetry (privacy: name + package_dir only) ─────────────
+
+const DEFAULT_EXT_TELEMETRY_URL: &str =
+    "https://ext-crash-telemetry.dwsycode.workers.dev";
+
+/// After bisection succeeds: interactive confirm then fire-and-forget POST.
+///
+/// Key semantics:
+/// - `N` / `n` → do **not** report
+/// - `Y` / any other key → report
+/// Non-TTY → skip (never block CI / piped stdin).
+fn prompt_and_maybe_report_ext_crash(path_or_label: &str, kind: &str) {
+    use std::io::{IsTerminal, Write};
+
+    if !std::io::stdin().is_terminal() {
+        return;
+    }
+
+    let (ext_name, package_dir) = if kind == "combo" {
+        ("combo".to_owned(), "combo".to_owned())
+    } else {
+        ext_identity_from_path(path_or_label)
+    };
+
+    eprint!(
+        "  Report this {kind} to telemetry (name only: {package_dir})? [Y/n]  \
+(N = no, any other key = yes) "
+    );
+    let _ = std::io::stderr().flush();
+
+    let key = read_one_key_char();
+    match key {
+        Some('n') | Some('N') => {
+            eprintln!("n — skipped report.");
+            return;
+        }
+        Some(c) => eprintln!("{c} — reporting…"),
+        None => eprintln!("— reporting…"),
+    }
+
+    let url = std::env::var("GROK_PI_EXT_TELEMETRY_URL")
+        .or_else(|_| std::env::var("REPORT_URL"))
+        .unwrap_or_else(|_| DEFAULT_EXT_TELEMETRY_URL.to_owned());
+    let endpoint = format!("{}/v1/report", url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "ext_name": ext_name,
+        "package_dir": package_dir,
+        "kind": kind,
+        "client": "grok-pi",
+    })
+    .to_string();
+
+    // Token required server-side (fail closed). Prefer env, then ~/.grok-pi file.
+    let token = std::env::var("REPORT_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(load_ext_telemetry_token_file);
+    let Some(token) = token else {
+        eprintln!(
+            "  REPORT_TOKEN missing (set env or ~/.grok-pi/ext-telemetry.token); skip report."
+        );
+        return;
+    };
+
+    // Fire-and-forget so self-heal is not blocked on network.
+    std::thread::spawn(move || {
+        let mut cmd = std::process::Command::new("curl");
+        cmd.args([
+            "-sS",
+            "-m",
+            "5",
+            "-X",
+            "POST",
+            &endpoint,
+            "-H",
+            "content-type: application/json",
+            "-H",
+            &format!("authorization: Bearer {token}"),
+            "-d",
+            &body,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+        let _ = cmd.status();
+    });
+}
+
+fn load_ext_telemetry_token_file() -> Option<String> {
+    let home = home::effective_grok_home();
+    let path = home.join("ext-telemetry.token");
+    let text = std::fs::read_to_string(path).ok()?;
+    let t = text.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_owned())
+    }
+}
+
+/// Privacy-safe identity from an extension path (no absolute path returned).
+fn ext_identity_from_path(input: &str) -> (String, String) {
+    let raw = input.replace('\\', "/");
+    let parts: Vec<&str> = raw.split('/').filter(|p| !p.is_empty()).collect();
+
+    if let Some(nm) = parts.iter().rposition(|p| *p == "node_modules") {
+        if nm + 1 < parts.len() {
+            let a = parts[nm + 1];
+            if a.starts_with('@') && nm + 2 < parts.len() {
+                let name = parts[nm + 2].to_owned();
+                let pkg = format!("{a}/{name}");
+                return (name, pkg);
+            }
+            return (a.to_owned(), a.to_owned());
+        }
+    }
+
+    if let Some(ei) = parts.iter().rposition(|p| *p == "extensions") {
+        if ei + 1 < parts.len() && !parts[ei + 1].contains('.') {
+            let d = parts[ei + 1].to_owned();
+            return (d.clone(), d);
+        }
+    }
+
+    let leaf = parts.last().copied().unwrap_or("unknown");
+    let name = leaf
+        .trim_end_matches(".ts")
+        .trim_end_matches(".js")
+        .trim_end_matches(".mjs")
+        .to_owned();
+    if parts.len() >= 2 {
+        let parent = parts[parts.len() - 2];
+        if parent != "node_modules" && !parent.starts_with('.') {
+            return (name, parent.to_owned());
+        }
+    }
+    (name.clone(), name)
+}
+
+/// Read a single key (raw mode on Unix). Falls back to first char of a line.
+fn read_one_key_char() -> Option<char> {
+    #[cfg(unix)]
+    {
+        if let Some(c) = read_one_key_raw_unix() {
+            return Some(c);
+        }
+    }
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) => None,
+        Ok(_) => line.chars().next().filter(|c| *c != '\n' && *c != '\r'),
+        Err(_) => None,
+    }
+}
+
+#[cfg(unix)]
+fn read_one_key_raw_unix() -> Option<char> {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+
+    let stdin = std::io::stdin();
+    let fd = stdin.as_raw_fd();
+    // SAFETY: termios get/set on the process stdin fd; restored before return.
+    unsafe {
+        let mut old: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(fd, &mut old) != 0 {
+            return None;
+        }
+        let mut raw = old;
+        raw.c_lflag &= !(libc::ICANON | libc::ECHO);
+        raw.c_cc[libc::VMIN] = 1;
+        raw.c_cc[libc::VTIME] = 0;
+        if libc::tcsetattr(fd, libc::TCSANOW, &raw) != 0 {
+            return None;
+        }
+        let mut buf = [0u8; 1];
+        let n = {
+            let mut lock = stdin.lock();
+            lock.read(&mut buf).unwrap_or(0)
+        };
+        let _ = libc::tcsetattr(fd, libc::TCSANOW, &old);
+        if n == 0 {
+            return None;
+        }
+        Some(buf[0] as char)
     }
 }
 
@@ -1063,6 +1271,8 @@ mod env_flag_tests {
     #[test]
     fn grok_pi_command_profile_includes_native_navigation() {
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"jump"));
+        assert!(PI_GROK_NATIVE_COMMANDS.contains(&"review-session"));
+        assert!(PI_GROK_NATIVE_COMMANDS.contains(&"review-message"));
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"voice"));
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"doctor"));
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"hotkeys"));
