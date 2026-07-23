@@ -1,3 +1,5 @@
+import { docsEn } from "./docs/en";
+
 const en = {
   meta: {
     title: "grok-pi — Pi Agent Core in Grok Build's Native Terminal",
@@ -154,6 +156,7 @@ const en = {
       changelog: "Changelog",
     },
   },
+  docsPages: docsEn,
 };
 
 export type Dictionary = typeof en;

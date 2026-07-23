@@ -342,7 +342,7 @@ fn decide_branch_icon(nerd_fonts: Option<&str>, host: HostOs, brand: TerminalNam
 }
 
 /// Whether a Nerd Font (Private Use Area glyphs) is plausible for this
-/// host/terminal. Used by [`decide_branch_icon`] to pick a Powerline glyph.
+/// host/terminal. Used by [`decide_branch_icon`] and file-type icons.
 ///
 /// An explicit `GROK_NERD_FONTS` override (`0`/`false` → off, anything else →
 /// on) always wins. Otherwise PUA glyphs are assumed everywhere except Windows
@@ -354,6 +354,19 @@ fn decide_nerd_fonts(nerd_fonts: Option<&str>, host: HostOs, brand: TerminalName
     }
     let stock_font_terminal = matches!(brand, TerminalName::AppleTerminal | TerminalName::Iterm2);
     !(host == HostOs::Windows || stock_font_terminal)
+}
+
+/// Cached ambient probe for Nerd Font / PUA glyphs (see [`decide_nerd_fonts`]).
+/// Opt-in/out via `GROK_NERD_FONTS`; no F2 setting.
+pub(crate) fn nerd_fonts_available() -> bool {
+    static CACHE: OnceLock<bool> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        decide_nerd_fonts(
+            std::env::var("GROK_NERD_FONTS").ok().as_deref(),
+            HostOs::current(),
+            terminal_context().brand,
+        )
+    })
 }
 
 pub(crate) fn home_dir() -> Option<String> {

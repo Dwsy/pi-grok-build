@@ -11,11 +11,10 @@ use super::setters::{
     set_page_flip_on_send_inner, set_progress_bar_inner, set_prompt_suggestions_inner,
     set_recap_mermaid_inner, set_recap_model_inner, set_remember_tool_approvals_inner,
     set_render_mermaid_inner, set_respect_manual_folds_inner, set_screen_mode_inner,
-    set_scroll_lines_inner, set_scroll_mode_inner, set_scroll_speed_inner,
-    set_session_recap_inner, set_show_thinking_blocks_inner, set_show_tips_inner,
-    set_simple_mode_inner, set_theme_inner, set_timeline_inner, set_timestamps,
-    set_timestamps_inner, set_vim_mode_inner, set_voice_capture_mode_inner,
-    set_voice_stt_language_inner,
+    set_scroll_lines_inner, set_scroll_mode_inner, set_scroll_speed_inner, set_session_recap_inner,
+    set_show_thinking_blocks_inner, set_show_tips_inner, set_simple_mode_inner, set_theme_inner,
+    set_timeline_inner, set_timestamps, set_timestamps_inner, set_vim_mode_inner,
+    set_voice_capture_mode_inner, set_voice_stt_language_inner,
 };
 use crate::app::actions::{Action, Effect};
 use crate::app::app_view::{ActiveView, AppView};
@@ -104,10 +103,19 @@ pub(in crate::app::dispatch) fn dispatch_open_model_picker(app: &mut AppView) ->
     open_model_picker(app, crate::views::modal::ArgPickerSelection::RunCommand)
 }
 
-/// Replace the settings modal's ad-hoc DynamicEnum list with the native
-/// model selector, persisting the selected model only for session recaps.
+/// Open the native searchable model selector for a recap/btw settings slot.
 pub(in crate::app::dispatch) fn dispatch_open_recap_model_picker(app: &mut AppView) -> Vec<Effect> {
-    open_model_picker(app, crate::views::modal::ArgPickerSelection::SetRecapModel)
+    dispatch_open_side_model_picker(app, "recap_model")
+}
+
+pub(in crate::app::dispatch) fn dispatch_open_side_model_picker(
+    app: &mut AppView,
+    slot_key: &'static str,
+) -> Vec<Effect> {
+    open_model_picker(
+        app,
+        crate::views::modal::ArgPickerSelection::SetModelSlot(slot_key),
+    )
 }
 
 fn open_model_picker(
@@ -129,17 +137,29 @@ fn open_model_picker(
     let Some(mut items) = cmd.suggest_args(&ctx, "").filter(|items| !items.is_empty()) else {
         return vec![];
     };
-    if selection == crate::views::modal::ArgPickerSelection::SetRecapModel {
+    if matches!(
+        selection,
+        crate::views::modal::ArgPickerSelection::SetModelSlot(_)
+    ) {
         items.insert(
             0,
             crate::slash::command::ArgItem {
                 display: "(no override)".to_string(),
-                match_text: "no override disable recap".to_string(),
+                match_text: "no override disable use session model".to_string(),
                 insert_text: String::new(),
                 description: String::new(),
             },
         );
     }
+    // If F2 settings is open (side-model slot), stash it so Esc/commit returns
+    // to the same group sheet instead of closing settings entirely.
+    let previous_settings = match agent.active_modal.take() {
+        Some(ActiveModal::Settings { state }) => Some(state),
+        other => {
+            agent.active_modal = other;
+            None
+        }
+    };
     agent.active_modal = Some(ActiveModal::ArgPicker {
         command: command.to_string(),
         args_query: String::new(),
@@ -147,6 +167,7 @@ fn open_model_picker(
         items,
         state: crate::views::picker::PickerState::input_active(),
         previous_palette: None,
+        previous_settings,
         selection,
         window: crate::views::modal_window::ModalWindowState::new(),
     });
@@ -225,6 +246,28 @@ pub(in crate::app::dispatch) fn dispatch_open_shortcuts_help(app: &mut AppView) 
         expanded_ids: std::collections::HashSet::new(),
         mode: shortcuts_help::ShortcutsHelpMode::Browse,
     });
+    vec![]
+}
+
+/// Open native Pi extension-shortcut manager (`/pi-shortcut-manager`).
+///
+/// Does not touch remote-tui. Toggle-closes if already open.
+pub(in crate::app::dispatch) fn dispatch_open_pi_shortcut_manager(
+    app: &mut AppView,
+) -> Vec<Effect> {
+    let ActiveView::Agent(id) = app.active_view else {
+        return vec![];
+    };
+    let Some(agent) = app.agents.get_mut(&id) else {
+        return vec![];
+    };
+    if agent.pi_shortcut_manager.is_some() {
+        agent.pi_shortcut_manager = None;
+        return vec![];
+    }
+    agent.pi_shortcut_manager = Some(crate::views::shortcut_manager::ShortcutManagerModal::new(
+        &app.external_ui.extension_shortcuts,
+    ));
     vec![]
 }
 
@@ -853,10 +896,18 @@ pub(in crate::app::dispatch) fn action_for_reset(
         }),
         ("psm_resume_index", SettingValue::Bool(b)) => Some(Action::SetPsmResumeIndex(*b)),
         ("pi_tree_file_rollback", SettingValue::Bool(b)) => Some(Action::SetPiTreeFileRollback(*b)),
+        ("pi_tree_skip_summary_prompt", SettingValue::Bool(b)) => {
+            Some(Action::SetPiTreeSkipSummaryPrompt(*b))
+        }
         ("pi_workflows", SettingValue::Bool(b)) => Some(Action::SetPiWorkflows(*b)),
         ("pi_goal", SettingValue::Bool(b)) => Some(Action::SetPiGoal(*b)),
+        ("pi_loop", SettingValue::Bool(b)) => Some(Action::SetPiLoop(*b)),
+        ("pi_ask_user_question", SettingValue::Bool(b)) => Some(Action::SetPiAskUserQuestion(*b)),
+        ("pi_btw", SettingValue::Bool(b)) => Some(Action::SetPiBtw(*b)),
         ("pi_cache_graph", SettingValue::Bool(b)) => Some(Action::SetPiCacheGraph(*b)),
+        ("show_other_tool_args", SettingValue::Bool(b)) => Some(Action::SetShowOtherToolArgs(*b)),
         ("review_file_tree", SettingValue::Bool(b)) => Some(Action::SetReviewFileTree(*b)),
+        ("review_include_reads", SettingValue::Bool(b)) => Some(Action::SetReviewIncludeReads(*b)),
         ("page_flip_on_send", SettingValue::Bool(b)) => Some(Action::SetPageFlipOnSend(*b)),
         ("combine_queued_prompts", SettingValue::Bool(b)) => {
             Some(Action::SetCombineQueuedPrompts(*b))
@@ -1077,10 +1128,25 @@ pub(in crate::app::dispatch) fn apply_setting_rollback(
         ("pi_tree_file_rollback", SettingValue::Bool(b)) => {
             app.current_ui.pi_tree_file_rollback = *b
         }
+        ("pi_tree_skip_summary_prompt", SettingValue::Bool(b)) => {
+            app.current_ui.pi_tree_skip_summary_prompt = *b
+        }
         ("pi_workflows", SettingValue::Bool(b)) => app.current_ui.pi_workflows = *b,
         ("pi_goal", SettingValue::Bool(b)) => app.current_ui.pi_goal = *b,
+        ("pi_loop", SettingValue::Bool(b)) => app.current_ui.pi_loop = *b,
+        ("pi_ask_user_question", SettingValue::Bool(b)) => app.current_ui.pi_ask_user_question = *b,
+        ("pi_btw", SettingValue::Bool(b)) => app.current_ui.pi_btw = *b,
         ("pi_cache_graph", SettingValue::Bool(b)) => app.current_ui.pi_cache_graph = *b,
+        ("show_other_tool_args", SettingValue::Bool(b)) => {
+            app.current_ui.show_other_tool_args = *b;
+            let mut config = app.appearance.clone();
+            config.show_other_tool_args = *b;
+            app.set_appearance(config);
+        }
         ("review_file_tree", SettingValue::Bool(b)) => app.current_ui.review_file_tree = *b,
+        ("review_include_reads", SettingValue::Bool(b)) => {
+            app.current_ui.review_include_reads = *b
+        }
         ("page_flip_on_send", SettingValue::Bool(b)) => set_page_flip_on_send_inner(app, *b),
         ("combine_queued_prompts", SettingValue::Bool(b)) => {
             set_combine_queued_prompts_inner(app, *b)
@@ -1336,6 +1402,21 @@ pub(in crate::app::dispatch) fn apply_setting_rollback(
         }
         ("recap_model", SettingValue::String(s)) => {
             set_recap_model_inner(app, s.clone());
+        }
+        ("recap_model_2", SettingValue::String(s)) => {
+            app.current_ui.recap_model_2 = s.clone();
+        }
+        ("recap_model_3", SettingValue::String(s)) => {
+            app.current_ui.recap_model_3 = s.clone();
+        }
+        ("btw_model", SettingValue::String(s)) => {
+            app.current_ui.btw_model = s.clone();
+        }
+        ("btw_model_2", SettingValue::String(s)) => {
+            app.current_ui.btw_model_2 = s.clone();
+        }
+        ("btw_model_3", SettingValue::String(s)) => {
+            app.current_ui.btw_model_3 = s.clone();
         }
         ("recap_mermaid", SettingValue::Bool(b)) => {
             set_recap_mermaid_inner(app, *b);

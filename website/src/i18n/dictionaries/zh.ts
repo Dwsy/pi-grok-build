@@ -1,4 +1,5 @@
 import type { Dictionary } from "./en";
+import docsZh from "./docs/zh";
 
 const zh: Dictionary = {
   meta: {
@@ -156,6 +157,7 @@ const zh: Dictionary = {
       changelog: "更新日志",
     },
   },
+  docsPages: docsZh,
 };
 
 export default zh;

@@ -1,7 +1,7 @@
 ---
 id: "2026-07-17-Pi-rpiv-ask-user-question-RPC-映射-QuestionView"
 title: "Pi rpiv-ask-user-question 在 RPC 下映射 Grok QuestionView"
-status: "todo"
+status: "superseded"
 created: "2026-07-17"
 updated: "2026-07-17"
 category: "adapter"

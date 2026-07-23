@@ -498,10 +498,16 @@ pub fn current_value_for(
         "pi_builtin_tools.ls" => Some(SettingValue::Bool(ui.pi_builtin_tools.ls)),
         "psm_resume_index" => Some(SettingValue::Bool(ui.psm_resume_index)),
         "pi_tree_file_rollback" => Some(SettingValue::Bool(ui.pi_tree_file_rollback)),
+        "pi_tree_skip_summary_prompt" => Some(SettingValue::Bool(ui.pi_tree_skip_summary_prompt)),
         "pi_workflows" => Some(SettingValue::Bool(ui.pi_workflows)),
         "pi_goal" => Some(SettingValue::Bool(ui.pi_goal)),
+        "pi_loop" => Some(SettingValue::Bool(ui.pi_loop)),
+        "pi_ask_user_question" => Some(SettingValue::Bool(ui.pi_ask_user_question)),
+        "pi_btw" => Some(SettingValue::Bool(ui.pi_btw)),
         "pi_cache_graph" => Some(SettingValue::Bool(ui.pi_cache_graph)),
+        "show_other_tool_args" => Some(SettingValue::Bool(ui.show_other_tool_args)),
         "review_file_tree" => Some(SettingValue::Bool(ui.review_file_tree)),
+        "review_include_reads" => Some(SettingValue::Bool(ui.review_include_reads)),
         // Cache is the send-path source of truth (same pattern as group_tool_verbs).
         "page_flip_on_send" => Some(SettingValue::Bool(
             crate::appearance::cache::load_page_flip_on_send(),
@@ -707,6 +713,11 @@ pub fn current_value_for(
         "remote_tui_footer" => Some(SettingValue::Bool(ui.remote_tui_footer.unwrap_or(false))),
         // recap_model: empty = recap generation disabled.
         "recap_model" => Some(SettingValue::String(ui.recap_model.clone())),
+        "recap_model_2" => Some(SettingValue::String(ui.recap_model_2.clone())),
+        "recap_model_3" => Some(SettingValue::String(ui.recap_model_3.clone())),
+        "btw_model" => Some(SettingValue::String(ui.btw_model.clone())),
+        "btw_model_2" => Some(SettingValue::String(ui.btw_model_2.clone())),
+        "btw_model_3" => Some(SettingValue::String(ui.btw_model_3.clone())),
 
         _ => None,
     }
@@ -1227,51 +1238,87 @@ mod tests {
                 }
                 ("psm_resume_index", SettingKind::Bool { default }) => {
                     assert_eq!(
-                        *default,
-                        ui.psm_resume_index,
+                        *default, ui.psm_resume_index,
                         "psm_resume_index default drifts from UiConfig::default()"
                     );
                     assert!(!*default, "psm_resume_index must default OFF");
                 }
                 ("pi_tree_file_rollback", SettingKind::Bool { default }) => {
                     assert_eq!(
-                        *default,
-                        ui.pi_tree_file_rollback,
+                        *default, ui.pi_tree_file_rollback,
                         "pi_tree_file_rollback default drifts from UiConfig::default()"
                     );
                     assert!(!*default, "pi_tree_file_rollback must default OFF");
                 }
+                ("pi_tree_skip_summary_prompt", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default, ui.pi_tree_skip_summary_prompt,
+                        "pi_tree_skip_summary_prompt default drifts from UiConfig::default()"
+                    );
+                    assert!(!*default, "pi_tree_skip_summary_prompt must default OFF");
+                }
                 ("pi_workflows", SettingKind::Bool { default }) => {
                     assert_eq!(
-                        *default,
-                        ui.pi_workflows,
+                        *default, ui.pi_workflows,
                         "pi_workflows default drifts from UiConfig::default()"
                     );
                     assert!(!*default, "pi_workflows must default OFF");
                 }
                 ("pi_goal", SettingKind::Bool { default }) => {
                     assert_eq!(
-                        *default,
-                        ui.pi_goal,
+                        *default, ui.pi_goal,
                         "pi_goal default drifts from UiConfig::default()"
                     );
                     assert!(!*default, "pi_goal must default OFF");
                 }
+                ("pi_loop", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default, ui.pi_loop,
+                        "pi_loop default drifts from UiConfig::default()"
+                    );
+                    assert!(!*default, "pi_loop must default OFF");
+                }
+                ("pi_btw", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default, ui.pi_btw,
+                        "pi_btw default drifts from UiConfig::default()"
+                    );
+                    assert!(!*default, "pi_btw must default OFF");
+                }
+                ("pi_ask_user_question", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default, ui.pi_ask_user_question,
+                        "pi_ask_user_question default drifts from UiConfig::default()"
+                    );
+                    assert!(!*default, "pi_ask_user_question must default OFF");
+                }
                 ("pi_cache_graph", SettingKind::Bool { default }) => {
                     assert_eq!(
-                        *default,
-                        ui.pi_cache_graph,
+                        *default, ui.pi_cache_graph,
                         "pi_cache_graph default drifts from UiConfig::default()"
                     );
                     assert!(*default, "pi_cache_graph must default ON");
                 }
+                ("show_other_tool_args", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default, ui.show_other_tool_args,
+                        "show_other_tool_args default drifts from UiConfig::default()"
+                    );
+                    assert!(!*default, "show_other_tool_args must default OFF");
+                }
                 ("review_file_tree", SettingKind::Bool { default }) => {
                     assert_eq!(
-                        *default,
-                        ui.review_file_tree,
+                        *default, ui.review_file_tree,
                         "review_file_tree default drifts from UiConfig::default()"
                     );
                     assert!(!*default, "review_file_tree must default OFF");
+                }
+                ("review_include_reads", SettingKind::Bool { default }) => {
+                    assert_eq!(
+                        *default, ui.review_include_reads,
+                        "review_include_reads default drifts from UiConfig::default()"
+                    );
+                    assert!(!*default, "review_include_reads must default OFF");
                 }
 
                 _ => panic!(

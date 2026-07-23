@@ -215,13 +215,9 @@ pub fn render_jump_overlay(buf: &mut Buffer, area: Rect, state: &JumpState, focu
         focused,
     };
 
-    state.list().render_with_search(
-        buf,
-        area,
-        &title,
-        focused,
-        Some(search),
-        |index, ctx| {
+    state
+        .list()
+        .render_with_search(buf, area, &title, focused, Some(search), |index, ctx| {
             let &real_idx = &state.filtered[index];
             let entry = &state.all_entries[real_idx];
             let ordinal = format!("{:>ord_width$} ", entry.turn_idx + 1);
@@ -252,8 +248,7 @@ pub fn render_jump_overlay(buf: &mut Buffer, area: Rect, state: &JumpState, focu
                 Span::styled(time, time_style),
                 Span::styled(preview, text_style),
             ])
-        },
-    );
+        });
 }
 
 #[cfg(test)]

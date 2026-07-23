@@ -24,9 +24,11 @@ pub(in crate::app::dispatch) fn dispatch_show_session_tree(app: &mut AppView) ->
         return vec![];
     };
     let agent_id = agent.session.id;
+    let skip_summary = app.current_ui.pi_tree_skip_summary_prompt;
     with_active_agent(app, |agent| {
         let mut state = SessionTreeState::loading();
         state.status = Some("Fetching Pi get_tree…".into());
+        state.skip_summary_prompt = skip_summary;
         agent.active_modal = Some(ActiveModal::SessionTree {
             state,
             window: crate::views::modal_window::ModalWindowState::new(),
@@ -64,11 +66,24 @@ pub(in crate::app::dispatch) fn dispatch_navigate_session_tree(
     with_active_agent(app, |agent| {
         agent.active_modal = None;
     });
-    app.show_toast(if summarize {
-        "Navigating with branch summary…"
+    // Status feedback while the navigate_tree ACP call (which performs the
+    // branch summary server-side) is in flight. Distinguish the modes so the
+    // user knows what is happening during the wait.
+    let toast = if summarize {
+        if custom_instructions
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_some()
+        {
+            "Navigating · generating branch summary (custom)…"
+        } else {
+            "Navigating · generating branch summary…"
+        }
     } else {
         "Navigating session tree…"
-    });
+    };
+    app.show_toast(toast);
     vec![Effect::NavigateSessionTree {
         agent_id,
         session_id,

@@ -161,9 +161,7 @@ pub fn rediscover(cwd: &Path) -> DiscoveryReport {
                 theme = %current,
                 "failed to re-apply active Pi theme after rediscovery"
             );
-            report
-                .errors
-                .push(format!("re-apply {current}: {error}"));
+            report.errors.push(format!("re-apply {current}: {error}"));
         }
     }
     tracing::info!(

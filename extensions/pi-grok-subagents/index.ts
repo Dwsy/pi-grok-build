@@ -16,6 +16,8 @@ const BRIDGE_TYPE = "pi-grok-subagent/v1";
 const STATE_ENTRY_TYPE = "pi-grok-subagent-state/v1";
 const PROGRESS_INTERVAL_MS = 2_000;
 const MAX_BACKGROUND_CONCURRENCY = 4;
+const MAX_WAIT_MS = 600_000; // 10 minutes cap for blocking waits
+const POLL_INTERVAL_MS = 500;
 
 const CAPABILITY_TOOLS = {
   "read-only": ["read"],
@@ -102,7 +104,18 @@ type SubagentRecord = {
   errorCount: number;
   tokensUsed: number;
   finished: boolean;
+  /** Terminal status set by finish(): "completed" | "failed" | "cancelled". */
+  terminalStatus: "completed" | "failed" | "cancelled" | null;
+  /** Error message from finish(), if the subagent failed. */
+  lastError?: string;
   cancelRequested: boolean;
+  /** Max turns before injecting a summary prompt. 0 = unlimited. */
+  maxTurns: number;
+  /** Set when turn limit triggers abort-then-summarize. */
+  turnLimitReached: boolean;
+  /** Resolved when finish() is called — enables true blocking wait. */
+  donePromise: Promise<void>;
+  doneResolve: () => void;
   progressTimer: ReturnType<typeof setInterval>;
   removeAbortListener: () => void;
   unsubscribe: () => void;
@@ -417,9 +430,12 @@ export default function piGrokSubagents(pi: ExtensionAPI): void {
   function finish(record: SubagentRecord, status: "completed" | "failed" | "cancelled", error?: string): void {
     if (record.finished) return;
     record.finished = true;
+    record.terminalStatus = status;
+    if (error) record.lastError = error;
     clearInterval(record.progressTimer);
     record.removeAbortListener();
     record.unsubscribe();
+    record.doneResolve();
     persist(record, status);
     emit(record, "finished", {
       status,
@@ -440,6 +456,7 @@ export default function piGrokSubagents(pi: ExtensionAPI): void {
       subagent_type: string;
       background?: boolean;
       capability_mode?: string;
+      max_turns?: number;
     },
     signal: AbortSignal | undefined,
     ctx: ExtensionContext,
@@ -481,6 +498,8 @@ export default function piGrokSubagents(pi: ExtensionAPI): void {
     if (!childSessionFile) throw new Error("child session persistence is unavailable");
     const parentSessionId = ctx.sessionManager.getSessionId();
     const id = randomUUID();
+    let doneResolve!: () => void;
+    const donePromise = new Promise<void>((resolve) => { doneResolve = resolve; });
     const record = {
       id,
       childSessionId: session.sessionId,
@@ -501,11 +520,31 @@ export default function piGrokSubagents(pi: ExtensionAPI): void {
       errorCount: 0,
       tokensUsed: 0,
       finished: false,
+      terminalStatus: null,
       cancelRequested: false,
+      maxTurns: params.max_turns ?? 0,
+      turnLimitReached: false,
+      donePromise,
+      doneResolve,
     } as Omit<SubagentRecord, "progressTimer" | "removeAbortListener" | "unsubscribe">;
 
     const unsubscribe = session.subscribe((event) => {
-      if (event.type === "turn_end") record.turnCount += 1;
+      if (event.type === "turn_end") {
+        record.turnCount += 1;
+        // Turn limit reached: steer the agent with a summary prompt.
+        // "steer" interrupts the current turn and injects the message,
+        // giving the agent a chance to produce final output naturally.
+        if (record.maxTurns > 0 && record.turnCount >= record.maxTurns && !record.turnLimitReached) {
+          record.turnLimitReached = true;
+          const summaryPrompt =
+            "[SYSTEM] You have reached the maximum number of turns allowed (" +
+            String(record.maxTurns) +
+            "). Stop all further tool calls immediately. " +
+            "Produce your final summary now — return a concise, evidence-based result " +
+            "of everything you have gathered so far. Do not make any more tool calls.";
+          void session.prompt(summaryPrompt, { streamingBehavior: "steer" }).catch(() => undefined);
+        }
+      }
       if (event.type === "tool_execution_start") {
         record.toolCallCount += 1;
         record.toolsUsed.add(event.toolName);
@@ -574,17 +613,78 @@ export default function piGrokSubagents(pi: ExtensionAPI): void {
       });
   }
 
+  // ---------------------------------------------------------------------------
+  // Helpers for output formatting
+  // ---------------------------------------------------------------------------
+
+  function formatDuration(ms: number): string {
+    if (ms < 1000) return `${ms}ms`;
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}m${seconds % 60}s`;
+  }
+
+  function statusLabel(record: SubagentRecord): string {
+    if (!record.finished) return "RUNNING";
+    return (record.terminalStatus ?? "completed").toUpperCase();
+  }
+
+  function formatSubagentResult(record: SubagentRecord): string {
+    const elapsed = formatDuration(Date.now() - record.startedAt);
+    const status = statusLabel(record);
+    const header = `[${status}] ${record.description} (${record.id.slice(0, 8)}…) — ${elapsed}, ${record.turnCount} turns, ${record.toolCallCount} tool calls`;
+    if (!record.finished) {
+      const tools = [...record.toolsUsed].join(", ") || "none yet";
+      return `${header}\nStatus: still running. Tools used: ${tools}. Tokens: ${record.tokensUsed}.\nUse get_command_or_subagent_output with timeout_ms to wait for completion.`;
+    }
+    const output = lastAssistantText(record.session);
+    const errorLine = record.lastError ? `\nError: ${record.lastError}` : "";
+    if (!output) return `${header}${errorLine}\n(Subagent completed without text output.)`;
+    // Truncate very long outputs to avoid flooding parent context
+    const MAX_OUTPUT_CHARS = 12_000;
+    const truncated = output.length > MAX_OUTPUT_CHARS
+      ? `${output.slice(0, MAX_OUTPUT_CHARS)}\n\n… [truncated ${output.length - MAX_OUTPUT_CHARS} chars]`
+      : output;
+    return `${header}${errorLine}\n\n${truncated}`;
+  }
+
+  function waitForRecords(ids: string[], timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    const promises = ids.map((id) => {
+      const r = records.get(id);
+      return r ? r.donePromise : Promise.resolve();
+    });
+    const all = Promise.all(promises).then(() => undefined);
+    if (timeoutMs <= 0) return all;
+    const timeout = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+    return Promise.race([all, timeout]);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tool: spawn_subagent
+  // ---------------------------------------------------------------------------
+
   pi.registerTool({
     name: "spawn_subagent",
     label: "Spawn Subagent",
-    description: "Launch an autonomous Pi child session shown in Grok's native subagent UI.",
+    description:
+      "Launch an autonomous Pi child session shown in Grok's native subagent UI.\n\n" +
+      "Usage notes:\n" +
+      "- Set background=true to run asynchronously; returns the subagent ID immediately\n" +
+      "- For background subagents, use get_command_or_subagent_output with task_ids and timeout_ms to wait for results\n" +
+      "- Without background (default), blocks until the subagent finishes and returns its final output directly\n" +
+      "- Do NOT use wait_tasks for subagent IDs — use get_command_or_subagent_output instead\n" +
+      "- You can spawn multiple background subagents in parallel (up to 4 concurrent)",
     parameters: Type.Object({
-      prompt: Type.String({ description: "Self-contained task for the child agent." }),
-      description: Type.String({ description: "Short 3-5 word task label." }),
-      subagent_type: Type.Optional(Type.String({ description: "Agent type label for the native Grok view." })),
-      background: Type.Optional(Type.Boolean({ description: "Run asynchronously and return the child ID immediately." })),
+      prompt: Type.String({ description: "Self-contained task for the child agent. Include all context needed — the child cannot see your conversation." }),
+      description: Type.String({ description: "Short 3-5 word task label shown in the subagent UI." }),
+      subagent_type: Type.Optional(Type.String({ description: "Agent profile: general-purpose (default), explore (read-only research), or plan (planning only)." })),
+      background: Type.Optional(Type.Boolean({ description: "Run asynchronously and return the child ID immediately. Use get_command_or_subagent_output(task_ids, timeout_ms) to collect results." })),
       capability_mode: Type.Optional(
-        Type.String({ description: "One of read-only, read-write, execute, or all." }),
+        Type.String({ description: "Tool access: read-only, read-write, execute, or all. Defaults to profile capability." }),
       ),
     }),
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
@@ -592,7 +692,7 @@ export default function piGrokSubagents(pi: ExtensionAPI): void {
       if (record.background) {
         scheduleBackground(record, params.prompt);
         return {
-          content: [{ type: "text", text: `Started subagent ${record.id}.` }],
+          content: [{ type: "text", text: `Started background subagent ${record.id}.\nUse get_command_or_subagent_output with task_ids=["${record.id}"] and timeout_ms to wait for its result.` }],
           details: { subagentId: record.id, childSessionId: record.childSessionId, background: true },
         };
       }
@@ -604,20 +704,124 @@ export default function piGrokSubagents(pi: ExtensionAPI): void {
     },
   });
 
+  // ---------------------------------------------------------------------------
+  // Tool: get_command_or_subagent_output
+  // ---------------------------------------------------------------------------
+
   pi.registerTool({
     name: "get_command_or_subagent_output",
     label: "Get Subagent Output",
-    description: "Return the latest result from a Pi-Grok subagent.",
-    parameters: Type.Object({ subagent_id: Type.String() }),
-    async execute(_toolCallId, params) {
-      const record = records.get(requireText(params.subagent_id, "subagent_id"));
-      if (!record) throw new Error(`unknown subagent: ${params.subagent_id}`);
+    description:
+      "Get output and status from one or more background subagents.\n\n" +
+      "Usage notes:\n" +
+      "- Pass task_ids with one or more subagent IDs from background=true spawn_subagent calls\n" +
+      "- For a single subagent use a one-element array: task_ids=[\"<id>\"]\n" +
+      "- Set a positive timeout_ms to block until all listed subagents complete (or timeout). Recommended: 120000–600000\n" +
+      "- Omit timeout_ms or pass 0 for a non-blocking status snapshot\n" +
+      "- Returns status, progress, and final output text for each subagent\n" +
+      "- Do NOT use wait_tasks for subagent IDs — this tool handles waiting",
+    parameters: Type.Object({
+      task_ids: Type.Optional(Type.Array(Type.String(), { description: "One or more subagent IDs to check." })),
+      subagent_id: Type.Optional(Type.String({ description: "Single subagent ID (alternative to task_ids for one subagent)." })),
+      timeout_ms: Type.Optional(Type.Number({ description: "Max milliseconds to wait for completion. 0 or omitted = non-blocking snapshot. Capped at 600000 (10 min)." })),
+    }),
+    async execute(_toolCallId, params, signal) {
+      // Accept both task_ids array and legacy subagent_id single string
+      const ids: string[] = params.task_ids?.length
+        ? params.task_ids
+        : params.subagent_id
+          ? [params.subagent_id]
+          : [];
+      if (ids.length === 0) throw new Error("Provide task_ids (array) or subagent_id (string) with at least one subagent ID");
+
+      // Validate all IDs exist
+      const unknown = ids.filter((id) => !records.has(id));
+      if (unknown.length > 0) {
+        throw new Error(`unknown subagent(s): ${unknown.join(", ")}. Use list_subagents to see active subagents.`);
+      }
+
+      // Blocking wait if timeout_ms > 0
+      const timeoutMs = Math.min(Math.max(params.timeout_ms ?? 0, 0), MAX_WAIT_MS);
+      if (timeoutMs > 0) {
+        await waitForRecords(ids, timeoutMs, signal);
+      }
+
+      // Format results
+      const results = ids.map((id) => {
+        const record = records.get(id)!;
+        return formatSubagentResult(record);
+      });
+
+      const allFinished = ids.every((id) => records.get(id)!.finished);
+      const summary = allFinished
+        ? "All subagents finished."
+        : "Some subagents still running. Call again with a larger timeout_ms to wait longer.";
+
       return {
-        content: [{ type: "text", text: lastAssistantText(record.session) || "Subagent is still running." }],
-        details: { subagentId: record.id, finished: record.finished },
+        content: [{ type: "text", text: `${summary}\n\n${results.join("\n\n---\n\n")}` }],
+        details: {
+          subagents: ids.map((id) => {
+            const r = records.get(id)!;
+            return { subagentId: id, finished: r.finished, status: statusLabel(r), turns: r.turnCount, toolCalls: r.toolCallCount };
+          }),
+        },
       };
     },
   });
+
+  // ---------------------------------------------------------------------------
+  // Tool: kill_command_or_subagent
+  // ---------------------------------------------------------------------------
+
+  pi.registerTool({
+    name: "kill_command_or_subagent",
+    label: "Cancel Subagent",
+    description: "Cancel a running background subagent by ID. The subagent will be aborted and marked as cancelled.",
+    parameters: Type.Object({
+      task_id: Type.Optional(Type.String({ description: "The subagent ID to cancel." })),
+      subagent_id: Type.Optional(Type.String({ description: "The subagent ID to cancel (alternative to task_id)." })),
+    }),
+    async execute(_toolCallId, params) {
+      const id = requireText(params.task_id ?? params.subagent_id, "task_id or subagent_id");
+      const record = records.get(id);
+      if (!record) throw new Error(`unknown subagent: ${id}`);
+      if (record.finished) {
+        return { content: [{ type: "text", text: `Subagent ${id.slice(0, 8)}… already finished (${statusLabel(record)}).` }] };
+      }
+      record.cancelRequested = true;
+      record.session.abort();
+      return { content: [{ type: "text", text: `Cancelled subagent ${id.slice(0, 8)}… (${record.description}).` }] };
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // Tool: list_subagents
+  // ---------------------------------------------------------------------------
+
+  pi.registerTool({
+    name: "list_subagents",
+    label: "List Subagents",
+    description: "List all subagents in this session with their current status, progress, and IDs.",
+    parameters: Type.Object({}),
+    async execute() {
+      if (records.size === 0) {
+        return { content: [{ type: "text", text: "No subagents have been spawned in this session." }] };
+      }
+      const lines = [...records.values()]
+        .sort((a, b) => a.startedAt - b.startedAt)
+        .map((r) => {
+          const elapsed = formatDuration(Date.now() - r.startedAt);
+          const status = statusLabel(r);
+          const bg = r.background ? "bg" : "fg";
+          return `• [${status}] ${r.id.slice(0, 8)}… "${r.description}" (${bg}, ${r.type}) — ${elapsed}, ${r.turnCount} turns, ${r.toolCallCount} tools`;
+        });
+      return { content: [{ type: "text", text: `Subagents (${records.size}):\n${lines.join("\n")}` }] };
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // Internal command (kept for backward compat with pager bridge)
+  // ---------------------------------------------------------------------------
 
   pi.registerCommand("__pi_grok_subagent_cancel", {
     description: "Internal Pi-Grok bridge command: cancel a subagent",

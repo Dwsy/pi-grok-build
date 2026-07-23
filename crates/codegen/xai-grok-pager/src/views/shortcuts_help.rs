@@ -1684,10 +1684,10 @@ mod tests {
         let entries = build_entries(&all_contexts(), &registry, true);
         let has_row = entries.iter().any(|e| {
             matches!(
-                e,
-                ShortcutsHelpEntry::Hint { item, .. }
-if item.label == "mouse reporting"
-            )
+                            e,
+                            ShortcutsHelpEntry::Hint { item, .. }
+            if item.label == "mouse reporting"
+                        )
         });
         assert!(
             !has_row,
@@ -1804,8 +1804,7 @@ if item.label == "mouse reporting"
                         item,
                         action_id: Some(id),
                         ..
-                    }
-if item.keys.contains(&crate::key!('g', CONTROL))
+                    } if item.keys.contains(&crate::key!('g', CONTROL))
                         && registry
                             .find(*id)
                             .is_some_and(|def| def.context == When::AgentScreen) =>
@@ -1846,24 +1845,24 @@ if item.keys.contains(&crate::key!('g', CONTROL))
 
         let has_todos = entries.iter().any(|e| {
             matches!(
-                e,
-                ShortcutsHelpEntry::Hint { item, .. }
-if item.label == "todos"
-            )
+                            e,
+                            ShortcutsHelpEntry::Hint { item, .. }
+            if item.label == "todos"
+                        )
         });
         let has_sessions = entries.iter().any(|e| {
             matches!(
-                e,
-                ShortcutsHelpEntry::Hint { item, .. }
-if item.label == "sessions"
-            )
+                            e,
+                            ShortcutsHelpEntry::Hint { item, .. }
+            if item.label == "sessions"
+                        )
         });
         let has_queue = entries.iter().any(|e| {
             matches!(
-                e,
-                ShortcutsHelpEntry::Hint { item, .. }
-if item.label == "queue"
-            )
+                            e,
+                            ShortcutsHelpEntry::Hint { item, .. }
+            if item.label == "queue"
+                        )
         });
         assert!(has_todos, "should include toggle todos");
         assert!(has_sessions, "should include open sessions");
@@ -1908,14 +1907,14 @@ if item.label == "queue"
             .iter()
             .find(|e| {
                 matches!(
-                    e,
-                    ShortcutsHelpEntry::Hint {
-                        item,
-                        action_id: None,
-                        ..
-                    }
-if item.label == "paste"
-                )
+                                    e,
+                                    ShortcutsHelpEntry::Hint {
+                                        item,
+                                        action_id: None,
+                                        ..
+                                    }
+                if item.label == "paste"
+                                )
             })
             .expect("cheatsheet should list paste");
         let ShortcutsHelpEntry::Hint {
@@ -1996,10 +1995,10 @@ if item.label == "paste"
 
         let nav_dimmed = entries.iter().any(|e| {
             matches!(
-                e,
-                ShortcutsHelpEntry::Hint { item, dimmed: true, .. }
-if item.label == "nav"
-            )
+                            e,
+                            ShortcutsHelpEntry::Hint { item, dimmed: true, .. }
+            if item.label == "nav"
+                        )
         });
         assert!(
             nav_dimmed,
@@ -2008,19 +2007,19 @@ if item.label == "nav"
 
         let quit_bright = entries.iter().any(|e| {
             matches!(
-                e,
-                ShortcutsHelpEntry::Hint { item, dimmed: false, .. }
-if item.label == "quit"
-            )
+                            e,
+                            ShortcutsHelpEntry::Hint { item, dimmed: false, .. }
+            if item.label == "quit"
+                        )
         });
         assert!(quit_bright, "quit should not be dimmed (When::Always)");
 
         let cancel_bright = entries.iter().any(|e| {
             matches!(
-                e,
-                ShortcutsHelpEntry::Hint { item, dimmed: false, .. }
-if item.label == "cancel"
-            )
+                            e,
+                            ShortcutsHelpEntry::Hint { item, dimmed: false, .. }
+            if item.label == "cancel"
+                        )
         });
         assert!(
             cancel_bright,
@@ -2036,10 +2035,10 @@ if item.label == "cancel"
 
         let send_dimmed = entries.iter().any(|e| {
             matches!(
-                e,
-                ShortcutsHelpEntry::Hint { item, dimmed: true, .. }
-if item.label == "send"
-            )
+                            e,
+                            ShortcutsHelpEntry::Hint { item, dimmed: true, .. }
+            if item.label == "send"
+                        )
         });
         assert!(
             send_dimmed,
@@ -2048,10 +2047,10 @@ if item.label == "send"
 
         let nav_dimmed = entries.iter().any(|e| {
             matches!(
-                e,
-                ShortcutsHelpEntry::Hint { item, dimmed: true, .. }
-if item.label == "nav"
-            )
+                            e,
+                            ShortcutsHelpEntry::Hint { item, dimmed: true, .. }
+            if item.label == "nav"
+                        )
         });
         assert!(
             nav_dimmed,
@@ -2717,15 +2716,15 @@ if item.label == "nav"
             .iter()
             .position(|e| {
                 matches!(
-                    e,
-                    ShortcutsHelpEntry::Hint {
-                        item,
-                        action_id: None,
-                        long_help: Some(_),
-                        ..
-                    }
-if item.label == "paste"
-                )
+                                    e,
+                                    ShortcutsHelpEntry::Hint {
+                                        item,
+                                        action_id: None,
+                                        long_help: Some(_),
+                                        ..
+                                    }
+                if item.label == "paste"
+                                )
             })
             .expect("paste pseudo-row with long_help");
         assert_eq!(
@@ -3104,10 +3103,10 @@ if item.label == "paste"
         for label in ["top", "btm", "copy", "copy cmd"] {
             let present = entries.iter().any(|e| {
                 matches!(
-                    e,
-                    ShortcutsHelpEntry::Hint { item, .. }
-if item.label == label
-                )
+                                    e,
+                                    ShortcutsHelpEntry::Hint { item, .. }
+                if item.label == label
+                                )
             });
             assert!(
                 !present,
@@ -3396,15 +3395,15 @@ if item.label == label
             .iter()
             .position(|e| {
                 matches!(
-                    e,
-                    ShortcutsHelpEntry::Hint {
-                        item,
-                        action_id: None,
-                        long_help: Some(_),
-                        ..
-                    }
-if item.label == "paste"
-                )
+                                    e,
+                                    ShortcutsHelpEntry::Hint {
+                                        item,
+                                        action_id: None,
+                                        long_help: Some(_),
+                                        ..
+                                    }
+                if item.label == "paste"
+                                )
             })
             .expect("paste pseudo-row with long_help");
         let key_id = ExpandKey::Pseudo("paste");

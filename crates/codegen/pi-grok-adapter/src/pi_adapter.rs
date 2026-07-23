@@ -7,6 +7,8 @@ use crate::{
         build_session_info_response, context_tokens_from_stats, context_tokens_from_usage,
         entries_to_messages_value, parse_context_breakdown,
     },
+    goal_host::{GoalControl, GoalHost},
+    loop_host,
     model::{
         PiCommand, PiHistoryItem, PiModel, PiReplayEntry, PiSessionSwitch, PiSessionTree, PiState,
         PiToolContent, extract_delta, json_text, parse_commands, parse_messages, parse_models,
@@ -14,22 +16,25 @@ use crate::{
         scan_local_sessions_for_cwd, string, tree_entry_editor_text,
     },
     pi_rpc::PiRpc,
+    pi_workflow_backend::{
+        BridgeCommandRequest, BridgeCommandTx, WORKFLOW_CANCEL_COMMAND, WORKFLOW_SPAWN_COMMAND,
+    },
     prompt_bridge::{
         direct_bash_command, format_bash_result, prompt_response, prompt_streaming_behavior,
         prompt_to_pi, queue_lane_for_behavior,
     },
     queue_bridge::{QueueLane, QueueMirror, queue_changed_params, string_list},
+    btw_bridge::parse_btw_message,
     recap_bridge::{parse_recap_message, session_recap_notification},
     subagent_projection::{BridgeOperation, bridge_parent_session_id, parse_bridge_message},
     todo_bridge::plan_update_for_tool,
-    pi_workflow_backend::{
-        BridgeCommandRequest, BridgeCommandTx, WORKFLOW_CANCEL_COMMAND, WORKFLOW_SPAWN_COMMAND,
-    },
-    goal_host::{GoalControl, GoalHost},
-    workflow_host::{WorkflowHost, WorkflowRequest, format_outcome_for_tool, outcome_to_json, parse_workflow_request},
     tool_projection::{
         bash_tool_output, edit_diff_content, history_tool_content, normalize_tool_raw_input,
         normalize_tool_raw_output, pi_result_text, tool_content, tool_kind,
+    },
+    workflow_host::{
+        WorkflowHost, WorkflowRequest, format_outcome_for_tool, outcome_to_json,
+        parse_workflow_request,
     },
 };
 use agent_client_protocol as acp;
@@ -41,7 +46,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     rc::Rc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc, oneshot};
 use xai_acp_lib::{AcpClientMessage, acp_send};
@@ -191,6 +196,14 @@ struct AdapterState {
     /// Latest Pi context-window usage (tokens used). Stamped on ACP session
     /// updates as `_meta.totalTokens` so Grok's native context bar can render.
     last_context_tokens: Option<u64>,
+    /// UTC ms when the current Pi agent turn began (`turnStartMs` on live ACP
+    /// notifications). Mirrors stock Grok shell so the pager can pre-create
+    /// Thinking… and drive turn timers / breathing animation.
+    turn_start_ms: Option<i64>,
+    /// UTC ms when the current LLM stream segment began (`streamStartMs`).
+    /// Bumped on each assistant `message_start` / `turn_start` so stream
+    /// boundaries match Grok shell semantics.
+    stream_start_ms: Option<i64>,
     /// Local timing only; Pi owns compaction itself and reports its token result.
     compaction_started_at: Option<Instant>,
     /// Pi steering / follow-up queue mirrored as Grok `x.ai/queue/changed`.
@@ -204,6 +217,8 @@ struct AdapterState {
     /// commits the matching session load, rather than validating it against the
     /// still-active Pager session.
     pending_subagent_bridge: PendingSubagentBridge,
+    /// In-flight `/btw` side questions keyed by requestId (extension custom message).
+    pending_btw: HashMap<String, oneshot::Sender<Result<String, String>>>,
     /// Plan mode lifecycle tracker. The adapter is the sole owner of plan mode
     /// state — Pi RPC has no mode concept, and the Pager only renders.
     plan_mode: crate::plan_mode::PiPlanTracker,
@@ -272,10 +287,13 @@ impl PiAgent {
                 session_paths: HashMap::new(),
                 tool_args: HashMap::new(),
                 last_context_tokens: None,
+                turn_start_ms: None,
+                stream_start_ms: None,
                 compaction_started_at: None,
                 queue_mirror: QueueMirror::default(),
                 subagent_bridge_sequences: HashMap::new(),
                 pending_subagent_bridge: PendingSubagentBridge::default(),
+                pending_btw: HashMap::new(),
                 plan_mode,
                 plan_mode_control,
             })),
@@ -616,20 +634,22 @@ impl PiAgent {
                 });
                 Ok(json!({ "runId": run_id_ret, "started": true }))
             }
-            WorkflowRequest::Manage { op, target } => match op.as_str() {
-                "pause" => {
-                    let ok = host.pause(&target).await;
-                    self.emit_workflow_notifications().await;
-                    Ok(json!({ "op": "pause", "target": target, "ok": ok }))
+            WorkflowRequest::Manage { op, target } => {
+                match op.as_str() {
+                    "pause" => {
+                        let ok = host.pause(&target).await;
+                        self.emit_workflow_notifications().await;
+                        Ok(json!({ "op": "pause", "target": target, "ok": ok }))
+                    }
+                    "stop" => {
+                        let ok = host.cancel(&target).await;
+                        self.emit_workflow_notifications().await;
+                        Ok(json!({ "op": "stop", "target": target, "ok": ok }))
+                    }
+                    other => Err(acp::Error::invalid_params()
+                        .data(format!("unsupported workflow op: {other}"))),
                 }
-                "stop" => {
-                    let ok = host.cancel(&target).await;
-                    self.emit_workflow_notifications().await;
-                    Ok(json!({ "op": "stop", "target": target, "ok": ok }))
-                }
-                other => Err(acp::Error::invalid_params()
-                    .data(format!("unsupported workflow op: {other}"))),
-            },
+            }
         }
     }
 
@@ -644,20 +664,22 @@ impl PiAgent {
         let request = parse_workflow_request(name, args)
             .map_err(|e| acp::Error::invalid_params().data(e.to_string()))?;
         match request {
-            WorkflowRequest::Manage { op, target } => match op.as_str() {
-                "pause" => {
-                    let ok = host.pause(&target).await;
-                    self.emit_workflow_notifications().await;
-                    Ok(json!({ "op": "pause", "target": target, "ok": ok }))
+            WorkflowRequest::Manage { op, target } => {
+                match op.as_str() {
+                    "pause" => {
+                        let ok = host.pause(&target).await;
+                        self.emit_workflow_notifications().await;
+                        Ok(json!({ "op": "pause", "target": target, "ok": ok }))
+                    }
+                    "stop" => {
+                        let ok = host.cancel(&target).await;
+                        self.emit_workflow_notifications().await;
+                        Ok(json!({ "op": "stop", "target": target, "ok": ok }))
+                    }
+                    other => Err(acp::Error::invalid_params()
+                        .data(format!("unsupported workflow op: {other}"))),
                 }
-                "stop" => {
-                    let ok = host.cancel(&target).await;
-                    self.emit_workflow_notifications().await;
-                    Ok(json!({ "op": "stop", "target": target, "ok": ok }))
-                }
-                other => Err(acp::Error::invalid_params()
-                    .data(format!("unsupported workflow op: {other}"))),
-            },
+            }
             WorkflowRequest::Launch {
                 name,
                 objective,
@@ -753,6 +775,36 @@ impl PiAgent {
                 host.apply_control(control.clone());
             }
             self.emit_goal_updated_from_control(&control).await;
+        }
+        Ok(true)
+    }
+
+    /// Extension bridge: scheduled task created/fired/deleted → native tasks pane.
+    async fn handle_loop_bridge_message(&self, event: &Value) -> Result<bool> {
+        let message = event
+            .get("message")
+            .or_else(|| event.get("entry"))
+            .unwrap_or(event);
+        let custom_type = message
+            .get("customType")
+            .and_then(Value::as_str)
+            .or_else(|| message.get("type").and_then(Value::as_str));
+        if custom_type != Some("pi-grok-loop/v1") {
+            return Ok(false);
+        }
+        let details = message
+            .get("details")
+            .or_else(|| message.get("data"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let Some((event_name, task)) = loop_host::parse_loop_bridge(&details) else {
+            return Ok(true);
+        };
+        let session_id = self.session_id().0.to_string();
+        if let Some((method, payload)) =
+            loop_host::scheduled_task_notification(&session_id, &event_name, &task)
+        {
+            self.send_ext_notification(&method, payload).await;
         }
         Ok(true)
     }
@@ -880,7 +932,6 @@ impl PiAgent {
         Ok(true)
     }
 
-
     /// Navigate Pi's leaf via the injected `__pi_navigate_tree` extension
     /// command (official `ctx.navigateTree`).
     async fn navigate_session_tree(
@@ -949,10 +1000,7 @@ impl PiAgent {
             .request(json!({ "type": "get_fork_messages" }))
             .await
             .map_err(acp_internal)?;
-        let messages = data
-            .get("messages")
-            .cloned()
-            .unwrap_or_else(|| json!([]));
+        let messages = data.get("messages").cloned().unwrap_or_else(|| json!([]));
         Ok(json!({ "messages": messages }))
     }
 
@@ -1011,14 +1059,12 @@ impl PiAgent {
                 .map_err(acp_internal)?,
         );
         if state.is_streaming {
-            return Err(acp::Error::internal_error().data(
-                "Wait for the current response to finish before reloading.",
-            ));
+            return Err(acp::Error::internal_error()
+                .data("Wait for the current response to finish before reloading."));
         }
         if state.is_compacting {
-            return Err(acp::Error::internal_error().data(
-                "Wait for compaction to finish before reloading.",
-            ));
+            return Err(acp::Error::internal_error()
+                .data("Wait for compaction to finish before reloading."));
         }
         self.run_bridge_command(RELOAD_COMMAND, "").await?;
         let bootstrap = self.refresh().await.map_err(acp_internal)?;
@@ -1060,10 +1106,10 @@ impl PiAgent {
             .as_deref()
             .filter(|path| !path.is_empty())
         {
-            self.state.borrow_mut().session_paths.insert(
-                bootstrap.state.session_id.clone(),
-                PathBuf::from(path),
-            );
+            self.state
+                .borrow_mut()
+                .session_paths
+                .insert(bootstrap.state.session_id.clone(), PathBuf::from(path));
         }
         {
             let mut state = self.state.borrow_mut();
@@ -1093,6 +1139,8 @@ impl PiAgent {
         // previous session's totalTokens onto a fresh AgentView (context bar).
         if session_changed {
             state.last_context_tokens = None;
+            state.turn_start_ms = None;
+            state.stream_start_ms = None;
         }
         state.bootstrap = bootstrap;
     }
@@ -1153,12 +1201,15 @@ impl PiAgent {
     /// Notify the Pager of the session plan file path so `/view-plan` and the
     /// plan preview overlay can locate the Pi-owned sidecar.
     async fn publish_plan_file_path(&self) {
-        let plan_path = self.state.borrow().plan_mode.plan_file_path().display().to_string();
-        self.send_ext_notification(
-            "pi/ui/plan_file",
-            json!({ "planFilePath": plan_path }),
-        )
-        .await;
+        let plan_path = self
+            .state
+            .borrow()
+            .plan_mode
+            .plan_file_path()
+            .display()
+            .to_string();
+        self.send_ext_notification("pi/ui/plan_file", json!({ "planFilePath": plan_path }))
+            .await;
     }
 
     /// Persist the tracker after every durable state transition. The data is
@@ -1177,11 +1228,24 @@ impl PiAgent {
 
     async fn send_update(&self, update: acp::SessionUpdate) {
         let mut notification = acp::SessionNotification::new(self.session_id(), update);
-        if let Some(tokens) = self.state.borrow().last_context_tokens {
-            let mut meta = acp::Meta::new();
-            meta.insert("totalTokens".into(), json!(tokens));
-            notification = notification.meta(Some(meta));
+        // Stamp the same live timing fields stock Grok shell puts on every
+        // SessionNotification. Without streamStartMs the pager never pre-creates
+        // Thinking… and the first-token empty window has no breathing accent.
+        let mut meta = acp::Meta::new();
+        {
+            let state = self.state.borrow();
+            if let Some(tokens) = state.last_context_tokens {
+                meta.insert("totalTokens".into(), json!(tokens));
+            }
+            if let Some(ms) = state.turn_start_ms {
+                meta.insert("turnStartMs".into(), json!(ms));
+            }
+            if let Some(ms) = state.stream_start_ms {
+                meta.insert("streamStartMs".into(), json!(ms));
+            }
         }
+        meta.insert("agentTimestampMs".into(), json!(utc_now_ms()));
+        notification = notification.meta(Some(meta));
         if let Err(error) = acp_send(notification, &self.client_tx).await {
             tracing::debug!(%error, "Grok pager closed while sending Pi session update");
         }
@@ -1235,6 +1299,26 @@ impl PiAgent {
         self.send_ext_notification("x.ai/session/update", notification)
             .await;
         Ok(true)
+    }
+
+    fn handle_btw_bridge_message(&self, event: &Value) -> bool {
+        let Some(projection) = parse_btw_message(event) else {
+            return false;
+        };
+        let sender = self
+            .state
+            .borrow_mut()
+            .pending_btw
+            .remove(&projection.request_id);
+        if let Some(tx) = sender {
+            let _ = tx.send(projection.result);
+        } else {
+            tracing::debug!(
+                request_id = %projection.request_id,
+                "btw bridge message with no pending waiter"
+            );
+        }
+        true
     }
 
     async fn handle_subagent_bridge_message(&self, event: &Value) -> Result<bool> {
@@ -1441,7 +1525,11 @@ impl PiAgent {
         };
         let breakdown = self.fetch_context_breakdown().await;
         // Best-effort raw entries for cache graph (pi-cache-graph alignment).
-        let entries_for_cache = self.rpc.request(json!({ "type": "get_entries" })).await.ok();
+        let entries_for_cache = self
+            .rpc
+            .request(json!({ "type": "get_entries" }))
+            .await
+            .ok();
         let (session_id, model, cached_tokens, session_file) = {
             let state = self.state.borrow();
             (
@@ -1710,14 +1798,22 @@ impl PiAgent {
             .unwrap_or_default();
         match event_type {
             "agent_start" => {
-                for active in &mut self.state.borrow_mut().active_prompts {
+                let now = utc_now_ms();
+                let mut state = self.state.borrow_mut();
+                for active in &mut state.active_prompts {
                     active.agent_started = true;
                 }
+                // Anchor turn + first stream so subsequent live updates carry
+                // streamStartMs (Pager pre-create Thinking on first boundary).
+                state.turn_start_ms = Some(now);
+                state.stream_start_ms = Some(now);
             }
             "agent_settled" => {
                 self.refresh_context_usage().await;
                 let mode_update = {
                     let mut state = self.state.borrow_mut();
+                    state.turn_start_ms = None;
+                    state.stream_start_ms = None;
                     state.queue_mirror.clear_running();
                     // Complete deferred plan-mode exit after the in-flight turn.
                     if matches!(
@@ -1748,15 +1844,26 @@ impl PiAgent {
             // `agent_end` is not the Pi idle barrier. Retry, compaction and
             // extension handlers can continue after it; `agent_settled` owns
             // ACP prompt completion.
-            "agent_end" | "turn_start" => {}
+            "agent_end" => {}
+            "turn_start" => {
+                // Multi-turn agent loops: each turn is a new stream segment.
+                let now = utc_now_ms();
+                let mut state = self.state.borrow_mut();
+                if state.turn_start_ms.is_none() {
+                    state.turn_start_ms = Some(now);
+                }
+                state.stream_start_ms = Some(now);
+            }
             "turn_end" => self.refresh_context_usage().await,
             "message_start" => self.handle_message_start(&event),
             "message_update" => self.handle_message_update(&event).await,
             "message_end" => {
-                if self.handle_recap_bridge_message(&event).await?
+                if self.handle_btw_bridge_message(&event)
+                    || self.handle_recap_bridge_message(&event).await?
                     || self.handle_background_bash_bridge_message(&event).await?
                     || self.handle_workflow_bridge_message(&event).await?
                     || self.handle_goal_bridge_message(&event).await?
+                    || self.handle_loop_bridge_message(&event).await?
                 {
                     // Bridge custom messages are display/control traffic.
                 } else if !self.handle_subagent_bridge_message(&event).await? {
@@ -1767,8 +1874,11 @@ impl PiAgent {
             // cannot enter Pi's steering/follow-up queues while the parent is
             // streaming. RPC exposes that append as entry_appended.
             "entry_appended" => {
-                if !self.handle_workflow_bridge_message(&event).await?
+                if self.handle_btw_bridge_message(&event) {
+                    // /btw answer may arrive via appendEntry when parent is streaming.
+                } else if !self.handle_workflow_bridge_message(&event).await?
                     && !self.handle_goal_bridge_message(&event).await?
+                    && !self.handle_loop_bridge_message(&event).await?
                 {
                     self.handle_subagent_bridge_message(&event).await?;
                 }
@@ -1851,7 +1961,15 @@ impl PiAgent {
 
     fn handle_message_start(&self, event: &Value) {
         if message_role(event) == Some("assistant") {
-            self.state.borrow_mut().live_assistant = Some(StreamSeen::default());
+            let now = utc_now_ms();
+            let mut state = self.state.borrow_mut();
+            state.live_assistant = Some(StreamSeen::default());
+            // New assistant message = new LLM stream segment (same semantics
+            // as Grok shell StreamStarted → record_stream_start).
+            if state.turn_start_ms.is_none() {
+                state.turn_start_ms = Some(now);
+            }
+            state.stream_start_ms = Some(now);
         }
     }
 
@@ -1915,7 +2033,14 @@ impl PiAgent {
     }
 
     fn finish_prompts(&self, requested_reason: acp::StopReason) {
-        let active_prompts = std::mem::take(&mut self.state.borrow_mut().active_prompts);
+        let active_prompts = {
+            let mut state = self.state.borrow_mut();
+            // Drop stream anchors so idle notifications do not re-trigger
+            // Pager Thinking pre-create with a stale streamStartMs.
+            state.turn_start_ms = None;
+            state.stream_start_ms = None;
+            std::mem::take(&mut state.active_prompts)
+        };
         for active in active_prompts {
             let reason = if active.cancelled {
                 acp::StopReason::Cancelled
@@ -2085,7 +2210,8 @@ impl PiAgent {
                 let exit_code = result.get("exitCode").and_then(Value::as_i64);
                 let failed = cancelled || exit_code.is_some_and(|code| code != 0);
                 let output = format_bash_result(&result);
-                let raw_output = bash_tool_output(&command, &result, failed && !cancelled);
+                let raw_output =
+                    bash_tool_output(&command, None, &result, failed && !cancelled);
                 self.send_update(acp::SessionUpdate::ToolCallUpdate(
                     acp::ToolCallUpdate::new(
                         acp::ToolCallId::new(call_id),
@@ -2141,6 +2267,12 @@ impl PiAgent {
                 .insert(id.to_string(), args);
         }
         let content = edit_diff_content(name, args.as_ref(), None).unwrap_or_default();
+        let ask_user_args = (name == "ask_user_question")
+            .then(|| args.clone())
+            .flatten();
+        // When the tool is Q&A we still spawn even if args is None so the control
+        // file gets an error payload instead of leaving the extension polling forever.
+        let open_ask_user = name == "ask_user_question";
         self.send_update(acp::SessionUpdate::ToolCall(
             acp::ToolCall::new(acp::ToolCallId::new(id.to_string()), name.to_string())
                 .kind(tool_kind(name))
@@ -2152,6 +2284,100 @@ impl PiAgent {
         .await;
         if name == "exit_plan_mode" {
             self.request_plan_approval(id).await;
+        }
+        if open_ask_user {
+            let agent = self.clone();
+            let tool_call_id = id.to_string();
+            tokio::task::spawn_local(async move {
+                agent
+                    .request_ask_user_question(&tool_call_id, ask_user_args)
+                    .await;
+            });
+        }
+    }
+
+    /// Bridge Pi extension `ask_user_question` to native Grok QuestionView.
+    ///
+    /// Writes `{outcome,message}` under `PI_GROK_ASK_USER_DIR/<toolCallId>.json`
+    /// so the injected extension can complete its blocking execute.
+    async fn request_ask_user_question(&self, tool_call_id: &str, args: Option<Value>) {
+        let Some(dir) = std::env::var_os("PI_GROK_ASK_USER_DIR") else {
+            write_ask_user_response(
+                tool_call_id,
+                json!({
+                    "outcome": "error",
+                    "message": "ask_user_question host control missing (enable F2 Q&A and restart).",
+                }),
+            );
+            return;
+        };
+        let questions = normalize_ask_user_questions(args.as_ref());
+        if questions.is_empty() {
+            write_ask_user_response(
+                tool_call_id,
+                json!({
+                    "outcome": "error",
+                    "message": "ask_user_question requires at least one question with options.",
+                }),
+            );
+            return;
+        }
+        let mode = if self.state.borrow().plan_mode.is_active() {
+            "plan"
+        } else {
+            "default"
+        };
+        let params = json!({
+            "sessionId": self.session_id().0.to_string(),
+            "toolCallId": tool_call_id,
+            "questions": questions,
+            "mode": mode,
+        });
+        let raw = match serde_json::value::to_raw_value(&params) {
+            Ok(raw) => raw,
+            Err(error) => {
+                write_ask_user_response(
+                    tool_call_id,
+                    json!({
+                        "outcome": "error",
+                        "message": format!("failed to serialize Q&A request: {error}"),
+                    }),
+                );
+                return;
+            }
+        };
+        let request = acp::ExtRequest::new("x.ai/ask_user_question", raw.into());
+        let response = match acp_send(request, &self.client_tx).await {
+            Ok(response) => response,
+            Err(error) => {
+                write_ask_user_response(
+                    tool_call_id,
+                    json!({
+                        "outcome": "error",
+                        "message": format!("Q&A request failed: {error}"),
+                    }),
+                );
+                return;
+            }
+        };
+        let outer: Value = match serde_json::from_str(response.0.get()) {
+            Ok(value) => value,
+            Err(error) => {
+                write_ask_user_response(
+                    tool_call_id,
+                    json!({
+                        "outcome": "error",
+                        "message": format!("invalid Q&A response: {error}"),
+                    }),
+                );
+                return;
+            }
+        };
+        let result = outer.get("result").unwrap_or(&outer);
+        let payload = format_ask_user_tool_result(result);
+        let path = std::path::Path::new(&dir).join(format!("{tool_call_id}.json"));
+        if let Err(error) = std::fs::write(&path, payload.to_string()) {
+            tracing::warn!(%error, path = %path.display(), "failed to write ask_user_question response");
         }
     }
 
@@ -2999,6 +3225,7 @@ impl acp::Agent for PiAgent {
             }
             "x.ai/task/kill" => self.handle_bash_kill_request(arguments.params.get()).await,
             "x.ai/recap" => self.handle_recap_request(arguments.params.get()).await,
+            "x.ai/btw" => self.handle_btw_request(arguments.params.get()).await,
             "x.ai/compact_conversation" => {
                 let params: Value =
                     serde_json::from_str(arguments.params.get()).unwrap_or_default();
@@ -3036,21 +3263,14 @@ impl acp::Agent for PiAgent {
                     .trim()
                     .to_string();
                 let cwd = string(&params, &["cwd"]).filter(|c| !c.trim().is_empty());
-                let limit = params
-                    .get("limit")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(20) as usize;
+                let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
                 if query.is_empty() {
                     return ext_response(json!({ "results": [], "total": 0 }))
                         .map_err(acp_internal);
                 }
                 let cwd_path = cwd.map(PathBuf::from);
                 let results = tokio::task::spawn_blocking(move || {
-                    crate::psm_session_catalog::full_text_search(
-                        cwd_path.as_deref(),
-                        &query,
-                        limit,
-                    )
+                    crate::psm_session_catalog::full_text_search(cwd_path.as_deref(), &query, limit)
                 })
                 .await
                 .unwrap_or(None)
@@ -3064,8 +3284,47 @@ impl acp::Agent for PiAgent {
                         "snippet": r.snippet,
                         "score": r.score,
                         "matchedFields": r.matched_fields,
+                        "updatedAt": r.updated_at,
                     })).collect::<Vec<_>>(),
                     "total": total,
+                }))
+                .map_err(acp_internal)
+            }
+            // Session message preview for /resume picker (PSM message_entries).
+            "pi/session/messages" => {
+                let params: Value =
+                    serde_json::from_str(arguments.params.get()).unwrap_or_default();
+                let session_path = string(&params, &["sessionPath", "session_path"])
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                let session_id = string(&params, &["sessionId", "session_id"])
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
+                let messages = tokio::task::spawn_blocking(move || {
+                    let path = if !session_path.is_empty() {
+                        Some(session_path)
+                    } else if !session_id.is_empty() {
+                        crate::psm_session_catalog::resolve_session_path(&session_id)
+                    } else {
+                        None
+                    };
+                    match path {
+                        Some(p) => crate::psm_session_catalog::load_session_messages(&p, limit)
+                            .unwrap_or_default(),
+                        None => Vec::new(),
+                    }
+                })
+                .await
+                .unwrap_or_default();
+                ext_response(json!({
+                    "messages": messages.iter().map(|m| json!({
+                        "role": m.role,
+                        "content": m.content,
+                    })).collect::<Vec<_>>(),
+                    "total": messages.len(),
                 }))
                 .map_err(acp_internal)
             }
@@ -3168,8 +3427,7 @@ impl acp::Agent for PiAgent {
                     .map(str::trim)
                     .filter(|m| *m == "all" || *m == "one-at-a-time")
                     .ok_or_else(|| {
-                        acp::Error::invalid_params()
-                            .data("mode must be 'all' or 'one-at-a-time'")
+                        acp::Error::invalid_params().data("mode must be 'all' or 'one-at-a-time'")
                     })?;
                 if params.get("steering").and_then(Value::as_bool) == Some(true) {
                     self.rpc
@@ -3206,8 +3464,7 @@ impl acp::Agent for PiAgent {
                     .ok_or_else(|| acp::Error::invalid_params().data("entryId is required"))?;
                 self.run_bridge_command("__pi_rollback_execute", entry_id)
                     .await?;
-                ext_response(json!({ "entryId": entry_id, "executed": true }))
-                    .map_err(acp_internal)
+                ext_response(json!({ "entryId": entry_id, "executed": true })).map_err(acp_internal)
             }
             "x.ai/session/rename" => {
                 let params: Value =
@@ -3343,6 +3600,34 @@ impl acp::Agent for PiAgent {
                 }
                 Ok(())
             }
+            // Native extension-shortcut dispatch (Pager match_key → RPC prompt →
+            // hidden /__pi_shortcut_dispatch → extension handler).
+            // Prefer RPC over keyfile; independent of remote-tui.
+            "pi/ui/shortcut_dispatch" => {
+                let params: Value =
+                    serde_json::from_str(arguments.params.get()).unwrap_or_default();
+                if let Some(key) = string(&params, &["key"]) {
+                    let key = key.trim();
+                    if !key.is_empty() {
+                        let message = bridge_command_message(SHORTCUT_DISPATCH_COMMAND, key);
+                        if let Err(error) = self
+                            .rpc
+                            .request(json!({ "type": "prompt", "message": message }))
+                            .await
+                        {
+                            tracing::warn!(%error, %key, "shortcut_dispatch RPC prompt failed");
+                            // Fallback: legacy keyfile if env/meta present.
+                            if let Err(file_err) = append_shortcut_dispatch_event(json!({
+                                "op": "dispatch",
+                                "key": key,
+                            })) {
+                                tracing::debug!(%file_err, "shortcut_dispatch keyfile fallback failed");
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
             "x.ai/queue/remove" | "x.ai/queue/clear" | "x.ai/queue/edit" | "x.ai/queue/reorder" => {
                 // Pi RPC does not expose per-item queue mutation / clearQueue.
                 // Rebroadcast the authoritative Pi mirror so the pager cannot
@@ -3438,15 +3723,18 @@ impl PiAgent {
 
     /// Fire-and-forget session recap via injected `__pi_grok_recap` extension.
     ///
-    /// Params: `{ sessionId?, auto?, model?, customInstructions? }`.
+    /// Params: `{ sessionId?, auto?, model?, models?, customInstructions? }`.
     /// Language is taken from process locale.
     async fn handle_recap_request(&self, params_raw: &str) -> Result<acp::ExtResponse, acp::Error> {
         let params: Value = serde_json::from_str(params_raw).unwrap_or_else(|_| json!({}));
         let auto = params.get("auto").and_then(Value::as_bool).unwrap_or(false);
-        let model = string(&params, &["model", "modelId", "recapModel"])
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned);
+        let models = model_chain_from_params(&params);
+        let model = models.first().cloned().or_else(|| {
+            string(&params, &["model", "modelId", "recapModel"])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
+        });
         let thinking_level = string(&params, &["thinkingLevel", "thinking_level"])
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -3471,6 +3759,7 @@ impl PiAgent {
         let payload = json!({
             "auto": auto,
             "model": model,
+            "models": models,
             "thinkingLevel": thinking_level,
             "recapMermaid": recap_mermaid,
             "terminalWidth": terminal_width,
@@ -3482,6 +3771,58 @@ impl PiAgent {
         // Await preflight so extension errors surface before we ack.
         self.run_bridge_command(RECAP_COMMAND, &args).await?;
         ext_response(json!({ "ok": true, "auto": auto })).map_err(acp_internal)
+    }
+
+    /// Blocking side question via injected `__pi_grok_btw` extension.
+    ///
+    /// Params: `{ sessionId?, question, models?[] }`.
+    /// Returns `{ result: { answer } }` matching stock Grok pager parse path.
+    async fn handle_btw_request(&self, params_raw: &str) -> Result<acp::ExtResponse, acp::Error> {
+        if !btw_extension_enabled() {
+            return Err(acp::Error::method_not_found().data(
+                "Native /btw is off. F2 → Agent → Pi /btw → on, fully quit, then restart grok-pi.",
+            ));
+        }
+        let params: Value = serde_json::from_str(params_raw).map_err(acp_internal)?;
+        let question = string(&params, &["question", "text", "q"])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| acp::Error::invalid_params().data("question is required"))?;
+        let models = model_chain_from_params(&params);
+        let thinking_level = string(&params, &["thinkingLevel", "thinking_level"])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned);
+        let request_id = format!("btw-{}", uuid::Uuid::now_v7());
+        let (tx, rx) = oneshot::channel();
+        self.state
+            .borrow_mut()
+            .pending_btw
+            .insert(request_id.clone(), tx);
+        let payload = json!({
+            "requestId": request_id.clone(),
+            "question": question,
+            "models": models,
+            "thinkingLevel": thinking_level,
+        });
+        if let Err(error) = self.run_bridge_command(BTW_COMMAND, &payload.to_string()).await {
+            self.state.borrow_mut().pending_btw.remove(&request_id);
+            return Err(error);
+        }
+        let result = match tokio::time::timeout(Duration::from_secs(120), rx).await {
+            Ok(Ok(Ok(answer))) => Ok(answer),
+            Ok(Ok(Err(error))) => Err(error),
+            Ok(Err(_)) => Err("side question channel closed".into()),
+            Err(_) => {
+                self.state.borrow_mut().pending_btw.remove(&request_id);
+                Err("side question timed out".into())
+            }
+        };
+        match result {
+            Ok(answer) => ext_response(json!({ "answer": answer })).map_err(acp_internal),
+            Err(error) => Err(acp::Error::internal_error().data(error)),
+        }
     }
 
     async fn handle_steer_message(&self, params_raw: &str) -> Result<acp::ExtResponse, acp::Error> {
@@ -3722,7 +4063,9 @@ const LABEL_TREE_COMMAND: &str = "__pi_tree_label";
 const RELOAD_COMMAND: &str = "__pi_reload";
 const SUBAGENT_CANCEL_COMMAND: &str = "__pi_grok_subagent_cancel";
 const RECAP_COMMAND: &str = "__pi_grok_recap";
+const BTW_COMMAND: &str = "__pi_grok_btw";
 const CONTEXT_BREAKDOWN_COMMAND: &str = "__pi_context_breakdown";
+const SHORTCUT_DISPATCH_COMMAND: &str = "__pi_shortcut_dispatch";
 
 fn is_bridge_command(name: &str) -> bool {
     name.eq_ignore_ascii_case(NAVIGATE_TREE_COMMAND)
@@ -3730,9 +4073,53 @@ fn is_bridge_command(name: &str) -> bool {
         || name.eq_ignore_ascii_case(RELOAD_COMMAND)
         || name.eq_ignore_ascii_case(SUBAGENT_CANCEL_COMMAND)
         || name.eq_ignore_ascii_case(RECAP_COMMAND)
+        || name.eq_ignore_ascii_case(BTW_COMMAND)
         || name.eq_ignore_ascii_case(CONTEXT_BREAKDOWN_COMMAND)
+        || name.eq_ignore_ascii_case(SHORTCUT_DISPATCH_COMMAND)
         || name.eq_ignore_ascii_case(WORKFLOW_SPAWN_COMMAND)
         || name.eq_ignore_ascii_case(WORKFLOW_CANCEL_COMMAND)
+}
+
+/// Ordered non-empty model refs from `models` array and/or legacy `model` field.
+fn model_chain_from_params(params: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |raw: &str| {
+        let t = raw.trim();
+        if !t.is_empty() && !out.iter().any(|x: &String| x == t) {
+            out.push(t.to_owned());
+        }
+    };
+    if let Some(arr) = params.get("models").and_then(Value::as_array) {
+        for item in arr {
+            if let Some(s) = item.as_str() {
+                push(s);
+            }
+        }
+    }
+    if let Some(s) = string(params, &["model", "modelId", "recapModel", "btwModel"]) {
+        push(s);
+    }
+    out
+}
+
+fn btw_extension_enabled() -> bool {
+    if let Ok(config) = xai_grok_shell::config::load_effective_config() {
+        if config
+            .get("ui")
+            .and_then(|ui| ui.get("pi_btw"))
+            .and_then(|v| v.as_bool())
+            == Some(true)
+        {
+            return true;
+        }
+    }
+    match std::env::var("PI_GROK_BTW") {
+        Ok(v) => {
+            let v = v.trim();
+            v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on")
+        }
+        Err(_) => false,
+    }
 }
 
 fn bridge_command_message(command: &str, args: &str) -> String {
@@ -3815,12 +4202,44 @@ fn command_catalog(commands: &[PiCommand]) -> Vec<acp::AvailableCommand> {
             } else {
                 command.description.clone()
             };
-            let mut available = acp::AvailableCommand::new(name.to_string(), description);
+            let mut meta = serde_json::Map::new();
             if !command.source.trim().is_empty() {
-                available = available.meta(serde_json::Map::from_iter([(
+                meta.insert(
                     "piCommandSource".to_string(),
                     Value::String(command.source.clone()),
-                )]));
+                );
+            }
+            if !command.argument_completions.is_empty() {
+                meta.insert(
+                    "piArgumentCompletions".to_string(),
+                    Value::Array(
+                        command
+                            .argument_completions
+                            .iter()
+                            .map(|item| {
+                                json!({
+                                    "value": item.value,
+                                    "label": item.label,
+                                    "description": item.description,
+                                })
+                            })
+                            .collect(),
+                    ),
+                );
+            }
+            let mut available = acp::AvailableCommand::new(name.to_string(), description);
+            if let Some(hint) = command
+                .argument_hint
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                available = available.input(Some(acp::AvailableCommandInput::Unstructured(
+                    acp::UnstructuredCommandInput::new(hint.to_string()),
+                )));
+            }
+            if !meta.is_empty() {
+                available = available.meta(meta);
             }
             Some(available)
         })
@@ -4205,6 +4624,45 @@ fn append_remote_tui_key_event(event: Value) -> Result<()> {
     Ok(())
 }
 
+/// Extension-shortcut dispatch keyfile (pi-grok-shortcut-manager watches it).
+/// Prefer instance env `PI_GROK_SHORTCUT_KEYS` (set by grok-pi). Fall back to
+/// legacy meta `tmp/pi-grok-shortcut-dispatch-active.json` for older children.
+fn append_shortcut_dispatch_event(event: Value) -> Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let keys_path = if let Ok(path) = std::env::var("PI_GROK_SHORTCUT_KEYS") {
+        if path.is_empty() {
+            None
+        } else {
+            Some(path)
+        }
+    } else {
+        None
+    };
+    let keys_path = match keys_path {
+        Some(path) => path,
+        None => {
+            let meta_path = std::env::temp_dir().join("pi-grok-shortcut-dispatch-active.json");
+            if !meta_path.exists() {
+                bail!("shortcut_dispatch keys missing (set PI_GROK_SHORTCUT_KEYS)");
+            }
+            let meta: Value = serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
+            meta.get("keysPath")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("shortcut_dispatch meta missing keysPath"))?
+                .to_string()
+        }
+    };
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&keys_path)?;
+    writeln!(file, "{}", serde_json::to_string(&event)?)?;
+    file.flush()?;
+    Ok(())
+}
+
 fn extension_tool_call_id(id: &Value) -> String {
     let id = id
         .as_str()
@@ -4219,6 +4677,169 @@ fn extension_dialog_timeout(event: &Value) -> Option<Duration> {
         .and_then(Value::as_u64)
         .filter(|milliseconds| *milliseconds > 0)
         .map(Duration::from_millis)
+}
+
+const ASK_USER_CANCEL_TEXT: &str = "User declined to answer the questions. Continue with the task using your best judgment, or ask different questions.";
+
+fn write_ask_user_response(tool_call_id: &str, payload: Value) {
+    let Some(dir) = std::env::var_os("PI_GROK_ASK_USER_DIR") else {
+        tracing::warn!(
+            tool_call_id,
+            "PI_GROK_ASK_USER_DIR unset; cannot write Q&A response"
+        );
+        return;
+    };
+    let path = std::path::Path::new(&dir).join(format!("{tool_call_id}.json"));
+    if let Err(error) = std::fs::write(&path, payload.to_string()) {
+        tracing::warn!(%error, path = %path.display(), "failed to write ask_user_question response");
+    }
+}
+
+/// Normalize model/tool args into the ACP Question array for QuestionView.
+fn normalize_ask_user_questions(args: Option<&Value>) -> Vec<Value> {
+    let Some(args) = args else {
+        return Vec::new();
+    };
+    let Some(items) = args.get("questions").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let question = item
+                .get("question")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())?;
+            let header = item
+                .get("header")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty());
+            let question_text = match header {
+                Some(header) => format!("{header}: {question}"),
+                None => question.to_string(),
+            };
+            let options = item
+                .get("options")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|option| {
+                    let label = option
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())?;
+                    let description = option
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    let preview = option.get("preview").cloned().filter(|v| !v.is_null());
+                    Some(json!({
+                        "label": label,
+                        "description": description,
+                        "preview": preview,
+                        "id": null,
+                    }))
+                })
+                .collect::<Vec<_>>();
+            if options.len() < 2 {
+                return None;
+            }
+            let multi_select = item
+                .get("multi_select")
+                .or_else(|| item.get("multiSelect"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Some(json!({
+                "question": question_text,
+                "options": options,
+                "multiSelect": multi_select,
+                "id": null,
+            }))
+        })
+        .collect()
+}
+
+/// Format Grok QuestionView outcome into the extension control payload.
+fn format_ask_user_tool_result(result: &Value) -> Value {
+    let outcome = result
+        .get("outcome")
+        .and_then(Value::as_str)
+        .unwrap_or("cancelled");
+    match outcome {
+        "accepted" => {
+            let Some(answers) = result.get("answers").and_then(Value::as_object) else {
+                return json!({
+                    "outcome": "cancelled",
+                    "message": ASK_USER_CANCEL_TEXT,
+                });
+            };
+            let annotations = result.get("annotations").and_then(Value::as_object);
+            let entries: Vec<String> = answers
+                .iter()
+                .map(|(question, selected)| {
+                    let labels = match selected {
+                        Value::String(s) => s.clone(),
+                        Value::Array(items) => items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        _ => selected.to_string(),
+                    };
+                    let mut parts = vec![format!("\"{question}\"=\"{labels}\"")];
+                    if let Some(ann) = annotations.and_then(|map| map.get(question)) {
+                        if let Some(preview) = ann.get("preview").and_then(Value::as_str) {
+                            parts.push(format!("selected preview:\n{preview}"));
+                        }
+                        if let Some(notes) = ann.get("notes").and_then(Value::as_str) {
+                            parts.push(format!("user notes: {notes}"));
+                        }
+                    }
+                    parts.join(" ")
+                })
+                .collect();
+            let message = format!(
+                "User has answered your questions: {}. You can now continue with the user's answers in mind.",
+                entries.join(", ")
+            );
+            json!({ "outcome": "accepted", "message": message })
+        }
+        "chat_about_this" | "skip_interview" => {
+            // Plan-mode partial paths: surface partial labels so the model can continue.
+            let partial = result
+                .get("partial_answers")
+                .and_then(Value::as_object)
+                .map(|map| {
+                    map.iter()
+                        .map(|(q, v)| format!("\"{q}\"=\"{}\"", v.as_str().unwrap_or_default()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .filter(|s| !s.is_empty());
+            let message = match (outcome, partial) {
+                ("chat_about_this", Some(partial)) => format!(
+                    "User wants to chat about the plan interview. Partial answers: {partial}"
+                ),
+                ("chat_about_this", None) => {
+                    "User wants to chat about the plan interview without selecting options."
+                        .to_string()
+                }
+                (_, Some(partial)) => {
+                    format!("User skipped the plan interview. Partial answers: {partial}")
+                }
+                _ => "User skipped the plan interview.".to_string(),
+            };
+            json!({ "outcome": "accepted", "message": message })
+        }
+        _ => json!({
+            "outcome": "cancelled",
+            "message": ASK_USER_CANCEL_TEXT,
+        }),
+    }
 }
 
 fn selected_answer(value: &Value) -> Option<String> {
@@ -4280,9 +4901,22 @@ fn acp_internal(error: impl std::fmt::Display) -> acp::Error {
     acp::Error::internal_error().data(error.to_string())
 }
 
+/// Wall-clock UTC ms for ACP `_meta.agentTimestampMs` / stream anchors.
+fn utc_now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utc_now_ms_is_positive() {
+        assert!(utc_now_ms() > 0);
+    }
 
     #[test]
     fn pending_subagent_bridge_defers_only_the_target_session_replay() {
@@ -4488,31 +5122,37 @@ mod tests {
                 name: "/review".into(),
                 description: "Review changes".into(),
                 source: "extension".into(),
+                ..Default::default()
             },
             PiCommand {
                 name: "REVIEW".into(),
                 description: "Duplicate".into(),
                 source: "prompt".into(),
+                ..Default::default()
             },
             PiCommand {
                 name: "brief".into(),
                 description: String::new(),
                 source: "skill".into(),
+                ..Default::default()
             },
             PiCommand {
                 name: NAVIGATE_TREE_COMMAND.into(),
                 description: "internal".into(),
                 source: "extension".into(),
+                ..Default::default()
             },
             PiCommand {
                 name: LABEL_TREE_COMMAND.into(),
                 description: "internal".into(),
                 source: "extension".into(),
+                ..Default::default()
             },
             PiCommand {
                 name: RELOAD_COMMAND.into(),
                 description: "internal".into(),
                 source: "extension".into(),
+                ..Default::default()
             },
         ];
         let serialized = serde_json::to_value(command_catalog(&commands)).unwrap();
@@ -4526,6 +5166,42 @@ mod tests {
         assert!(!text.contains(NAVIGATE_TREE_COMMAND));
         assert!(!text.contains(LABEL_TREE_COMMAND));
         assert!(!text.contains(RELOAD_COMMAND));
+    }
+
+    #[test]
+    fn command_catalog_carries_pi_argument_completions_in_meta() {
+        let commands = vec![PiCommand {
+            name: "gapp".into(),
+            description: "Manage Glimpse-APPs".into(),
+            source: "extension".into(),
+            argument_hint: Some("<list|open|...>".into()),
+            argument_completions: vec![crate::model::PiArgumentCompletion {
+                value: "list".into(),
+                label: "List apps".into(),
+                description: String::new(),
+            }],
+        }];
+        let catalog = command_catalog(&commands);
+        // Workflows may inject extra slash entries when enabled; assert the gapp row.
+        let cmd = catalog
+            .iter()
+            .find(|c| c.name == "gapp")
+            .expect("gapp command present");
+        match cmd.input.as_ref() {
+            Some(acp::AvailableCommandInput::Unstructured(u)) => {
+                assert_eq!(u.hint, "<list|open|...>");
+            }
+            other => panic!("expected unstructured input, got {other:?}"),
+        }
+        let comps = cmd
+            .meta
+            .as_ref()
+            .and_then(|m| m.get("piArgumentCompletions"))
+            .and_then(|v| v.as_array())
+            .expect("piArgumentCompletions meta");
+        assert_eq!(comps.len(), 1);
+        assert_eq!(comps[0]["value"], "list");
+        assert_eq!(comps[0]["label"], "List apps");
     }
 
     #[test]
@@ -4554,6 +5230,44 @@ mod tests {
         });
         assert_eq!(extension_answer("select", &result).as_deref(), Some("Yes"));
         assert_eq!(extension_answer("confirm", &result).as_deref(), Some("Yes"));
+    }
+
+    #[test]
+    fn normalize_ask_user_questions_maps_multi_select_and_header() {
+        let args = json!({
+            "questions": [{
+                "header": "Auth",
+                "question": "Which method?",
+                "multi_select": true,
+                "options": [
+                    { "label": "JWT (Recommended)", "description": "stateless" },
+                    { "label": "Session", "description": "cookie" }
+                ]
+            }]
+        });
+        let questions = normalize_ask_user_questions(Some(&args));
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0]["question"], "Auth: Which method?");
+        assert_eq!(questions[0]["multiSelect"], true);
+        assert_eq!(questions[0]["options"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn format_ask_user_tool_result_accepted_and_cancel() {
+        let accepted = format_ask_user_tool_result(&json!({
+            "outcome": "accepted",
+            "answers": { "Which DB?": ["Postgres"] },
+            "annotations": { "Which DB?": { "notes": "managed" } }
+        }));
+        assert_eq!(accepted["outcome"], "accepted");
+        let message = accepted["message"].as_str().unwrap();
+        assert!(message.contains("Which DB?"));
+        assert!(message.contains("Postgres"));
+        assert!(message.contains("user notes: managed"));
+
+        let cancelled = format_ask_user_tool_result(&json!({ "outcome": "cancelled" }));
+        assert_eq!(cancelled["outcome"], "cancelled");
+        assert!(cancelled["message"].as_str().unwrap().contains("declined"));
     }
 
     #[test]

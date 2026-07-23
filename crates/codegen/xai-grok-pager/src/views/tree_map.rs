@@ -148,11 +148,7 @@ impl TreeMapState {
 
             // Collect user messages.
             if node.entry_type == "message" && node.role == "user" {
-                let text = node
-                    .preview
-                    .replace('\n', " ")
-                    .trim()
-                    .to_string();
+                let text = node.preview.replace('\n', " ").trim().to_string();
                 if !text.is_empty() {
                     rows.push(TreeMapRow {
                         node_index: idx,
@@ -283,12 +279,7 @@ fn build_active_path_set(
 // ============================================================================
 
 /// Render the tree map modal content into `area`.
-pub fn render_tree_map(
-    buf: &mut Buffer,
-    area: Rect,
-    state: &mut TreeMapState,
-    theme: &Theme,
-) {
+pub fn render_tree_map(buf: &mut Buffer, area: Rect, state: &mut TreeMapState, theme: &Theme) {
     if area.width < 10 || area.height < 4 {
         state.list_rect = None;
         return;
@@ -414,7 +405,11 @@ fn build_row_line(row: &TreeMapRow, is_selected: bool, width: u16, theme: &Theme
             spans.push(Span::styled("│ ", Style::default().fg(theme.gray_dim)));
         }
         // Connector
-        let connector = if row.is_last_sibling { "└─" } else { "├─" };
+        let connector = if row.is_last_sibling {
+            "└─"
+        } else {
+            "├─"
+        };
         let connector_color = if row.on_active_path {
             theme.accent_user
         } else {
@@ -449,7 +444,10 @@ fn build_row_line(row: &TreeMapRow, is_selected: bool, width: u16, theme: &Theme
 
     // Current marker
     if row.is_current {
-        spans.push(Span::styled(" ●", Style::default().fg(theme.accent_success)));
+        spans.push(Span::styled(
+            " ●",
+            Style::default().fg(theme.accent_success),
+        ));
     }
 
     Line::from(spans)

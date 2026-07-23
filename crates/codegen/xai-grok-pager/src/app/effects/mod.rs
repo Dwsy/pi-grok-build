@@ -40,7 +40,6 @@ pub(crate) fn execute(
     progress_tx: &tokio::sync::mpsc::UnboundedSender<RestoreProgressMsg>,
 ) -> (bool, EffectMeta) {
     let mut meta = EffectMeta::default();
-    let effect_is_send_now = matches!(effect, Effect::SendPromptNow { .. });
     match effect {
         Effect::RemoteTuiInput { id, data } => {
             let tx = acp_tx.clone();
@@ -70,6 +69,22 @@ pub(crate) fn execute(
                 );
                 if let Err(e) = acp_send(notification, &tx).await {
                     tracing::warn!(%e, "Failed to send remote_tui cancel");
+                }
+                TaskResult::CancelComplete
+            });
+        }
+        Effect::ShortcutDispatch { key } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let params = serde_json::json!({ "key": key });
+                let notification = acp::ExtNotification::new(
+                    "pi/ui/shortcut_dispatch",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize shortcut dispatch")
+                        .into(),
+                );
+                if let Err(e) = acp_send(notification, &tx).await {
+                    tracing::warn!(%e, "Failed to send shortcut dispatch");
                 }
                 TaskResult::CancelComplete
             });
@@ -1621,9 +1636,7 @@ pub(crate) fn execute(
                     }
                 });
         }
-        Effect::SendPromptBlocks { agent_id, session_id, blocks, prompt_id }
-        | Effect::SendPromptNow { agent_id, session_id, blocks, prompt_id } => {
-            let send_now = effect_is_send_now;
+        Effect::SendPromptBlocks { agent_id, session_id, blocks, prompt_id } => {
             let tx = acp_tx.clone();
             let screen_mode = session_flags.screen_mode_label;
             let is_api_key_auth = session_flags.is_api_key_auth;
@@ -1634,17 +1647,13 @@ pub(crate) fn execute(
                         Some(&session_id.0),
                         Some(
                             serde_json::json!(
-                                { "kind" : if send_now { "send_now" } else { "blocks" },
+                                { "kind" : "blocks",
                                 "block_count" : blocks.len(), "prompt_id" : prompt_id, }
                             ),
                         ),
                     );
                     let send_start = std::time::Instant::now();
-                    let mut meta = prompt_request_meta(&prompt_id, screen_mode);
-                    if send_now && let Some(map) = meta.as_object_mut() {
-                        map.insert("sendNow".into(), serde_json::Value::Bool(true));
-                    }
-                    let requeue_blocks = send_now.then(|| blocks.clone());
+                    let meta = prompt_request_meta(&prompt_id, screen_mode);
                     let req = acp::PromptRequest::new(session_id.clone(), blocks)
                         .meta(meta.as_object().cloned());
                     let result = acp_send(req, &tx).await;
@@ -1654,22 +1663,13 @@ pub(crate) fn execute(
                         Some(&session_id.0),
                         Some(
                             serde_json::json!(
-                                { "kind" : if send_now { "send_now" } else { "blocks" },
+                                { "kind" : "blocks",
                                 "elapsed_ms" : send_elapsed_ms, "ok" : result.is_ok(),
                                 "prompt_id" : prompt_id, }
                             ),
                         ),
                     );
                     log_prompt_result(&session_id, &result);
-                    if let (Some(blocks), Err(e)) = (requeue_blocks, &result) {
-                        return TaskResult::SendPromptNowFailed {
-                            agent_id,
-                            session_id,
-                            prompt_id,
-                            error: format_acp_error(e, is_api_key_auth),
-                            blocks,
-                        };
-                    }
                     let http_status = result
                         .as_ref()
                         .err()
@@ -4065,7 +4065,7 @@ pub(crate) fn execute(
                     }
                 });
         }
-        Effect::SendBtw { agent_id, session_id, question, minimal_request_id } => {
+        Effect::SendBtw { agent_id, session_id, question, models, minimal_request_id } => {
             let tx = acp_tx.clone();
             tasks
                 .spawn(async move {
@@ -4073,8 +4073,11 @@ pub(crate) fn execute(
                         "x.ai/btw",
                         serde_json::value::to_raw_value(
                                 &serde_json::json!(
-                                    { "sessionId" : session_id.0.to_string(), "question" :
-                                    question, }
+                                    {
+                                        "sessionId": session_id.0.to_string(),
+                                        "question": question,
+                                        "models": models,
+                                    }
                                 ),
                             )
                             .expect("serialize btw params")
@@ -4113,7 +4116,7 @@ pub(crate) fn execute(
         Effect::SendRecap {
             session_id,
             auto,
-            model,
+            models,
             thinking_level,
             recap_mermaid,
             terminal_width,
@@ -4125,8 +4128,15 @@ pub(crate) fn execute(
                     let mut params = serde_json::json!({
                         "sessionId": session_id.0.to_string(),
                         "auto": auto,
+                        "models": models,
                     });
-                    if let Some(model) = model.filter(|m| !m.trim().is_empty()) {
+                    if let Some(model) = params
+                        .get("models")
+                        .and_then(|m| m.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned)
+                    {
                         params["model"] = serde_json::Value::String(model);
                     }
                     if let Some(thinking_level) =
@@ -4645,7 +4655,11 @@ pub(crate) fn execute(
                                                     .and_then(|v| v.as_str())
                                                     .unwrap_or_default()
                                                     .to_string(),
-                                                updated_at: String::new(),
+                                                updated_at: hit
+                                                    .get("updatedAt")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or_default()
+                                                    .to_string(),
                                                 score: hit
                                                     .get("score")
                                                     .and_then(|v| v.as_f64())
@@ -4680,6 +4694,79 @@ pub(crate) fn execute(
                     TaskResult::DeepSearchResults { results, seq }
                 });
         }
+        Effect::PiSessionPreview {
+            session_id,
+            session_path,
+            generation,
+        } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let params = serde_json::json!({
+                    "sessionId": session_id,
+                    "sessionPath": session_path,
+                    "limit": 200,
+                });
+                let request = acp::ExtRequest::new(
+                    "pi/session/messages",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize pi session messages params")
+                        .into(),
+                );
+                let mut messages = Vec::new();
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    acp_send(request, &tx),
+                )
+                .await
+                {
+                    Ok(Ok(resp)) => {
+                        let wrapper: serde_json::Value =
+                            serde_json::from_str(resp.0.get()).unwrap_or_default();
+                        let payload = wrapper.get("result").unwrap_or(&wrapper);
+                        if let Some(arr) = payload.get("messages").and_then(|v| v.as_array()) {
+                            use crate::views::modal::SessionPreviewMessage;
+                            for item in arr {
+                                // Prefer structured {role, content}; tolerate legacy plain strings.
+                                if let Some(obj) = item.as_object() {
+                                    let role = obj
+                                        .get("role")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("assistant")
+                                        .to_string();
+                                    let content = obj
+                                        .get("content")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    if !content.trim().is_empty() {
+                                        messages.push(SessionPreviewMessage { role, content });
+                                    }
+                                } else if let Some(s) = item.as_str() {
+                                    if !s.trim().is_empty() {
+                                        messages.push(SessionPreviewMessage {
+                                            role: "assistant".into(),
+                                            content: s.to_string(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!("pi session preview failed: {e}");
+                    }
+                    Err(_) => {
+                        tracing::warn!("pi session preview timed out");
+                    }
+                }
+                TaskResult::SessionPreviewLoaded {
+                    session_id,
+                    messages,
+                    generation,
+                }
+            });
+        }
+
         Effect::ForkSession {
             agent_id,
             parent_session_id,

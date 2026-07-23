@@ -85,9 +85,14 @@ pub struct PsmSearchHit {
     pub snippet: Option<String>,
 }
 
-/// Full-text search across PSM's FTS5 index (sessions_fts + message_fts).
-/// Returns ranked results with snippets. Falls back to `None` if PSM is
-/// unavailable or the query is empty.
+/// Search sessions via PSM SQLite — mirrors PSM Rust `full_text_search` +
+/// resume-x `searchSessions` (LIKE fallback).
+///
+/// Order:
+/// 1. `message_entries` ⨝ `message_fts` on `rowid` (PSM `search_message_hits_for_mode`)
+/// 2. On FTS error / empty → resume-x LIKE on sessions + message_entries
+///
+/// Returns `None` only when PSM is not listening. Empty query → empty list.
 pub fn full_text_search(
     cwd: Option<&Path>,
     query: &str,
@@ -104,6 +109,86 @@ pub fn full_text_search(
     full_text_search_db(&db_path, cwd, query, limit).ok()
 }
 
+/// One message row for session preview (resume-x `loadSessionMessages` shape).
+#[derive(Debug, Clone)]
+pub struct PsmPreviewMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// Load chronological messages for a session preview from PSM SQLite.
+/// Matches resume-x `loadSessionMessages` (`message_entries` by `session_path`).
+pub fn load_session_messages(session_path: &str, limit: usize) -> Option<Vec<PsmPreviewMessage>> {
+    if session_path.trim().is_empty() {
+        return Some(Vec::new());
+    }
+    if !psm_server_is_listening(DEFAULT_PSM_WS_PORT) {
+        return None;
+    }
+    let db_path = default_database_path()?;
+    load_session_messages_db(&db_path, session_path, limit).ok()
+}
+
+/// Resolve a session's JSONL path from its id when the picker entry lacks path.
+pub fn resolve_session_path(session_id: &str) -> Option<String> {
+    if session_id.trim().is_empty() {
+        return None;
+    }
+    if !psm_server_is_listening(DEFAULT_PSM_WS_PORT) {
+        return None;
+    }
+    let db_path = default_database_path()?;
+    let connection = Connection::open_with_flags(
+        &db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    connection.busy_timeout(BUSY_TIMEOUT).ok()?;
+    connection
+        .query_row(
+            "SELECT path FROM sessions WHERE id = ?1 LIMIT 1",
+            params![session_id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+}
+
+fn load_session_messages_db(
+    db_path: &Path,
+    session_path: &str,
+    limit: usize,
+) -> rusqlite::Result<Vec<PsmPreviewMessage>> {
+    let connection = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    connection.busy_timeout(BUSY_TIMEOUT)?;
+    connection.execute_batch("PRAGMA query_only = ON;")?;
+    // resume-x: SELECT role, source_type, content, timestamp FROM message_entries
+    let mut stmt = connection.prepare(
+        "SELECT role, content FROM message_entries
+          WHERE session_path = ?1
+          ORDER BY timestamp ASC
+          LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![session_path, limit as i64], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (role, content) = row?;
+        let body = content.trim();
+        if body.is_empty() {
+            continue;
+        }
+        out.push(PsmPreviewMessage {
+            role,
+            content: body.to_string(),
+        });
+    }
+    Ok(out)
+}
+
 fn full_text_search_db(
     db_path: &Path,
     cwd: Option<&Path>,
@@ -116,160 +201,264 @@ fn full_text_search_db(
     )?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
     connection.execute_batch("PRAGMA query_only = ON;")?;
-
-    // Use nullable cwd parameter: (?2 IS NULL OR s.cwd = ?2)
     let cwd_val: Option<String> = cwd.map(|c| c.to_string_lossy().to_string());
 
-    // Try the strict AND query first; if it finds nothing, fall back to an
-    // OR query so multi-word searches still surface partial matches
-    // (mirrors codex's resume-picker AND→OR fallback).
-    let and_query = build_fts_query(query);
-    if and_query.is_empty() {
-        return Ok(Vec::new());
+    // PSM default smart mode for English ≈ MatchMode::Any (OR terms).
+    let fts_query = build_fts_query_any(query);
+    if !fts_query.is_empty() {
+        match run_psm_message_fts(&connection, &fts_query, cwd_val.as_deref(), limit) {
+            Ok(hits) if !hits.is_empty() => return Ok(hits),
+            Ok(_) => {}
+            Err(err) => {
+                // Corrupt external-content FTS is common: "missing row N from content table".
+                tracing::warn!(error = %err, "PSM message_fts failed; resume-x LIKE fallback");
+            }
+        }
     }
-    let hits = run_fts_search(&connection, &and_query, cwd_val.as_deref(), limit)?;
-    if !hits.is_empty() {
-        return Ok(hits);
-    }
-    let or_query = build_fts_query_or(query);
-    if or_query == and_query {
-        return Ok(hits);
-    }
-    run_fts_search(&connection, &or_query, cwd_val.as_deref(), limit)
+
+    // resume-x searchSessions — always works against base tables.
+    run_resume_x_like_search(&connection, query, cwd_val.as_deref(), limit)
 }
 
-/// Execute one FTS5 MATCH pass across `sessions_fts` (title + content) and,
-/// if needed to fill `limit`, `message_fts` (deeper message bodies).
-fn run_fts_search(
+/// PSM `search_message_hits_for_mode` core join:
+/// `message_entries m JOIN message_fts ON m.rowid = message_fts.rowid`
+/// Content/snippet always come from `message_entries`, never from FTS content=
+/// columns (avoids orphan-rowid blowups when only ranking is needed).
+fn run_psm_message_fts(
     connection: &Connection,
     fts_query: &str,
     cwd_val: Option<&str>,
     limit: usize,
 ) -> rusqlite::Result<Vec<PsmSearchHit>> {
-    // Search sessions_fts first (title + content level).
     let mut hits: Vec<PsmSearchHit> = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen = std::collections::HashSet::new();
+    // Over-fetch candidates then dedupe per session (PSM uses window functions;
+    // we keep one best hit per session_id).
+    let fetch = (limit as i64).saturating_mul(4).max(limit as i64);
 
-    // Query sessions_fts: matches on name, first_message, user/assistant text.
-    let session_sql =
-        "SELECT s.id, s.cwd, COALESCE(s.name, s.first_message, ''), s.modified,
-                bm25(sessions_fts, 0, 10.0, 5.0, 5.0, 1.0, 1.0) AS rank,
-                snippet(sessions_fts, 4, '[', ']', ' … ', 24) AS snip
-           FROM sessions_fts
-           JOIN sessions s ON s.rowid = sessions_fts.rowid
-          WHERE sessions_fts MATCH ?1 AND (?2 IS NULL OR s.cwd = ?2)
-          ORDER BY rank ASC, s.modified DESC
+    let sql = "SELECT s.id, s.cwd,
+                COALESCE(s.name, s.first_message, ''),
+                s.modified,
+                -message_fts.rank AS score,
+                m.content
+           FROM message_entries m
+           JOIN message_fts ON m.rowid = message_fts.rowid
+           JOIN sessions s ON s.path = m.session_path
+          WHERE message_fts MATCH ?1
+            AND (?2 IS NULL OR s.cwd = ?2)
+          ORDER BY score DESC, julianday(m.timestamp) DESC
           LIMIT ?3";
 
-    let mut stmt = connection.prepare(session_sql)?;
-    let rows = stmt.query_map(params![fts_query, cwd_val, limit as i64], |row| {
+    let mut stmt = connection.prepare(sql)?;
+    let rows = stmt.query_map(params![fts_query, cwd_val, fetch], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
-            row.get::<_, f64>(4)?,
-            row.get::<_, Option<String>>(5)?,
+            row.get::<_, f64>(4).unwrap_or(0.0),
+            row.get::<_, String>(5)?,
         ))
     })?;
 
     for row in rows {
-        let (id, cwd_str, summary, modified, rank, snip) = row?;
-        seen_ids.insert(id.clone());
-        let mut matched_fields = Vec::new();
-        if let Some(ref s) = snip {
-            if s.contains('[') {
-                matched_fields.push("content".to_string());
-            }
-        }
-        if matched_fields.is_empty() {
-            matched_fields.push("title".to_string());
+        let (id, cwd_str, summary, modified, score, content) = row?;
+        if !seen.insert(id.clone()) {
+            continue;
         }
         hits.push(PsmSearchHit {
             session_id: id,
             cwd: cwd_str,
-            summary,
-            updated_at: modified,
-            score: -(rank as f32),
-            matched_fields,
-            snippet: snip.filter(|s| !s.is_empty()),
-        });
-    }
-
-    // Supplement with message_fts for deeper content matches.
-    if hits.len() < limit {
-        let remaining = limit - hits.len();
-        let msg_sql =
-            "SELECT s.id, s.cwd, COALESCE(s.name, s.first_message, ''), s.modified,
-                    bm25(message_fts, 0, 0, 0, 1.0) AS rank,
-                    snippet(message_fts, 3, '[', ']', ' … ', 24) AS snip
-               FROM message_fts
-               JOIN sessions s ON s.path = message_fts.session_path
-              WHERE message_fts MATCH ?1 AND (?2 IS NULL OR s.cwd = ?2)
-                AND s.id NOT IN (SELECT value FROM json_each(?4))
-              ORDER BY rank ASC, s.modified DESC
-              LIMIT ?3";
-        let seen_json = serde_json::to_string(&seen_ids.iter().collect::<Vec<_>>())
-            .unwrap_or_else(|_| "[]".to_string());
-        let mut msg_stmt = connection.prepare(msg_sql)?;
-        let msg_rows = msg_stmt.query_map(
-            params![fts_query, cwd_val, remaining as i64, seen_json],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, f64>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                ))
+            summary: if summary.is_empty() {
+                snippet_around(&content, None).unwrap_or_else(|| "(no content)".to_string())
+            } else {
+                summary
             },
-        )?;
-        for row in msg_rows {
-            let (id, cwd_str, summary, modified, rank, snip) = row?;
+            updated_at: modified,
+            score: score as f32,
+            matched_fields: vec!["content".to_string()],
+            snippet: snippet_around(&content, None),
+        });
+        if hits.len() >= limit {
+            break;
+        }
+    }
+    Ok(hits)
+}
+
+/// resume-x `searchSessions` — LIKE on sessions meta + message_entries body.
+fn run_resume_x_like_search(
+    connection: &Connection,
+    query: &str,
+    cwd_val: Option<&str>,
+    limit: usize,
+) -> rusqlite::Result<Vec<PsmSearchHit>> {
+    let mut hits: Vec<PsmSearchHit> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let q = format!("%{}%", query.to_lowercase());
+    let needle = query.to_lowercase();
+
+    // 1) Session name / first / last message
+    {
+        let sql = "SELECT s.id, s.cwd,
+                    COALESCE(NULLIF(s.name, ''), NULLIF(s.first_message, ''),
+                             NULLIF(s.last_message, ''), '(no content)'),
+                    s.modified,
+                    CASE WHEN lower(COALESCE(s.name, '')) LIKE ?1 THEN 'name' ELSE 'message' END
+               FROM sessions s
+              WHERE (lower(COALESCE(s.name, '')) LIKE ?1
+                 OR lower(COALESCE(s.first_message, '')) LIKE ?1
+                 OR lower(COALESCE(s.last_message, '')) LIKE ?1)
+                AND (?2 IS NULL OR s.cwd = ?2)
+              ORDER BY s.modified DESC
+              LIMIT ?3";
+        let mut stmt = connection.prepare(sql)?;
+        let rows = stmt.query_map(params![q, cwd_val, limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, cwd_str, summary, modified, kind) = row?;
+            if !seen.insert(id.clone()) {
+                continue;
+            }
             hits.push(PsmSearchHit {
                 session_id: id,
                 cwd: cwd_str,
                 summary,
                 updated_at: modified,
-                score: -(rank as f32),
-                matched_fields: vec!["content".to_string()],
-                snippet: snip.filter(|s| !s.is_empty()),
+                score: 1.0,
+                matched_fields: vec![kind],
+                snippet: None,
             });
+            if hits.len() >= limit {
+                return Ok(hits);
+            }
+        }
+    }
+
+    // 2) Message body
+    {
+        let remaining = limit - hits.len();
+        let fetch = (remaining as i64).saturating_mul(3).max(remaining as i64);
+        let sql = "SELECT s.id, s.cwd,
+                    COALESCE(NULLIF(s.name, ''), '(no content)'),
+                    s.modified,
+                    me.content
+               FROM message_entries me
+               JOIN sessions s ON s.path = me.session_path
+              WHERE lower(me.content) LIKE ?1
+                AND (?2 IS NULL OR s.cwd = ?2)
+              ORDER BY me.timestamp DESC
+              LIMIT ?3";
+        let mut stmt = connection.prepare(sql)?;
+        let rows = stmt.query_map(params![q, cwd_val, fetch], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, cwd_str, summary, modified, content) = row?;
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let snip = snippet_around(&content, Some(&needle));
+            hits.push(PsmSearchHit {
+                session_id: id,
+                cwd: cwd_str,
+                summary: if summary == "(no content)" {
+                    snip.clone().unwrap_or(summary)
+                } else {
+                    summary
+                },
+                updated_at: modified,
+                score: 0.5,
+                matched_fields: vec!["content".to_string()],
+                snippet: snip,
+            });
+            if hits.len() >= limit {
+                break;
+            }
         }
     }
 
     Ok(hits)
 }
 
-/// Build a safe FTS5 match expression from user input.
-///
-/// Each token is quoted and given a `*` prefix-match suffix so partial
-/// words match (e.g. `resum` → `"resum"*` matches "resume", "resumed").
-/// Tokens are joined with the given operator (`AND` or `OR`).
-fn build_fts_query_with(input: &str, op: &str) -> String {
-    input
+/// resume-x snippet: ±40 chars around first match (or head of content).
+fn snippet_around(content: &str, needle: Option<&str>) -> Option<String> {
+    let flat = content.replace('\n', " ");
+    let flat = flat.trim();
+    if flat.is_empty() {
+        return None;
+    }
+    if let Some(n) = needle {
+        if n.is_empty() {
+            return Some(flat.chars().take(80).collect());
+        }
+        let lower = flat.to_lowercase();
+        if let Some(idx) = lower.find(n) {
+            let start = idx.saturating_sub(40);
+            let end = (idx + n.len() + 40).min(flat.len());
+            // Byte-safe: walk char boundaries
+            let start = floor_char_boundary(flat, start);
+            let end = floor_char_boundary(flat, end);
+            let mut snip = flat[start..end].to_string();
+            if start > 0 {
+                snip = format!("...{snip}");
+            }
+            if end < flat.len() {
+                snip = format!("{snip}...");
+            }
+            return Some(snip);
+        }
+    }
+    let mut snip: String = flat.chars().take(80).collect();
+    if flat.chars().count() > 80 {
+        snip.push_str("...");
+    }
+    Some(snip)
+}
+
+fn floor_char_boundary(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// PSM MatchMode::Any style: whitespace terms joined with OR.
+/// Tokens are FTS-escaped (double quotes doubled). No bogus `"token" *` form.
+fn build_fts_query_any(input: &str) -> String {
+    let terms: Vec<String> = input
         .split_whitespace()
         .filter(|t| !t.is_empty())
         .map(|token| {
-            // Escape double quotes inside the token, then wrap in quotes
-            // with a trailing `*` for prefix matching.
             let escaped = token.replace('"', "\"\"");
-            format!("\"{escaped}\" *")
+            // Bare term; FTS5 unicode61 tokenizes. Quote only if needed for safety.
+            if token
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            {
+                token.to_string()
+            } else {
+                format!("\"{escaped}\"")
+            }
         })
-        .collect::<Vec<_>>()
-        .join(&format!(" {op} "))
-}
-
-/// Build the primary (AND-joined) FTS5 match expression.
-fn build_fts_query(input: &str) -> String {
-    build_fts_query_with(input, "AND")
-}
-
-/// Build the fallback (OR-joined) FTS5 match expression.
-/// Used when the AND query returns zero results.
-fn build_fts_query_or(input: &str) -> String {
-    build_fts_query_with(input, "OR")
+        .collect();
+    terms.join(" OR ")
 }
 
 fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PiSessionInfo> {
@@ -299,4 +488,159 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PiSessionInfo> 
         total_cost: row.get(13)?,
         parent_session_path: row.get(14)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(tag: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "psm-search-{tag}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("sessions.db");
+        (dir, db)
+    }
+
+    fn seed_psm_style(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, cwd TEXT NOT NULL,
+                name TEXT, created TEXT NOT NULL, modified TEXT NOT NULL,
+                file_modified TEXT NOT NULL, message_count INTEGER NOT NULL,
+                first_message TEXT, user_messages_text TEXT, assistant_messages_text TEXT,
+                last_message TEXT, last_message_role TEXT, cached_at TEXT NOT NULL,
+                access_count INTEGER DEFAULT 0, last_accessed TEXT,
+                parent_session_path TEXT, model TEXT
+            );
+            CREATE TABLE message_entries (
+                id TEXT PRIMARY KEY, entry_id TEXT NOT NULL, session_path TEXT NOT NULL,
+                role TEXT NOT NULL, source_type TEXT NOT NULL, content TEXT NOT NULL,
+                timestamp TEXT NOT NULL, search_text TEXT NOT NULL DEFAULT '', label TEXT
+            );
+            CREATE VIRTUAL TABLE message_fts USING fts5(
+                session_path UNINDEXED, role UNINDEXED, source_type UNINDEXED, search_text,
+                content='message_entries', content_rowid='rowid', tokenize='unicode61'
+            );
+            INSERT INTO sessions VALUES (
+                'sess-1', '/tmp/sess-1.jsonl', '/proj', 'Demo',
+                '2026-01-01', '2026-01-02', '2026-01-02', 1,
+                'hello world', '', '', '', '',
+                '2026-01-02', 0, NULL, NULL, NULL
+            );
+            INSERT INTO message_entries VALUES (
+                'm1', 'e1', '/tmp/sess-1.jsonl', 'user', 'user',
+                'hello world about resume picker', '2026-01-01T00:00:00Z',
+                'hello world about resume picker', NULL
+            );
+            INSERT INTO message_fts(message_fts) VALUES('rebuild');
+            "#,
+        )
+        .unwrap();
+    }
+
+    fn seed_like_only(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, cwd TEXT NOT NULL,
+                name TEXT, created TEXT NOT NULL, modified TEXT NOT NULL,
+                file_modified TEXT NOT NULL, message_count INTEGER NOT NULL,
+                first_message TEXT, user_messages_text TEXT, assistant_messages_text TEXT,
+                last_message TEXT, last_message_role TEXT, cached_at TEXT NOT NULL,
+                access_count INTEGER DEFAULT 0, last_accessed TEXT,
+                parent_session_path TEXT, model TEXT
+            );
+            CREATE TABLE message_entries (
+                id TEXT PRIMARY KEY, entry_id TEXT NOT NULL, session_path TEXT NOT NULL,
+                role TEXT NOT NULL, source_type TEXT NOT NULL, content TEXT NOT NULL,
+                timestamp TEXT NOT NULL, search_text TEXT NOT NULL DEFAULT '', label TEXT
+            );
+            INSERT INTO sessions VALUES (
+                'sess-like', '/tmp/like.jsonl', '/proj', 'NamedSession',
+                '2026-01-01', '2026-01-02', '2026-01-02', 1,
+                'first', '', '', 'last', '',
+                '2026-01-02', 0, NULL, NULL, NULL
+            );
+            INSERT INTO message_entries VALUES (
+                'm1', 'e1', '/tmp/like.jsonl', 'user', 'user',
+                'unique-widget-xyz in body', '2026-01-01T00:00:00Z',
+                'unique-widget-xyz in body', NULL
+            );
+            "#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn fts_query_or_joins_terms() {
+        assert_eq!(build_fts_query_any("resume picker"), "resume OR picker");
+    }
+
+    #[test]
+    fn psm_rowid_join_fts_finds_hits() {
+        let (dir, path) = temp_path("fts");
+        seed_psm_style(&path);
+        let hits = full_text_search_db(&path, None, "resume", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "sess-1");
+        assert!(
+            hits[0]
+                .snippet
+                .as_ref()
+                .is_some_and(|s| s.contains("resume"))
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn resume_x_like_when_no_fts_table() {
+        let (dir, path) = temp_path("like");
+        seed_like_only(&path);
+        let hits = full_text_search_db(&path, None, "unique-widget", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "sess-like");
+        let title = full_text_search_db(&path, None, "NamedSession", 10).unwrap();
+        assert_eq!(title.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_messages_formats_roles() {
+        let (dir, path) = temp_path("msg");
+        seed_like_only(&path);
+        let msgs = load_session_messages_db(&path, "/tmp/like.jsonl", 50).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, "user");
+        assert!(msgs[0].content.contains("unique-widget"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn live_db_like_or_fts_smoke() {
+        let home = std::env::var_os("HOME").expect("HOME");
+        let path = PathBuf::from(home).join(".pi/agent/sessions/sessions.db");
+        if !path.exists() {
+            return;
+        }
+        match full_text_search_db(&path, None, "the", 5) {
+            Ok(hits) => {
+                eprintln!("live hits: {}", hits.len());
+                for h in hits.iter().take(3) {
+                    eprintln!("  {} | {:?}", h.session_id, h.snippet);
+                }
+            }
+            Err(e) => panic!("search should not fail hard: {e}"),
+        }
+    }
 }

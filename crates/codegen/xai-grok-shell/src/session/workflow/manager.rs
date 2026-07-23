@@ -7,8 +7,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use xai_workflow::{Journal, WorkflowOutcome, WorkflowRunParams};
 
-use super::backend::{GrokSubagentBackend, WorkflowAgentBackend};
 use super::backend::HostDrainOutcome;
+use super::backend::{GrokSubagentBackend, WorkflowAgentBackend};
 use super::host_service::{TelemetryHook, WorkflowHostParams, spawn_workflow_host_service};
 use super::notify::WorkflowNotifySender;
 use super::registry::{ResolvedWorkflow, WorkflowSource};
@@ -403,9 +403,11 @@ impl WorkflowManager {
             tracker.clone(),
             store,
             notify,
-            Arc::new(crate::session::workflow::backend::MockWorkflowAgentBackend {
-                output: Arc::from("mock"),
-            }),
+            Arc::new(
+                crate::session::workflow::backend::MockWorkflowAgentBackend {
+                    output: Arc::from("mock"),
+                },
+            ),
             Arc::new(|_, _, _| {}),
             mpsc::unbounded_channel().0,
             std::collections::HashMap::new(),
@@ -738,9 +740,11 @@ mod tests {
             tracker,
             store,
             notify,
-            Arc::new(crate::session::workflow::backend::MockWorkflowAgentBackend {
-                output: Arc::from("from-mock-backend"),
-            }),
+            Arc::new(
+                crate::session::workflow::backend::MockWorkflowAgentBackend {
+                    output: Arc::from("from-mock-backend"),
+                },
+            ),
             Arc::new(|_, _, _| {}),
             mpsc::unbounded_channel().0,
             HashMap::new(),

@@ -15,11 +15,11 @@ pub use backend::{
 };
 pub use external::{ExternalWorkflowRuntime, ExternalWorkflowRuntimeConfig};
 pub use manager::LaunchError;
-pub use notify::{build_workflow_updated, workflow_session_notification_json};
-pub use tracker::WorkflowRunState;
 pub use notify::WorkflowNotifySender;
-pub use registry::{list_workflows, WorkflowListing};
+pub use notify::{build_workflow_updated, workflow_session_notification_json};
+pub use registry::{WorkflowListing, list_workflows};
 pub use store::WorkflowRunStore;
+pub use tracker::WorkflowRunState;
 
 #[cfg(test)]
 mod builtin_tests {

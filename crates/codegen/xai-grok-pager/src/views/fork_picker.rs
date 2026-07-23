@@ -81,7 +81,12 @@ pub fn fork_picker_activate(state: &ForkPickerState) -> ForkPickerInput {
         .unwrap_or(ForkPickerInput::Consumed)
 }
 
-pub fn fork_picker_row_at(state: &ForkPickerState, area: Rect, col: u16, row: u16) -> Option<usize> {
+pub fn fork_picker_row_at(
+    state: &ForkPickerState,
+    area: Rect,
+    col: u16,
+    row: u16,
+) -> Option<usize> {
     state.list().row_at(area, col, row)
 }
 
@@ -111,7 +116,11 @@ pub fn render_fork_picker_overlay(
                 "(empty message)".to_string()
             } else {
                 truncate_str(
-                    &message.text.split_whitespace().collect::<Vec<_>>().join(" "),
+                    &message
+                        .text
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" "),
                     ctx.content_width.saturating_sub(ord_width as u16 + 3) as usize,
                 )
             };

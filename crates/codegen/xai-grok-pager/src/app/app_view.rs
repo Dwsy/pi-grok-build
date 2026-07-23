@@ -420,9 +420,9 @@ impl VoiceState {
     /// it). `/voice` and toggle-style starts leave this false.
     pub(crate) fn hold(&self) -> bool {
         matches!(
-            self, Self::ColdStart { hold, .. } | Self::Recording { hold, .. }
-if * hold
-        )
+                    self, Self::ColdStart { hold, .. } | Self::Recording { hold, .. }
+        if * hold
+                )
     }
 }
 /// Entry in the session picker list on the welcome screen.
@@ -1924,9 +1924,10 @@ impl AppView {
     /// The Pager toast has one visible slot, so external notifications go
     /// through FIFO draining rather than replacing the currently visible one.
     ///
-    /// Explicit `info` is a single surface (no toast+scrollback double):
-    /// multi-line command results (e.g. `/grok-cli-vision:status`) stay in
-    /// scrollback; short one-liners use toast only, matching Pi `showStatus`.
+    /// Explicit `info` always appends a SystemMessage to the active agent
+    /// scrollback (Pi `showStatus` / chatContainer), never toast-only — so
+    /// slash results like `/gapp list` stay in the main view. warning/error
+    /// stay transient toasts. All kinds are also recorded for `/notify`.
     pub fn show_external_notification(&mut self, message: &str, kind: Option<&str>) {
         if let Some(session_id) = self.active_external_session_id() {
             self.external_ui
@@ -1940,18 +1941,12 @@ impl AppView {
         }
 
         if kind == Some("info") {
-            if message.contains('\n') {
-                if let ActiveView::Agent(id) = self.active_view
-                    && let Some(agent) = self.agents.get_mut(&id)
-                {
-                    agent.scrollback.push_block(
-                        crate::scrollback::block::RenderBlock::system(message),
-                    );
-                }
-            } else {
-                self.external_ui
-                    .pending_toasts
-                    .push_back(message.to_string());
+            if let ActiveView::Agent(id) = self.active_view
+                && let Some(agent) = self.agents.get_mut(&id)
+            {
+                agent
+                    .scrollback
+                    .push_block(crate::scrollback::block::RenderBlock::system(message));
             }
             return;
         }
@@ -2162,6 +2157,63 @@ impl AppView {
         lines: Option<Vec<String>>,
         placement: ExternalWidgetPlacement,
     ) -> bool {
+        // Pi extension shortcut catalog (pi-grok-shortcut-manager → setWidget).
+        // Never render as a banner; feed the native `/pi-shortcut-manager` registry.
+        if key == "__pi_extension_shortcuts__" {
+            if let Some(lines) = lines.as_ref() {
+                if let Some(raw) = lines.first() {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+                        let shortcuts: Vec<crate::app::extension_shortcuts::ExtensionShortcut> =
+                            value
+                                .get("shortcuts")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| {
+                                            Some(
+                                                crate::app::extension_shortcuts::ExtensionShortcut {
+                                                    key: v.get("key")?.as_str()?.to_string(),
+                                                    description: v
+                                                        .get("description")
+                                                        .and_then(|d| d.as_str())
+                                                        .unwrap_or("")
+                                                        .to_string(),
+                                                    extension: v
+                                                        .get("extension")
+                                                        .and_then(|e| e.as_str())
+                                                        .unwrap_or("unknown")
+                                                        .to_string(),
+                                                    enabled: v
+                                                        .get("enabled")
+                                                        .and_then(|e| e.as_bool())
+                                                        .unwrap_or(true),
+                                                    remapped_to: v
+                                                        .get("remappedTo")
+                                                        .and_then(|r| r.as_str())
+                                                        .map(|s| s.to_string()),
+                                                },
+                                            )
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                        self.external_ui.extension_shortcuts.set_shortcuts(shortcuts);
+                        // Refresh open modal snapshot if user has it open.
+                        if let ActiveView::Agent(id) = self.active_view
+                            && let Some(agent) = self.agents.get_mut(&id)
+                            && agent.pi_shortcut_manager.is_some()
+                        {
+                            agent.pi_shortcut_manager = Some(
+                                crate::views::shortcut_manager::ShortcutManagerModal::new(
+                                    &self.external_ui.extension_shortcuts,
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+            return true;
+        }
         // Extension-host Remote TUI reuses setWidget("remote_tui", lines).
         // Arm keyboard capture whenever that widget is present.
         if key == "remote_tui" {
@@ -2233,7 +2285,9 @@ impl AppView {
             }
             "overlay_push" => {
                 // showOverlay: push a new overlay onto the stack
-                let overlay_id = id.unwrap_or_else(|| format!("overlay-{}", self.external_ui.remote_tui_overlays.len()));
+                let overlay_id = id.unwrap_or_else(|| {
+                    format!("overlay-{}", self.external_ui.remote_tui_overlays.len())
+                });
                 self.external_ui.remote_tui_id = Some(overlay_id.clone());
                 self.external_ui.remote_tui_overlays.push(RemoteTuiOverlay {
                     id: overlay_id,
@@ -2778,6 +2832,30 @@ impl AppView {
             Event::Key(k) if k.kind != KeyEventKind::Release => Some(k),
             _ => None,
         };
+        // Native `/pi-shortcut-manager` modal owns keys while open (before
+        // extension shortcut dispatch and remote-tui). Does not replace remote-tui.
+        if let ActiveView::Agent(id) = self.active_view {
+            let open = self
+                .agents
+                .get(&id)
+                .is_some_and(|a| a.pi_shortcut_manager.is_some());
+            if open {
+                if let Some(key) = key_event {
+                    let mut modal = self
+                        .agents
+                        .get_mut(&id)
+                        .and_then(|a| a.pi_shortcut_manager.take())
+                        .expect("pi_shortcut_manager present");
+                    let close = modal.handle_key(key, &mut self.external_ui.extension_shortcuts);
+                    if !close && let Some(agent) = self.agents.get_mut(&id) {
+                        agent.pi_shortcut_manager = Some(modal);
+                    }
+                    return InputOutcome::Changed;
+                }
+                // Swallow mouse/paste/etc while the manager is open.
+                return InputOutcome::Changed;
+            }
+        }
         // Extension shortcut dispatch: check registered extension shortcuts
         // BEFORE remote-tui and normal prompt handling.
         if self.external_agent
@@ -2785,6 +2863,9 @@ impl AppView {
         {
             if let Some(shortcut_key) = self.external_ui.extension_shortcuts.match_key(key) {
                 let key_owned = shortcut_key.to_string();
+                tracing::debug!(key = %key_owned, "extension shortcut matched");
+                // Brief toast so match failures are distinguishable from dispatch failures.
+                self.show_toast(&format!("Shortcut: {key_owned}"));
                 self.pending_effects
                     .push(crate::app::actions::Effect::ShortcutDispatch { key: key_owned });
                 return InputOutcome::Changed;
@@ -6319,17 +6400,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn short_info_notification_is_toast_only() {
+    fn short_info_notification_is_scrollback_only() {
         let mut app = test_app_with_agent();
         let id = super::super::agent::AgentId(0);
 
-        app.show_external_notification(
-            "Ponytail: current full • default full",
-            Some("info"),
-        );
+        app.show_external_notification("Ponytail: current full • default full", Some("info"));
 
-        assert_eq!(app.agents[&id].scrollback.len(), 0);
-        assert_eq!(app.external_ui.pending_toasts.len(), 1);
+        assert_eq!(app.agents[&id].scrollback.len(), 1);
+        assert!(app.external_ui.pending_toasts.is_empty());
     }
 
     #[test]
@@ -8997,7 +9075,11 @@ pub(crate) mod tests {
         let outcome = app.handle_input(&key_event(KeyCode::Esc, KeyModifiers::NONE));
         assert!(matches!(outcome, InputOutcome::Changed));
         let pending = app.pending_action.as_ref().expect("arm session tree");
-        assert_eq!(pending.label, Some("tree"), "Pi double-Esc must show tree hint");
+        assert_eq!(
+            pending.label,
+            Some("tree"),
+            "Pi double-Esc must show tree hint"
+        );
         assert!(matches!(pending.action, Action::ShowSessionTree));
 
         let outcome = app.handle_input(&key_event(KeyCode::Esc, KeyModifiers::NONE));

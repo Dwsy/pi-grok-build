@@ -64,7 +64,7 @@ pub(crate) fn parse_background_bash_message(event: &Value) -> Option<BackgroundB
 pub(crate) fn parse_background_bash_tool_result(
     tool_name: &str,
     tool_call_id: &str,
-    _args: Option<&Value>,
+    args: Option<&Value>,
     result: &Value,
 ) -> Option<BackgroundBashProjection> {
     if tool_name != "bash" {
@@ -74,13 +74,19 @@ pub(crate) fn parse_background_bash_tool_result(
     if details.get("background").and_then(Value::as_bool) != Some(true) {
         return None;
     }
+    // Prefer details.description; fall back to pi-grok-bash task_name / description args.
+    let description = optional_string(details, "description").or_else(|| {
+        args.and_then(|a| {
+            optional_string(a, "description").or_else(|| optional_string(a, "task_name"))
+        })
+    });
     Some(BackgroundBashProjection::Started {
         task_id: required_string(details, "taskId")?,
         tool_call_id: tool_call_id.to_string(),
         command: required_string(details, "command")?,
         cwd: required_string(details, "cwd")?,
         output_file: required_string(details, "outputFile")?,
-        description: optional_string(details, "description"),
+        description,
     })
 }
 
@@ -218,6 +224,24 @@ mod tests {
                 cwd: "/repo".into(),
                 output_file: "/tmp/task.log".into(),
                 description: None,
+            })
+        );
+
+        // When details omit description, fall back to pi-grok-bash task_name.
+        assert_eq!(
+            parse_background_bash_tool_result(
+                "bash",
+                "call-1",
+                Some(&json!({ "command": "cargo test", "task_name": "运行测试" })),
+                &result,
+            ),
+            Some(BackgroundBashProjection::Started {
+                task_id: "bash-1".into(),
+                tool_call_id: "call-1".into(),
+                command: "cargo test".into(),
+                cwd: "/repo".into(),
+                output_file: "/tmp/task.log".into(),
+                description: Some("运行测试".into()),
             })
         );
     }

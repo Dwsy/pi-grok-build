@@ -101,6 +101,8 @@ pub enum ActionId {
     EditPromptExternal,
     CycleMode,
     BashMode,
+    /// Open `/review-session` two-pane code review for the current session.
+    ReviewSession,
 
     // Scrollback (contextual)
     Rewind,
@@ -810,6 +812,35 @@ mod tests {
         let registry = ActionRegistry::defaults();
         let def = registry.find(ActionId::CancelTurn).unwrap();
         assert!(!def.requires_confirmation);
+    }
+
+    #[test]
+    fn review_session_bound_to_ctrl_shift_r_on_agent_screen() {
+        let registry = ActionRegistry::defaults();
+        let def = registry
+            .find(ActionId::ReviewSession)
+            .expect("ReviewSession must be registered");
+        assert_eq!(def.context, When::AgentScreen);
+        assert_eq!(def.hint_key_display, Some("Ctrl+Shift+R"));
+
+        let chord = KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(
+            registry.lookup(&chord, When::AgentScreen),
+            Some(ActionId::ReviewSession)
+        );
+        assert_eq!(registry.lookup(&chord, When::PromptFocused), None);
+        assert_eq!(registry.lookup(&chord, When::ScrollbackFocused), None);
+        assert_eq!(registry.lookup(&chord, When::Always), None);
+
+        // Distinct from scrollback-only Ctrl+R (mouse reporting, opt-in).
+        let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert_ne!(
+            registry.lookup(&ctrl_r, When::AgentScreen),
+            Some(ActionId::ReviewSession)
+        );
     }
 
     #[test]

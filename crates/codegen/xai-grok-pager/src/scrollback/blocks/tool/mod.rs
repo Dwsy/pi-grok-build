@@ -560,6 +560,7 @@ impl ToolCallBlock {
             ToolCallBlock::Skill(b) | ToolCallBlock::Other(b) => join_searchable([
                 Some(b.name.clone()),
                 Some(b.summary.clone()),
+                b.input_json.clone(),
                 b.output.clone(),
                 b.error.clone(),
             ]),

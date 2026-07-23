@@ -696,10 +696,22 @@ pub enum Action {
     SetRecapModel(acp::ModelId),
     /// Clear the dedicated recap model (recap generation stays disabled).
     ClearRecapModel,
+    SetRecapModel2(String),
+    ClearRecapModel2,
+    SetRecapModel3(String),
+    ClearRecapModel3,
+    SetBtwModel(String),
+    ClearBtwModel,
+    SetBtwModel2(String),
+    ClearBtwModel2,
+    SetBtwModel3(String),
+    ClearBtwModel3,
     /// Open the model picker for the active agent.
     OpenModelPicker,
     /// Open the native model picker to select the dedicated recap model.
     OpenRecapModelPicker,
+    /// Open native searchable model picker for a recap/btw settings slot.
+    OpenSideModelPicker { slot_key: &'static str },
     /// Commit auto session-recap toggle (`[ui].session_recap`).
     SetSessionRecap(bool),
     /// Commit optional Mermaid generation in Recap (`[ui].recap_mermaid`).
@@ -717,13 +729,24 @@ pub enum Action {
     SetPsmResumeIndex(bool),
     /// Enable Pi tree file rollback checkpoint tracking.
     SetPiTreeFileRollback(bool),
+    /// Skip the "Summarize branch?" prompt when navigating the session tree.
+    SetPiTreeSkipSummaryPrompt(bool),
     /// Enable upstream Rhai workflows for grok-pi (restart required).
     SetPiWorkflows(bool),
     /// Enable Grok-style /goal for grok-pi (restart required).
     SetPiGoal(bool),
+    SetPiLoop(bool),
+    /// Enable native Q&A (`ask_user_question` → QuestionView; restart required).
+    SetPiAskUserQuestion(bool),
+    /// Enable native /btw for grok-pi (restart required).
+    SetPiBtw(bool),
     SetPiCacheGraph(bool),
+    /// Show raw_input JSON on Other/generic tool cards when expanded (`[ui].show_other_tool_args`, default off).
+    SetShowOtherToolArgs(bool),
     /// Default tree layout for `/review-*` left pane (`[ui].review_file_tree`).
     SetReviewFileTree(bool),
+    /// Include read ops in `/review-*` (`[ui].review_include_reads`).
+    SetReviewIncludeReads(bool),
     /// Commit the `show_tips` preference. Persisted to `[cli].show_tips`.
     /// Restart-required — tips are resolved once at startup.
     SetShowTips(bool),
@@ -754,6 +777,9 @@ pub enum Action {
     /// as Ctrl+. / Ctrl+X (`ActionId::ShortcutsHelp`); slash path goes through
     /// dispatch so external profiles can expose it without keybinding knowledge.
     OpenShortcutsHelp,
+    /// Open the native Pi extension-shortcut manager (`/pi-shortcut-manager`).
+    /// Manages `pi.registerShortcut` entries only; does not touch remote-tui.
+    OpenPiShortcutManager,
     /// Open the in-TUI How-to Guides doc picker (`/docs`, palette "How-to Guides").
     OpenHowtoGuides,
     /// Open the reset-settings confirmation dialog for a specific key.
@@ -881,6 +907,11 @@ pub enum Action {
     TriggerDeepSearch,
     /// Force an immediate deep content search, skipping the debounce.
     ForceDeepSearch,
+    /// Load PSM message preview for the resume picker's preview mode.
+    LoadSessionPreview {
+        session_id: String,
+        session_path: Option<String>,
+    },
     /// Show privacy and data retention status.
     ShowPrivacyInfo,
     SetCodingDataSharing {
@@ -1123,9 +1154,15 @@ pub enum Action {
     ToggleGoalDetail,
     ToggleWorkflows,
     /// Launch a named host workflow (`/workflow <name> [args]`).
-    WorkflowLaunch { name: String, args: String },
+    WorkflowLaunch {
+        name: String,
+        args: String,
+    },
     /// Manage a workflow run (`pause`/`stop` for now).
-    WorkflowManage { op: String, target: String },
+    WorkflowManage {
+        op: String,
+        target: String,
+    },
     Rewind,
     RewindShowPicker,
     RewindPickerSelect(usize),
@@ -1839,17 +1876,6 @@ pub enum Effect {
         /// See [`Effect::SendPrompt::prompt_id`].
         prompt_id: String,
     },
-    /// Cancel-and-send: `session/prompt` stamped with `_meta.sendNow`, so the
-    /// shell cancels the running turn and runs this prompt next (background
-    /// tasks and the rest of the queue survive). Carries structured blocks so
-    /// pasted images ride along.
-    SendPromptNow {
-        agent_id: AgentId,
-        session_id: acp::SessionId,
-        blocks: Vec<acp::ContentBlock>,
-        /// See [`Effect::SendPrompt::prompt_id`].
-        prompt_id: String,
-    },
     /// Toggle plan mode — fire-and-forget signal to the shell.
     TogglePlanMode { session_id: acp::SessionId },
     /// Remove a server-owned queued prompt: fire-and-forget
@@ -2160,6 +2186,8 @@ pub enum Effect {
         agent_id: AgentId,
         session_id: acp::SessionId,
         question: String,
+        /// Ordered model fallback chain (empty = session model on adapter/extension).
+        models: Vec<String>,
         /// Correlates minimal responses; fullscreen leaves this unset.
         minimal_request_id: Option<uuid::Uuid>,
     },
@@ -2168,8 +2196,8 @@ pub enum Effect {
     SendRecap {
         session_id: acp::SessionId,
         auto: bool,
-        /// Optional model override (`provider/id` or bare id). Empty = session model.
-        model: Option<String>,
+        /// Ordered model fallback chain. Empty = session model.
+        models: Vec<String>,
         /// Current session reasoning level; omitted for off/unsupported models.
         thinking_level: Option<String>,
         /// Whether the recap prompt may request an optional Mermaid diagram.
@@ -2232,6 +2260,8 @@ pub enum Effect {
     RemoteTuiInput { id: String, data: String },
     /// Experimental Remote TUI: cancel the active remote component session.
     RemoteTuiCancel { id: String },
+    /// Extension shortcut matched: dispatch to Pi extension handler via RPC.
+    ShortcutDispatch { key: String },
     /// Quit the application.
     Quit,
     /// Toggle coding data sharing via ACP.
@@ -2262,6 +2292,12 @@ pub enum Effect {
         query: String,
         cwd: Option<std::path::PathBuf>,
         seq: u64,
+    },
+    /// Load message preview for a Pi session (PSM `message_entries`).
+    PiSessionPreview {
+        session_id: String,
+        session_path: Option<String>,
+        generation: u64,
     },
     /// Call `x.ai/session/fork` to create a peer session that resumes
     /// from `parent_session_id` in the same cwd (no worktree). Mirror of
@@ -2658,18 +2694,6 @@ pub enum TaskResult {
         /// constructions that don't need gating.
         prompt_id: Option<String>,
     },
-    /// A send-now `session/prompt` RPC failed at the transport/RPC layer —
-    /// the prompt never reached the shell's queue. Carries the payload so
-    /// dispatch can requeue it locally (the producer already consumed the
-    /// composer/queue row, so dropping it would silently lose the message —
-    /// the same contract the removed `InterjectFailed` requeue had).
-    SendPromptNowFailed {
-        agent_id: AgentId,
-        session_id: acp::SessionId,
-        prompt_id: String,
-        error: String,
-        blocks: Vec<acp::ContentBlock>,
-    },
     /// Cancel notification was sent (fire-and-forget).
     /// The real turn end comes via PromptResponse.
     CancelComplete,
@@ -3051,6 +3075,12 @@ pub enum TaskResult {
     DeepSearchResults {
         results: Vec<xai_grok_shell::extensions::session_search::SearchSessionHit>,
         seq: u64,
+    },
+    /// PSM session message preview loaded for resume picker.
+    SessionPreviewLoaded {
+        session_id: String,
+        messages: Vec<crate::views::modal::SessionPreviewMessage>,
+        generation: u64,
     },
     /// `x.ai/session/fork` completed (no-worktree path). The pager adopts
     /// the new session id and emits [`Effect::LoadSession`] to start the

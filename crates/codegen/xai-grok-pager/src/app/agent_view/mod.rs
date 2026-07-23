@@ -151,10 +151,9 @@ use std::time::Instant;
 mod cta;
 mod input;
 pub(crate) use input::ExternalPromptEditorAccess;
-mod interactions;
 mod fork_picker;
+mod interactions;
 mod jump;
-mod review;
 mod links;
 mod media;
 mod modals;
@@ -165,6 +164,7 @@ mod plan;
 mod prompt;
 mod queue;
 mod render;
+mod review;
 mod rewind;
 mod selection;
 mod session;
@@ -1140,6 +1140,9 @@ pub struct AgentView {
     /// Active hooks/plugins modal popup. When `Some`, blocks all input and
     /// renders as a centered overlay. Opened by `/hooks`, `/plugins`, or `/mcps`.
     pub(crate) extensions_modal: Option<ExtensionsModalState>,
+    /// Native Pi extension-shortcut manager. Opened by `/pi-shortcut-manager`.
+    /// Independent of remote-tui; does not host extension component UIs.
+    pub(crate) pi_shortcut_manager: Option<crate::views::shortcut_manager::ShortcutManagerModal>,
     /// Active agents modal popup. When `Some`, blocks all input and
     /// renders as a centered overlay. Opened by `/config-agents` or `/agents`.
     pub(crate) agents_modal: Option<crate::views::agents_modal::AgentsModalState>,
@@ -2024,6 +2027,7 @@ fn resolve_action(action_id: Option<ActionId>) -> Option<InputOutcome> {
         ActionId::NextModel => Action::NextModel,
         ActionId::CycleThinkingLevel => Action::CycleThinkingLevel,
         ActionId::CycleMode => Action::CycleMode,
+        ActionId::ReviewSession => Action::ReviewShowSession,
         ActionId::CancelTurn
         | ActionId::Quit
         | ActionId::ExitSession

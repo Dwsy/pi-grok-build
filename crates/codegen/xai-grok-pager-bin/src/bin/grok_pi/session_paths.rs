@@ -31,7 +31,11 @@ fn resolve_pi_path(path: &str, cwd: &Path) -> PathBuf {
     let expanded = path
         .strip_prefix("~/")
         .and_then(|suffix| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(suffix)))
-        .or_else(|| (path == "~").then(|| std::env::var_os("HOME").map(PathBuf::from)).flatten())
+        .or_else(|| {
+            (path == "~")
+                .then(|| std::env::var_os("HOME").map(PathBuf::from))
+                .flatten()
+        })
         .unwrap_or_else(|| PathBuf::from(path));
     if expanded.is_absolute() {
         expanded

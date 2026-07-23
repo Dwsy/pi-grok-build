@@ -2087,6 +2087,7 @@ pub(in crate::app::dispatch) fn set_psm_resume_index(
         return vec![];
     }
     app.current_ui.psm_resume_index = enabled;
+    crate::appearance::cache::set_psm_resume_index(enabled);
     refresh_open_settings_modals(app);
     app.show_toast(&save_success_toast("PSM resume index", enabled));
     vec![Effect::PersistSetting {
@@ -2109,6 +2110,24 @@ pub(in crate::app::dispatch) fn set_pi_tree_file_rollback(
     app.show_toast(&save_success_toast("Pi tree file rollback", enabled));
     vec![Effect::PersistSetting {
         key: "pi_tree_file_rollback",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
+pub(in crate::app::dispatch) fn set_pi_tree_skip_summary_prompt(
+    app: &mut AppView,
+    enabled: bool,
+) -> Vec<Effect> {
+    let previous = app.current_ui.pi_tree_skip_summary_prompt;
+    if previous == enabled {
+        return vec![];
+    }
+    app.current_ui.pi_tree_skip_summary_prompt = enabled;
+    refresh_open_settings_modals(app);
+    app.show_toast(&save_success_toast("Pi tree skip summary prompt", enabled));
+    vec![Effect::PersistSetting {
+        key: "pi_tree_skip_summary_prompt",
         value: crate::settings::SettingValue::Bool(enabled),
         rollback_value: crate::settings::SettingValue::Bool(previous),
     }]
@@ -2151,7 +2170,105 @@ pub(in crate::app::dispatch) fn set_pi_goal(app: &mut AppView, enabled: bool) ->
     }]
 }
 
-pub(in crate::app::dispatch) fn set_pi_cache_graph(app: &mut AppView, enabled: bool) -> Vec<Effect> {
+pub(in crate::app::dispatch) fn set_pi_loop(app: &mut AppView, enabled: bool) -> Vec<Effect> {
+    let previous = app.current_ui.pi_loop;
+    if previous == enabled {
+        return vec![];
+    }
+    app.current_ui.pi_loop = enabled;
+    refresh_open_settings_modals(app);
+    let value = if enabled { "on" } else { "off" };
+    app.show_toast(&format!(
+        "\u{2713} Pi /loop scheduler: {value} \u{2014} restart grok-pi to apply"
+    ));
+    vec![Effect::PersistSetting {
+        key: "pi_loop",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
+pub(in crate::app::dispatch) fn set_pi_ask_user_question(
+    app: &mut AppView,
+    enabled: bool,
+) -> Vec<Effect> {
+    let previous = app.current_ui.pi_ask_user_question;
+    if previous == enabled {
+        return vec![];
+    }
+    app.current_ui.pi_ask_user_question = enabled;
+    refresh_open_settings_modals(app);
+    let value = if enabled { "on" } else { "off" };
+    app.show_toast(&format!(
+        "\u{2713} Q&A: {value} \u{2014} restart grok-pi to apply"
+    ));
+    vec![Effect::PersistSetting {
+        key: "pi_ask_user_question",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
+pub(in crate::app::dispatch) fn set_pi_btw(app: &mut AppView, enabled: bool) -> Vec<Effect> {
+    let previous = app.current_ui.pi_btw;
+    if previous == enabled {
+        return vec![];
+    }
+    app.current_ui.pi_btw = enabled;
+    refresh_open_settings_modals(app);
+    let value = if enabled { "on" } else { "off" };
+    app.show_toast(&format!(
+        "\u{2713} Pi /btw: {value} \u{2014} restart grok-pi to apply"
+    ));
+    vec![Effect::PersistSetting {
+        key: "pi_btw",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
+/// Persist a side-call model slot (recap/btw fallback chain).
+pub(in crate::app::dispatch) fn set_model_slot(
+    app: &mut AppView,
+    key: &'static str,
+    value: String,
+) -> Vec<Effect> {
+    let previous = match key {
+        "recap_model_2" => app.current_ui.recap_model_2.clone(),
+        "recap_model_3" => app.current_ui.recap_model_3.clone(),
+        "btw_model" => app.current_ui.btw_model.clone(),
+        "btw_model_2" => app.current_ui.btw_model_2.clone(),
+        "btw_model_3" => app.current_ui.btw_model_3.clone(),
+        other => {
+            tracing::error!(key = other, "set_model_slot: unknown key");
+            return vec![];
+        }
+    };
+    if previous == value {
+        return vec![];
+    }
+    match key {
+        "recap_model_2" => app.current_ui.recap_model_2 = value.clone(),
+        "recap_model_3" => app.current_ui.recap_model_3 = value.clone(),
+        "btw_model" => app.current_ui.btw_model = value.clone(),
+        "btw_model_2" => app.current_ui.btw_model_2 = value.clone(),
+        "btw_model_3" => app.current_ui.btw_model_3 = value.clone(),
+        _ => {}
+    }
+    refresh_open_settings_modals(app);
+    let label = if value.is_empty() { "cleared" } else { value.as_str() };
+    app.show_toast(&format!("\u{2713} {key}: {label}"));
+    vec![Effect::PersistSetting {
+        key,
+        value: crate::settings::SettingValue::String(value),
+        rollback_value: crate::settings::SettingValue::String(previous),
+    }]
+}
+
+pub(in crate::app::dispatch) fn set_pi_cache_graph(
+    app: &mut AppView,
+    enabled: bool,
+) -> Vec<Effect> {
     let previous = app.current_ui.pi_cache_graph;
     if previous == enabled {
         return vec![];
@@ -2162,6 +2279,28 @@ pub(in crate::app::dispatch) fn set_pi_cache_graph(app: &mut AppView, enabled: b
     app.show_toast(&format!("\u{2713} Pi cache graph in Context: {value}"));
     vec![Effect::PersistSetting {
         key: "pi_cache_graph",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
+pub(in crate::app::dispatch) fn set_show_other_tool_args(
+    app: &mut AppView,
+    enabled: bool,
+) -> Vec<Effect> {
+    let previous = app.current_ui.show_other_tool_args;
+    if previous == enabled && app.appearance.show_other_tool_args == enabled {
+        return vec![];
+    }
+    app.current_ui.show_other_tool_args = enabled;
+    let mut config = app.appearance.clone();
+    config.show_other_tool_args = enabled;
+    app.set_appearance(config);
+    refresh_open_settings_modals(app);
+    let value = if enabled { "on" } else { "off" };
+    app.show_toast(&format!("\u{2713} Other tool args: {value}"));
+    vec![Effect::PersistSetting {
+        key: "show_other_tool_args",
         value: crate::settings::SettingValue::Bool(enabled),
         rollback_value: crate::settings::SettingValue::Bool(previous),
     }]
@@ -2188,6 +2327,45 @@ pub(in crate::app::dispatch) fn set_review_file_tree(
     app.show_toast(&format!("\u{2713} Review file list: {value}"));
     vec![Effect::PersistSetting {
         key: "review_file_tree",
+        value: crate::settings::SettingValue::Bool(enabled),
+        rollback_value: crate::settings::SettingValue::Bool(previous),
+    }]
+}
+
+pub(in crate::app::dispatch) fn set_review_include_reads(
+    app: &mut AppView,
+    enabled: bool,
+) -> Vec<Effect> {
+    let previous = app.current_ui.review_include_reads;
+    if previous == enabled {
+        return vec![];
+    }
+    app.current_ui.review_include_reads = enabled;
+    if let crate::app::app_view::ActiveView::Agent(id) = app.active_view
+        && let Some(agent) = app.agents.get_mut(&id)
+        && let Some(review) = agent.review_state.as_mut()
+    {
+        // Rebuild file set from live scrollback (range stored on state).
+        let files = crate::views::review::extract_review_files(
+            &agent.scrollback,
+            review.entry_range.clone(),
+            if enabled {
+                crate::views::review::ReviewKindFilter::All
+            } else {
+                crate::views::review::ReviewKindFilter::Changes
+            },
+        );
+        review.replace_files(files, enabled);
+        review.ensure_viewer(&agent.scrollback);
+    }
+    refresh_open_settings_modals(app);
+    app.show_toast(if enabled {
+        "\u{2713} Review includes reads"
+    } else {
+        "\u{2713} Review: changes only"
+    });
+    vec![Effect::PersistSetting {
+        key: "review_include_reads",
         value: crate::settings::SettingValue::Bool(enabled),
         rollback_value: crate::settings::SettingValue::Bool(previous),
     }]

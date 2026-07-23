@@ -27,9 +27,7 @@ use super::import_claude::{
     dispatch_import_claude_confirm,
 };
 use super::interject::dispatch_interject;
-use super::jump::{
-    dispatch_jump_dismiss, dispatch_jump_picker_select, dispatch_jump_show_picker,
-};
+use super::jump::{dispatch_jump_dismiss, dispatch_jump_picker_select, dispatch_jump_show_picker};
 use super::modes::{
     dispatch_cycle_mode, dispatch_enter_plan_mode, dispatch_show_plan, dispatch_toggle_yolo,
     set_permission_mode, set_plan_mode, set_yolo_mode,
@@ -77,11 +75,11 @@ use super::session::load::{
 use super::session::modal::dispatch_rename_session;
 use super::session::tree::{
     dispatch_label_session_tree_entry, dispatch_navigate_session_tree,
-    dispatch_rollback_files_execute, dispatch_rollback_files_preview,
-    dispatch_session_tree_closed, dispatch_show_session_tree, dispatch_show_tree_map,
+    dispatch_rollback_files_execute, dispatch_rollback_files_preview, dispatch_session_tree_closed,
+    dispatch_show_session_tree, dispatch_show_tree_map,
 };
 use super::settings::setters::{
-    clear_default_model, clear_fork_secondary_model, clear_recap_model, preview_auto_dark_theme,
+    clear_default_model, clear_fork_secondary_model, clear_recap_model, set_model_slot, preview_auto_dark_theme,
     preview_auto_light_theme, preview_theme, set_ask_user_question_timeout_enabled,
     set_auto_dark_theme, set_auto_light_theme, set_auto_update, set_collapsed_edit_blocks,
     set_combine_queued_prompts, set_compact_mode, set_contextual_hint_image_input,
@@ -90,22 +88,23 @@ use super::settings::setters::{
     set_ctrl_o_tool_expansion, set_default_model, set_default_selected_permission,
     set_display_refresh_auto_cadence, set_fork_secondary_model, set_group_tool_verbs,
     set_hunk_tracker_mode, set_invert_scroll, set_keep_text_selection, set_max_thoughts_width,
-    set_multiline_mode, set_page_flip_on_send, set_pi_builtin_tool, set_pi_tree_file_rollback,
-    set_pi_cache_graph, set_pi_goal, set_pi_workflows, set_progress_bar, set_prompt_suggestions,
-    set_psm_resume_index, set_review_file_tree,
-    set_recap_mermaid,
-    set_recap_model, set_remember_tool_approvals, set_remote_tui_footer, set_render_mermaid,
-    set_respect_manual_folds, set_screen_mode, set_scroll_lines, set_scroll_mode, set_scroll_speed,
-    set_session_recap, set_show_thinking_blocks, set_show_tips, set_simple_mode, set_theme,
-    set_timeline, set_timestamps, set_vim_mode, set_voice_capture_mode, set_voice_stt_language,
+    set_multiline_mode, set_page_flip_on_send, set_pi_ask_user_question, set_pi_btw, set_pi_builtin_tool,
+    set_pi_cache_graph, set_pi_goal, set_pi_loop, set_pi_tree_file_rollback,
+    set_show_other_tool_args,
+    set_pi_tree_skip_summary_prompt, set_pi_workflows, set_progress_bar, set_prompt_suggestions,
+    set_psm_resume_index, set_recap_mermaid, set_recap_model, set_remember_tool_approvals,
+    set_remote_tui_footer, set_render_mermaid, set_respect_manual_folds, set_review_file_tree,
+    set_review_include_reads,
+    set_screen_mode, set_scroll_lines, set_scroll_mode, set_scroll_speed, set_session_recap,
+    set_show_thinking_blocks, set_show_tips, set_simple_mode, set_theme, set_timeline,
+    set_timestamps, set_vim_mode, set_voice_capture_mode, set_voice_stt_language,
 };
 use super::settings::ui::{
     dispatch_confirm_reset_setting, dispatch_open_command_palette, dispatch_open_howto_guides,
-    dispatch_open_shortcuts_help,
-    dispatch_open_model_picker, dispatch_open_pi_config, dispatch_open_recap_model_picker,
-    dispatch_open_reset_confirm, dispatch_open_settings, dispatch_toggle_compact_mode,
-    dispatch_toggle_mouse_capture, dispatch_toggle_multiline, dispatch_toggle_timestamps,
-    dispatch_toggle_vim_mode,
+    dispatch_open_model_picker, dispatch_open_pi_config, dispatch_open_pi_shortcut_manager,
+    dispatch_open_recap_model_picker, dispatch_open_reset_confirm, dispatch_open_settings,
+    dispatch_open_shortcuts_help, dispatch_toggle_compact_mode, dispatch_toggle_mouse_capture,
+    dispatch_toggle_multiline, dispatch_toggle_timestamps, dispatch_toggle_vim_mode,
 };
 use super::status::{
     dispatch_copy_session_id, dispatch_manage_billing, dispatch_open_gboom, dispatch_share_session,
@@ -244,12 +243,8 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::LabelSessionTreeEntry { entry_id, label } => {
             dispatch_label_session_tree_entry(app, entry_id, label)
         }
-        Action::RollbackFilesPreview { entry_id } => {
-            dispatch_rollback_files_preview(app, entry_id)
-        }
-        Action::RollbackFilesExecute { entry_id } => {
-            dispatch_rollback_files_execute(app, entry_id)
-        }
+        Action::RollbackFilesPreview { entry_id } => dispatch_rollback_files_preview(app, entry_id),
+        Action::RollbackFilesExecute { entry_id } => dispatch_rollback_files_execute(app, entry_id),
         Action::SessionTreeClosed => dispatch_session_tree_closed(app),
         Action::SessionPickerClosed => dispatch_session_picker_closed(app),
         Action::PickSession(index) => dispatch_pick_session(app, index),
@@ -360,7 +355,10 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         }
         Action::Interject { text, images } => dispatch_interject(app, text, images),
         Action::SendPromptNow { text, images } => {
-            super::interject::dispatch_send_prompt_now(app, text, images)
+            // Phase 1 (queue-architecture-redesign): Send Now → steering
+            // semantics via interject. No cancel-and-restart, no optimistic
+            // echo, no reconcile — eliminates the duplicate-message bug.
+            dispatch_interject(app, text, images)
         }
         Action::EnableVoiceMode => dispatch_enable_voice_mode(app, true),
         Action::VoiceToggle => dispatch_voice_toggle(app),
@@ -1089,8 +1087,21 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::ClearForkSecondaryModel => clear_fork_secondary_model(app),
         Action::SetRecapModel(v) => set_recap_model(app, v),
         Action::ClearRecapModel => clear_recap_model(app),
+        Action::SetRecapModel2(v) => set_model_slot(app, "recap_model_2", v),
+        Action::ClearRecapModel2 => set_model_slot(app, "recap_model_2", String::new()),
+        Action::SetRecapModel3(v) => set_model_slot(app, "recap_model_3", v),
+        Action::ClearRecapModel3 => set_model_slot(app, "recap_model_3", String::new()),
+        Action::SetBtwModel(v) => set_model_slot(app, "btw_model", v),
+        Action::ClearBtwModel => set_model_slot(app, "btw_model", String::new()),
+        Action::SetBtwModel2(v) => set_model_slot(app, "btw_model_2", v),
+        Action::ClearBtwModel2 => set_model_slot(app, "btw_model_2", String::new()),
+        Action::SetBtwModel3(v) => set_model_slot(app, "btw_model_3", v),
+        Action::ClearBtwModel3 => set_model_slot(app, "btw_model_3", String::new()),
         Action::OpenModelPicker => dispatch_open_model_picker(app),
         Action::OpenRecapModelPicker => dispatch_open_recap_model_picker(app),
+        Action::OpenSideModelPicker { slot_key } => {
+            crate::app::dispatch::settings::ui::dispatch_open_side_model_picker(app, slot_key)
+        }
         Action::SetSessionRecap(v) => set_session_recap(app, v),
         Action::SetRecapMermaid(v) => set_recap_mermaid(app, v),
         Action::SetProgressBar(v) => set_progress_bar(app, v),
@@ -1098,10 +1109,18 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::SetPiBuiltinTool { tool, enabled } => set_pi_builtin_tool(app, tool, enabled),
         Action::SetPsmResumeIndex(enabled) => set_psm_resume_index(app, enabled),
         Action::SetPiTreeFileRollback(enabled) => set_pi_tree_file_rollback(app, enabled),
+        Action::SetPiTreeSkipSummaryPrompt(enabled) => {
+            set_pi_tree_skip_summary_prompt(app, enabled)
+        }
         Action::SetPiWorkflows(enabled) => set_pi_workflows(app, enabled),
         Action::SetPiGoal(enabled) => set_pi_goal(app, enabled),
+        Action::SetPiLoop(enabled) => set_pi_loop(app, enabled),
+        Action::SetPiAskUserQuestion(enabled) => set_pi_ask_user_question(app, enabled),
+        Action::SetPiBtw(enabled) => set_pi_btw(app, enabled),
         Action::SetPiCacheGraph(enabled) => set_pi_cache_graph(app, enabled),
+        Action::SetShowOtherToolArgs(enabled) => set_show_other_tool_args(app, enabled),
         Action::SetReviewFileTree(enabled) => set_review_file_tree(app, enabled),
+        Action::SetReviewIncludeReads(enabled) => set_review_include_reads(app, enabled),
         Action::SetMaxThoughtsWidth(v) => set_max_thoughts_width(app, v),
         Action::SetShowTips(v) => set_show_tips(app, v),
         Action::SetAutoUpdate(v) => set_auto_update(app, v),
@@ -1113,6 +1132,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::OpenPiConfig => dispatch_open_pi_config(app),
         Action::OpenCommandPalette => dispatch_open_command_palette(app),
         Action::OpenShortcutsHelp => dispatch_open_shortcuts_help(app),
+        Action::OpenPiShortcutManager => dispatch_open_pi_shortcut_manager(app),
         Action::OpenHowtoGuides => dispatch_open_howto_guides(app),
         Action::OpenResetConfirm { key } => dispatch_open_reset_confirm(app, key),
         Action::ConfirmResetSetting { choice } => dispatch_confirm_reset_setting(app, choice),
@@ -1188,6 +1208,34 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::TrustFolder => dispatch_trust_folder(app),
         Action::TriggerDeepSearch => dispatch_trigger_deep_search(app, false),
         Action::ForceDeepSearch => dispatch_trigger_deep_search(app, true),
+        Action::LoadSessionPreview {
+            session_id,
+            session_path,
+        } => {
+            if !app.current_ui.psm_resume_index {
+                return vec![];
+            }
+            app.session_picker_detail_generation =
+                app.session_picker_detail_generation.wrapping_add(1);
+            let generation = app.session_picker_detail_generation;
+            if let Some(agent) = get_active_agent_mut(app)
+                && let Some(crate::views::modal::ActiveModal::SessionPicker {
+                    preview_mode,
+                    preview_messages,
+                    preview_scroll,
+                    ..
+                }) = agent.active_modal.as_mut()
+            {
+                *preview_mode = true;
+                *preview_messages = None; // loading
+                *preview_scroll = 0;
+            }
+            vec![Effect::PiSessionPreview {
+                session_id,
+                session_path,
+                generation,
+            }]
+        }
         Action::PickContentSession { session_id, cwd } => {
             dispatch_pick_content_session(app, session_id, cwd)
         }

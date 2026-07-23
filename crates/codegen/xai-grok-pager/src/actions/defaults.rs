@@ -546,6 +546,21 @@ pub(super) fn default_actions(
                 "Toggles plan mode on/off. In plan mode the agent plans before implementing: write tools are gated to the plan file only. Ctrl+Shift+T because Shift+Tab is used for thinking level cycling.",
             ),
         },
+        ActionDef {
+            id: ActionId::ReviewSession,
+            label: "review",
+            description: "Review session file changes",
+            default_key: key!('R', CONTROL | SHIFT),
+            alt_keys: vec![],
+            category: Category::ConversationAction,
+            context: When::AgentScreen,
+            hint_priority: None,
+            hint_key_display: Some("Ctrl+Shift+R"),
+            requires_confirmation: false,
+            long_help: Some(
+                "Opens the session code-review modal (same as /review-session): left file list, right edit preview for write/edit tool changes in this session.",
+            ),
+        },
         // ── Panes (agent-level — toggle side panes) ─────────────────
         mode_ctrl_g_action(screen_mode),
         ActionDef {

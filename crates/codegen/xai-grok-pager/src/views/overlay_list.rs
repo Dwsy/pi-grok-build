@@ -63,7 +63,13 @@ impl ListOverlay {
     }
 
     /// Row hit-testing accounting for an optional search line.
-    pub fn row_at_with_search(&self, area: Rect, col: u16, row: u16, has_search: bool) -> Option<usize> {
+    pub fn row_at_with_search(
+        &self,
+        area: Rect,
+        col: u16,
+        row: u16,
+        has_search: bool,
+    ) -> Option<usize> {
         if area.height == 0 || area.width < 10 {
             return None;
         }

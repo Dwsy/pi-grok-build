@@ -164,3 +164,28 @@ grok-pi -- --model openai/gpt-4o
 ## 许可证
 
 项目及上游声明见 [LICENSE](LICENSE) 和 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES)。
+
+## 功能开关 → 会禁用的 Pi 扩展
+
+当 grok-pi **原生能力开启**时，宿主资源准入可能 block 已知冲突的 Pi 包，避免工具名/职责撞车。内置默认表：[`crates/codegen/xai-grok-pager/assets/native_feature_conflicts.toml`](crates/codegen/xai-grok-pager/assets/native_feature_conflicts.toml)。运行时外挂（免 rebuild）：`$GROK_HOME/native-feature-conflicts.toml`，再 `$GROK_PROJECT_DIR/native-feature-conflicts.toml`（packages **并集**；非空 `reason` 覆盖）。用户资源策略的 `allow` 仍可豁免。
+
+```mermaid
+flowchart LR
+  A[内置默认] --> M[合并]
+  B[用户外挂] --> M
+  C[项目外挂] --> M
+  M --> T[冲突表]
+  T --> P[功能开时禁用]
+```
+
+| 功能开关 | 如何开启 | 默认 | 会禁用的包（npm） |
+|---|---|---:|---|
+| **Q&A**（`pi_ask_user_question`） | F2 → Agent → Q&A（需重启） | 关 | `@juicesharp/rpiv-ask-user-question` |
+| **Pi goal mode**（`pi_goal`） | F2 → Agent → Pi goal mode（需重启） | 关 | `pi-codex-goal`、`@narumitw/pi-goal`、`@misunders2d/pi-goal`、`pi-goal`、`pi-goal-x` |
+| **Pi workflows**（`pi_workflows`） | F2 → Agent → Pi workflows（需重启） | 关 | `@quintinshaw/pi-dynamic-workflows` |
+| **Pi subagents**（`pi_subagents`） | 桥接扩展（除非 `--no-extensions`） | 开* | `pi-subagents`、`@tintinweb/pi-subagents` |
+| **`/btw`**（`pi_btw`） | F2 → Agent → Pi /btw（需重启） | 关 | `pi-btw`、`@narumitw/pi-btw`、`@juicesharp/rpiv-btw` |
+
+\*当前无独立 F2 关；`--no-extensions` 可跳过该桥接（本进程也就不应用这条 block）。
+
+对应 F2 项的说明文案会附带 **When on, blocks: …**（与同一张表同步）。

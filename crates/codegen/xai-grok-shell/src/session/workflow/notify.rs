@@ -271,7 +271,6 @@ mod tests {
     }
 }
 
-
 /// Serialize a pager-facing `x.ai/session_notification` payload for External hosts.
 pub fn workflow_session_notification_json(
     session_id: &str,

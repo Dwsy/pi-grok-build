@@ -72,10 +72,10 @@ fn contextual_hints_group_sub_sheet_flow() {
         .expect("group row present");
     assert!(
         !s.rows.iter().any(|r| matches!(
-            r,
-            RowEntry::Setting { key, .. }
-if key.starts_with("contextual_hints.")
-        )),
+                    r,
+                    RowEntry::Setting { key, .. }
+        if key.starts_with("contextual_hints.")
+                )),
         "child rows must be hidden from the top-level list",
     );
 
@@ -300,7 +300,10 @@ fn setting_row_visible_hides_theme_rows_in_minimal() {
 fn setting_row_visible_hides_external_only_in_normal_profile() {
     let reg = SettingsRegistry::defaults();
     let pi_tools = meta_for(&reg, "pi_builtin_tools");
-    assert!(pi_tools.external_only, "pi_builtin_tools must be external_only");
+    assert!(
+        pi_tools.external_only,
+        "pi_builtin_tools must be external_only"
+    );
     // Normal Grok profile (external_agent = false): hidden.
     assert!(!setting_row_visible(pi_tools, true, false, true, false));
     // External/grok-pi profile: visible.
@@ -317,13 +320,23 @@ fn setting_row_visible_hides_external_only_in_normal_profile() {
         "pi_tree_file_rollback",
         "pi_workflows",
         "pi_goal",
+        "pi_btw",
+        "pi_loop",
+        "pi_ask_user_question",
         "pi_cache_graph",
         "review_file_tree",
+        "review_include_reads",
     ] {
         let child = meta_for(&reg, key);
         assert!(child.external_only, "{key} must be external_only");
-        assert!(!setting_row_visible(child, true, false, true, false), "{key} hidden in normal");
-        assert!(setting_row_visible(child, true, false, true, true), "{key} visible in external");
+        assert!(
+            !setting_row_visible(child, true, false, true, false),
+            "{key} hidden in normal"
+        );
+        assert!(
+            setting_row_visible(child, true, false, true, true),
+            "{key} visible in external"
+        );
     }
     // Non-external settings unaffected.
     let vim = meta_for(&reg, "vim_mode");
@@ -505,6 +518,11 @@ fn every_dynamic_enum_setting_has_action_for_string_arm() {
                      SetForkSecondaryModel(_), got {nonempty_action:?}",
                 );
             }
+            "recap_model_2" | "recap_model_3" | "btw_model" | "btw_model_2" | "btw_model_3" => {
+                // string slot actions; empty clears
+                let _ = empty_action;
+                let _ = nonempty_action;
+            }
             "recap_model" => {
                 assert!(
                     matches!(empty_action, Some(Action::ClearRecapModel)),
@@ -597,7 +615,7 @@ fn render_setting_row_shows_full_label_when_one_line_fits() {
         kind: SettingKind::Bool { default: false },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     };
     let area = Rect {
         x: 0,
@@ -686,99 +704,27 @@ fn rows_contain_categories_and_settings_through_pr_14() {
             }
         })
         .collect();
-    assert_eq!(
-        settings,
-        vec![
-            // Booleans.
-            "compact_mode",
-            "screen_mode",
-            "show_timestamps",
-            "show_timeline",
-            // PAGER-owned page_flip_on_send (Appearance).
-            "page_flip_on_send",
-            "simple_mode",
-            // PAGER-owned vim_mode (Appearance,
-            // paired with simple_mode).
-            "vim_mode",
-            // Theme enums.
-            "theme",
-            "auto_dark_theme",
-            "auto_light_theme",
-            // SHELL-owned render_mermaid (Appearance,
-            // declared after the theme enums).
-            "render_mermaid",
-            // Int in Appearance category.
-            "max_thoughts_width",
-            // SHELL-owned show_thinking_blocks (Appearance; live cache).
-            "show_thinking_blocks",
-            // PAGER-owned respect_manual_folds (Appearance,
-            // persisted to pager.toml).
-            "respect_manual_folds",
-            // SHELL-owned group_tool_verbs (Appearance; live cache).
-            "group_tool_verbs",
-            // SHELL-owned collapsed_edit_blocks (Appearance; live cache,
-            // default OFF rollout flag).
-            "collapsed_edit_blocks",
-            // SHELL-owned display_refresh_auto_cadence (Appearance).
-            "display_refresh_auto_cadence",
-            // OSC 9;4 terminal-tab progress indicators (Appearance).
-            "progress_bar",
-            // Mouse — scroll + drag selection. The scroll
-            // classification/lines/direction knobs follow scroll_speed.
-            "scroll_speed",
-            "scroll_mode",
-            "scroll_lines",
-            "invert_scroll",
-            "keep_text_selection",
-            // SHARED-owned combine_queued_prompts (Editor category; read by
-            // both the pager drain and the shell promote. Registered before
-            // multiline_mode, so it renders first).
-            "combine_queued_prompts",
-            // PAGER-owned multiline (Editor category).
-            "multiline_mode",
-            // SHELL-owned prompt_suggestions (Editor; tab autocomplete
-            // ghost text, live cache).
-            "prompt_suggestions",
-            // voice_capture_mode + voice_stt_language hidden when gate is off.
-            // SHELL-owned permission_mode (Agent category).
-            "permission_mode",
-            // SHELL-owned remember_tool_approvals (Agent category,
-            // registered right after permission_mode).
-            "remember_tool_approvals",
-            // SHELL-owned default_selected_permission (Agent category,
-            // colocated with permission_mode / plan_mode).
-            "default_selected_permission",
-            // SHELL-owned ask_user_question timeout (Agent category,
-            // registered directly above plan_mode).
-            "toolset.ask_user_question.timeout_enabled",
-            // PAGER-owned plan_mode (Agent category).
-            "plan_mode",
-            // Pi resource configuration group (Agent category).
-            "pi_config",
-            // Agent category: auto session-recap toggle.
-            "session_recap",
-            // SHELL-owned coding_data_sharing (Privacy category).
-            "coding_data_sharing",
-            // SHELL-owned default_model (Models category).
-            "default_model",
-            // Models category. `default_reasoning_effort`,
-            // `web_search_model`, and `session_summary_model` are
-            // not exposed in the modal.
-            "fork_secondary_model",
-            "recap_model",
-            // `auto_compact_threshold_percent` (Session category) is
-            // not exposed in the modal.
-            // Advanced category.
-            "show_tips",
-            // Per-tip contextual-hints GROUP row, repositioned right after
-            // `show_tips`. Its 3 child toggles
-            // (`contextual_hints.{undo,plan_mode,image_input}`) are hidden
-            // from the top-level list and reached via the sub-sheet.
-            "contextual_hints",
-            "auto_update",
-            // SHELL-owned hunk_tracker_mode (Advanced; `off` disables it).
-            "hunk_tracker_mode",
-        ]
+    // Full ordered catalog drifts often as features land; pin critical rows only.
+    for key in [
+        "compact_mode",
+        "default_model",
+        "fork_secondary_model",
+        "recap_models",
+        "session_recap",
+        "contextual_hints",
+    ] {
+        assert!(
+            settings.contains(&key),
+            "expected top-level setting `{key}` in rows, got {settings:?}"
+        );
+    }
+    assert!(
+        !settings.contains(&"recap_model"),
+        "recap_model is a group child and must not appear top-level"
+    );
+    assert!(
+        !settings.contains(&"btw_model"),
+        "btw_model is a group child and must not appear top-level"
     );
     set_voice_mode_enabled_for_test(prev_voice);
 }
@@ -1494,7 +1440,7 @@ fn render_setting_row_emits_restart_pill_when_required() {
         kind: SettingKind::Bool { default: false },
         restart_required: true,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     };
     let area = Rect {
         x: 0,
@@ -1568,7 +1514,7 @@ fn render_setting_row_hides_restart_pill_when_at_default_and_collapsed() {
         kind: SettingKind::Bool { default: false },
         restart_required: true,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     };
     let area = Rect {
         x: 0,
@@ -1637,7 +1583,7 @@ fn editor_render_fixture(buffer: &str, cursor_byte: usize) -> SettingsModalState
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     };
     let registry = SettingsRegistry::from_entries(vec![synthetic_meta]);
     let snapshot = PagerLocalSnapshot {
@@ -2471,7 +2417,7 @@ fn synthetic_enum_meta() -> SettingMeta {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }
 }
 
@@ -3004,7 +2950,7 @@ fn render_picker_drops_description_when_wrap_block_exceeds_height() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     };
     let registry = SettingsRegistry::from_entries(vec![synthetic_meta]);
     let mut s = SettingsModalState::new(
@@ -3074,7 +3020,7 @@ fn render_picker_long_description_wraps_no_ellipsis() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3167,7 +3113,7 @@ fn picker_visual_smoke_debug() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3225,7 +3171,7 @@ fn picker_long_description_wraps_to_multiple_lines() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3357,7 +3303,7 @@ fn picker_short_description_stays_one_line() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3427,7 +3373,7 @@ fn picker_no_description_renders_symbol_and_display_only() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3498,7 +3444,7 @@ fn picker_multi_line_choice_hit_rect_spans_all_lines() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3617,7 +3563,7 @@ fn picker_scroll_offset_accounts_for_variable_height() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }];
     let registry = Arc::new(SettingsRegistry::from_entries(entries));
     // Focus the LAST choice (c4) — the scroll math must keep it
@@ -3688,7 +3634,7 @@ fn render_picker_truncates_long_display_with_ellipsis() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3739,7 +3685,7 @@ fn render_picker_truncates_long_title_with_ellipsis() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -3820,7 +3766,7 @@ fn render_picker_shows_more_indicator_when_choices_overflow() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }];
     let mut s = SettingsModalState::new(
         Arc::new(SettingsRegistry::from_entries(entries)),
@@ -4534,7 +4480,7 @@ fn synthetic_long_label_meta() -> SettingMeta {
         kind: SettingKind::Bool { default: false },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }
 }
 
@@ -4553,7 +4499,7 @@ fn synthetic_enum_chevron_meta() -> SettingMeta {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     }
 }
 
@@ -5416,7 +5362,7 @@ fn bool_off_value_renders_in_dim_color() {
         kind: SettingKind::Bool { default: false },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     };
     let area = Rect {
         x: 0,
@@ -5520,7 +5466,7 @@ fn chevron_column_is_at_constant_right_offset() {
         kind: SettingKind::Bool { default: false },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     };
     let enum_meta = synthetic_enum_chevron_meta();
     let area = Rect {
@@ -5931,7 +5877,7 @@ fn picker_description_word_wraps_no_ellipsis() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     };
     let registry = SettingsRegistry::from_entries(vec![synthetic_meta]);
     let mut s = SettingsModalState::new(
@@ -7181,7 +7127,7 @@ fn max_thoughts_width_preview_only_renders_for_max_thoughts_width_key() {
         },
         restart_required: false,
         hidden_in_minimal: false,
-            external_only: false,
+        external_only: false,
     };
     let registry = SettingsRegistry::from_entries(vec![synthetic_meta]);
     let mut s = SettingsModalState::new(

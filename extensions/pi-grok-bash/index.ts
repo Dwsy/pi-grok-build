@@ -39,7 +39,8 @@ type BashParams = {
 	command: string;
 	timeout?: number;
 	is_background?: boolean;
-	task_name?: string;
+	/** Short UI label (Pager reads this via adapter → description). */
+	task_name: string;
 };
 
 type BackgroundTask = {
@@ -398,23 +399,43 @@ export default function (pi: ExtensionAPI) {
 	const control = createBashControl(tasks);
 	const nativeBash = createBashToolDefinition(process.cwd());
 	const BashParameters = Type.Object({
-		command: Type.String({ description: "Bash command to execute" }),
+		command: Type.String({
+			description:
+				"Exact bash to run. No trailing comments (# ...). Put the human-readable UI label in task_name instead.",
+		}),
 		timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
-		is_background: Type.Optional(Type.Boolean({ description: "Run as a background task and return its task ID" })),
-		task_name: Type.Optional(Type.String({ description: "Task name in user's language" })),
+		is_background: Type.Optional(
+			Type.Boolean({ description: "true = background task (returns task_id); false/omit = foreground" }),
+		),
+		// Required (like stock Grok `description`): Pager Execute cards prefer this over raw shell.
+		task_name: Type.String({
+			description:
+				"Short human-readable UI title (3–8 words) for BOTH foreground and background. " +
+				"Write it in the same language as the user's messages (not always English). " +
+				"Especially required when the command is long, multi-pipeline, or hard to scan (>~40 chars). " +
+				"Never put this label in command as a # comment.",
+		}),
 	});
 
 	pi.registerTool({
 		...nativeBash,
 		parameters: BashParameters,
-		description: `${nativeBash.description}.`,
+		description:
+			`${nativeBash.description} ` +
+			`Always set task_name: a short human-readable UI title (3–8 words) in the user's language ` +
+			`(match the language of their messages). Required for every call — foreground and background. ` +
+			`This is what the terminal UI shows instead of the raw shell, especially for long/complex commands. ` +
+			`Never annotate command with # comments — put the label in task_name only.`,
+		promptSnippet:
+			"Run bash; always pass task_name (short UI title in user's language, fg+bg). No #comments in command.",
 		async execute(toolCallId, params: BashParams, signal, onUpdate, ctx: ExtensionContext) {
 			if (signal?.aborted) throw new Error("aborted");
+			const taskName = params.task_name?.trim() || undefined;
 			if (params.is_background) {
 				const task = await startTask(pi, {
 					toolCallId,
 					command: params.command,
-					description: params.task_name,
+					description: taskName,
 					cwd: ctx.cwd,
 					timeout: params.timeout,
 					backgrounded: true,
@@ -446,7 +467,7 @@ export default function (pi: ExtensionAPI) {
 							cwd,
 							timeout: options.timeout,
 							backgrounded: false,
-							description: params.task_name,
+							description: taskName,
 							env: options.env ?? process.env,
 							onData: options.onData,
 							stateChanged: control.sync,

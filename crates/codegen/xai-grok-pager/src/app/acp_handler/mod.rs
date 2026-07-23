@@ -654,13 +654,13 @@ fn queue_open_workflows_modal_refresh(app: &mut AppView, agent_id: AgentId) {
     };
     let already_pending = app.pending_effects.iter().any(|effect| {
         matches!(
-            effect,
-            Effect::FetchWorkflowsList {
-                agent_id: pending_id,
-                ..
-            }
-if *pending_id == agent_id
-        )
+                    effect,
+                    Effect::FetchWorkflowsList {
+                        agent_id: pending_id,
+                        ..
+                    }
+        if *pending_id == agent_id
+                )
     });
     if !already_pending {
         app.pending_effects.push(Effect::FetchWorkflowsList {
@@ -700,7 +700,7 @@ fn handle_ext_notification(notif: &acp::ExtNotification, app: &mut AppView) -> b
         }
         "x.ai/mcp/servers_updated" => handle_mcp_servers_updated(notif, app),
         // Pi RPC extension UI is projected onto native Grok pager surfaces.
-        // info is a single surface (multi-line → scrollback, short → toast);
+        // info → SystemMessage scrollback (Pi showStatus / chat append);
         // warning/error stay transient toasts.
         "pi/ui/notify" => handle_pi_ui_notify(notif, app),
         "pi/ui/status" => handle_pi_ui_status(notif, app),
@@ -722,7 +722,10 @@ fn handle_pi_ui_shortcuts(notif: &acp::ExtNotification, app: &mut AppView) -> bo
     let Some(params) = pi_ui_params(notif) else {
         return false;
     };
-    let Some(shortcuts_arr) = params.get("shortcuts").and_then(serde_json::Value::as_array) else {
+    let Some(shortcuts_arr) = params
+        .get("shortcuts")
+        .and_then(serde_json::Value::as_array)
+    else {
         return false;
     };
     let shortcuts: Vec<crate::app::extension_shortcuts::ExtensionShortcut> = shortcuts_arr
@@ -730,10 +733,21 @@ fn handle_pi_ui_shortcuts(notif: &acp::ExtNotification, app: &mut AppView) -> bo
         .filter_map(|v| {
             Some(crate::app::extension_shortcuts::ExtensionShortcut {
                 key: v.get("key")?.as_str()?.to_string(),
-                description: v.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string(),
-                extension: v.get("extension").and_then(|e| e.as_str()).unwrap_or("unknown").to_string(),
+                description: v
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                extension: v
+                    .get("extension")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
                 enabled: v.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true),
-                remapped_to: v.get("remappedTo").and_then(|r| r.as_str()).map(|s| s.to_string()),
+                remapped_to: v
+                    .get("remappedTo")
+                    .and_then(|r| r.as_str())
+                    .map(|s| s.to_string()),
             })
         })
         .collect();
@@ -867,7 +881,10 @@ fn handle_pi_ui_plan_file(notif: &acp::ExtNotification, app: &mut AppView) -> bo
     let Some(params) = pi_ui_params(notif) else {
         return false;
     };
-    let Some(plan_path) = params.get("planFilePath").and_then(serde_json::Value::as_str) else {
+    let Some(plan_path) = params
+        .get("planFilePath")
+        .and_then(serde_json::Value::as_str)
+    else {
         return false;
     };
     // Route to the active agent (same pattern as other pi/ui/* handlers).

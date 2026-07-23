@@ -3648,6 +3648,37 @@ mod tests {
     }
 
     #[test]
+    fn expandable_e_and_y_work_in_nav_not_while_search_focused() {
+        let mut config = cfg(true, false);
+        config.expandable = true;
+        let mut state = PickerState::default();
+
+        assert!(matches!(
+            handle_picker_input(&press('e'), &mut state, 3, &config),
+            PickerOutcome::Expand(0)
+        ));
+        assert!(matches!(
+            handle_picker_input(&press('y'), &mut state, 3, &config),
+            PickerOutcome::Copy(0)
+        ));
+        assert!(matches!(
+            handle_picker_input(
+                &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+                &mut state,
+                3,
+                &config,
+            ),
+            PickerOutcome::Expand(0)
+        ));
+
+        // Focused search must type e/y into the query, not expand/copy.
+        state.search_active = true;
+        let outcome = handle_picker_input(&press('e'), &mut state, 3, &config);
+        assert!(matches!(outcome, PickerOutcome::QueryChanged));
+        assert_eq!(state.query(), "e");
+    }
+
+    #[test]
     fn first_hint_search_edit_leaves_expansion_to_the_host() {
         let mut config = cfg(true, false);
         config.expandable = true;

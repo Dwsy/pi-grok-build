@@ -536,6 +536,18 @@ impl SettingsModalState {
             let Some((key, meta)) = self.focused_setting() else {
                 return false;
             };
+            // Side-model slots use OpenSideModelPicker (searchable ArgPicker), not this list.
+            if matches!(
+                key,
+                "recap_model"
+                    | "recap_model_2"
+                    | "recap_model_3"
+                    | "btw_model"
+                    | "btw_model_2"
+                    | "btw_model_3"
+            ) {
+                return false;
+            }
             // Handles both static `Enum` and `DynamicEnum` catalogs.
             let (supports_preview, resolved): (bool, Vec<OwnedEnumChoice>) = match &meta.kind {
                 SettingKind::Enum {
@@ -870,10 +882,16 @@ pub(super) fn action_for_bool(key: SettingKey, new: bool) -> Option<Action> {
         }),
         "psm_resume_index" => Some(Action::SetPsmResumeIndex(new)),
         "pi_tree_file_rollback" => Some(Action::SetPiTreeFileRollback(new)),
+        "pi_tree_skip_summary_prompt" => Some(Action::SetPiTreeSkipSummaryPrompt(new)),
         "pi_workflows" => Some(Action::SetPiWorkflows(new)),
         "pi_goal" => Some(Action::SetPiGoal(new)),
+        "pi_loop" => Some(Action::SetPiLoop(new)),
+        "pi_ask_user_question" => Some(Action::SetPiAskUserQuestion(new)),
+        "pi_btw" => Some(Action::SetPiBtw(new)),
         "pi_cache_graph" => Some(Action::SetPiCacheGraph(new)),
+        "show_other_tool_args" => Some(Action::SetShowOtherToolArgs(new)),
         "review_file_tree" => Some(Action::SetReviewFileTree(new)),
+        "review_include_reads" => Some(Action::SetReviewIncludeReads(new)),
         "simple_mode" => Some(Action::SetSimpleMode(new)),
         "contextual_hints.undo" => Some(Action::SetContextualHintUndo(new)),
         "contextual_hints.plan_mode" => Some(Action::SetContextualHintPlanMode(new)),
@@ -1018,6 +1036,41 @@ pub(super) fn action_for_string(
                 snapshot
                     .resolve_model_name(&value)
                     .map(Action::SetRecapModel)
+            }
+        }
+        "recap_model_2" => {
+            if value.is_empty() {
+                Some(Action::ClearRecapModel2)
+            } else {
+                Some(Action::SetRecapModel2(value))
+            }
+        }
+        "recap_model_3" => {
+            if value.is_empty() {
+                Some(Action::ClearRecapModel3)
+            } else {
+                Some(Action::SetRecapModel3(value))
+            }
+        }
+        "btw_model" => {
+            if value.is_empty() {
+                Some(Action::ClearBtwModel)
+            } else {
+                Some(Action::SetBtwModel(value))
+            }
+        }
+        "btw_model_2" => {
+            if value.is_empty() {
+                Some(Action::ClearBtwModel2)
+            } else {
+                Some(Action::SetBtwModel2(value))
+            }
+        }
+        "btw_model_3" => {
+            if value.is_empty() {
+                Some(Action::ClearBtwModel3)
+            } else {
+                Some(Action::SetBtwModel3(value))
             }
         }
 

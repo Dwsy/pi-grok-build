@@ -198,6 +198,21 @@ pub(crate) fn parse_bridge_message(
     }))
 }
 
+/// Map a Pi tool name to the appropriate ACP ToolKind so the pager renders
+/// proper block types (execute, read, edit) instead of generic "Other" blocks.
+fn tool_kind_for_name(name: &str) -> acp::ToolKind {
+    match name {
+        "bash" | "run_terminal_command" | "execute" => acp::ToolKind::Execute,
+        "read" | "read_file" | "view" => acp::ToolKind::Read,
+        "edit" | "write" | "create_file" | "apply_diff" | "str_replace_editor" => {
+            acp::ToolKind::Edit
+        }
+        "grep" | "find" | "glob" | "search" | "list_dir" | "ls" => acp::ToolKind::Search,
+        "web_fetch" | "fetch" => acp::ToolKind::Fetch,
+        _ => acp::ToolKind::Other,
+    }
+}
+
 fn parse_child_update(value: Option<&Value>) -> Result<acp::SessionUpdate> {
     let update = value
         .and_then(Value::as_object)
@@ -217,7 +232,7 @@ fn parse_child_update(value: Option<&Value>) -> Result<acp::SessionUpdate> {
             let name = required_str_value(update, "toolName")?;
             Ok(acp::SessionUpdate::ToolCall(
                 acp::ToolCall::new(acp::ToolCallId::new(id.to_string()), name.to_string())
-                    .kind(acp::ToolKind::Other)
+                    .kind(tool_kind_for_name(name))
                     .status(acp::ToolCallStatus::InProgress)
                     .content(Vec::new())
                     .locations(Vec::new())

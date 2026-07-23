@@ -78,10 +78,7 @@ impl SlashCommand for WorkflowCommand {
         // Launch: /workflow <name> [args...]
         let name = first.to_string();
         let rest = trimmed[first.len()..].trim_start().to_string();
-        CommandResult::Action(Action::WorkflowLaunch {
-            name,
-            args: rest,
-        })
+        CommandResult::Action(Action::WorkflowLaunch { name, args: rest })
     }
 }
 

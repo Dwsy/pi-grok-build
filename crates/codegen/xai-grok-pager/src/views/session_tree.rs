@@ -26,6 +26,34 @@ pub enum SessionTreeFocus {
     Search,
     LabelEdit,
     DetailExpanded,
+    /// "Summarize branch?" 3-choice prompt (Pi TreeSelector parity).
+    SummarizePrompt,
+    /// Custom summarization instructions editor.
+    SummarizeCustom,
+}
+
+/// The three choices in the "Summarize branch?" prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SummarizeChoice {
+    NoSummary,
+    Summarize,
+    CustomPrompt,
+}
+
+pub const SUMMARIZE_OPTIONS: &[(&str, SummarizeChoice)] = &[
+    ("No summary", SummarizeChoice::NoSummary),
+    ("Summarize", SummarizeChoice::Summarize),
+    (
+        "Summarize with custom prompt",
+        SummarizeChoice::CustomPrompt,
+    ),
+];
+
+/// Direction for dual-function fold/navigate (Pi TreeSelector semantics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoldDirection {
+    Up,
+    Down,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +100,16 @@ pub struct SessionTreeState {
     pub list_start_y: u16,
     /// Number of list rows rendered last frame (viewport height).
     pub list_viewport: usize,
+    /// Entry id pending navigation (set when Enter is pressed, used by summarize prompt).
+    pub summarize_target_id: Option<String>,
+    /// Cursor position in the summarize 3-choice prompt.
+    pub summarize_cursor: usize,
+    /// Custom summarization instructions draft.
+    pub summarize_custom_draft: String,
+    /// When true, Enter navigates immediately without the "Summarize branch?"
+    /// prompt (mirrors pi-main's branchSummarySkipPrompt setting). Set when the
+    /// modal opens from the `pi_tree_skip_summary_prompt` UiConfig flag.
+    pub skip_summary_prompt: bool,
 }
 
 impl SessionTreeState {
@@ -95,6 +133,10 @@ impl SessionTreeState {
             list_rect: None,
             list_start_y: 0,
             list_viewport: 0,
+            summarize_target_id: None,
+            summarize_cursor: 0,
+            summarize_custom_draft: String::new(),
+            skip_summary_prompt: false,
         }
     }
 
@@ -411,10 +453,107 @@ impl SessionTreeState {
         self.scroll = 0;
     }
 
-    /// Foldable when at least one currently-visible row treats `entry_id`
-    /// as its nearest visible ancestor (Pi TreeSelector semantics).
+    /// Pi-aligned foldable check: a node is foldable only if it is a visible
+    /// root (no visible parent) or a segment start (its visible parent has
+    /// multiple visible children).
     pub fn is_foldable(&self, entry_id: &str) -> bool {
         let rows = self.visible_rows();
+        let visible_ids: HashSet<&str> = rows
+            .iter()
+            .map(|r| self.nodes[r.node_index].id.as_str())
+            .collect();
+        if !visible_ids.contains(entry_id) {
+            return false;
+        }
+        // Find nearest visible ancestor
+        let id_to_parent: HashMap<&str, Option<&str>> = self
+            .nodes
+            .iter()
+            .map(|n| (n.id.as_str(), n.parent_id.as_deref()))
+            .collect();
+        let mut cur = id_to_parent.get(entry_id).copied().flatten();
+        let mut visible_parent: Option<&str> = None;
+        while let Some(pid) = cur {
+            if visible_ids.contains(pid) {
+                visible_parent = Some(pid);
+                break;
+            }
+            cur = id_to_parent.get(pid).copied().flatten();
+        }
+        // Root nodes are always foldable
+        let Some(parent_id) = visible_parent else {
+            return true;
+        };
+        // Segment start: parent has multiple visible children
+        let sibling_count = rows
+            .iter()
+            .filter(|r| {
+                let n = &self.nodes[r.node_index];
+                let mut c = n.parent_id.as_deref();
+                while let Some(pid) = c {
+                    if visible_ids.contains(pid) {
+                        return pid == parent_id;
+                    }
+                    c = id_to_parent.get(pid).copied().flatten();
+                }
+                false
+            })
+            .count();
+        sibling_count > 1
+    }
+
+    /// Pi-aligned dual-function fold/navigate:
+    /// - If the selected node is foldable and not yet folded → fold it.
+    /// - If the selected node is folded → unfold it.
+    /// - Otherwise → jump to the next branch segment start in `direction`.
+    pub fn fold_or_navigate(&mut self, direction: FoldDirection) -> bool {
+        let Some(node) = self.selected_node().cloned() else {
+            return false;
+        };
+        let id = node.id.clone();
+        let foldable = self.is_foldable(&id);
+
+        match direction {
+            FoldDirection::Up => {
+                if foldable && !self.folded.contains(&id) {
+                    self.folded.insert(id);
+                    self.clamp_selected();
+                    return true;
+                }
+                // Navigate to previous branch segment start
+                let target = self.find_branch_segment_start(FoldDirection::Up);
+                if let Some(idx) = target {
+                    self.selected = idx;
+                    self.detail_scroll = 0;
+                    self.ensure_visible(self.list_viewport.max(12));
+                }
+                true
+            }
+            FoldDirection::Down => {
+                if self.folded.contains(&id) {
+                    self.folded.remove(&id);
+                    self.clamp_selected();
+                    return true;
+                }
+                // Navigate to next branch segment start
+                let target = self.find_branch_segment_start(FoldDirection::Down);
+                if let Some(idx) = target {
+                    self.selected = idx;
+                    self.detail_scroll = 0;
+                    self.ensure_visible(self.list_viewport.max(12));
+                }
+                true
+            }
+        }
+    }
+
+    /// Find the index of the next branch segment start in the given direction.
+    /// A segment start is the first child of a branch point (parent with >1 visible children).
+    fn find_branch_segment_start(&self, direction: FoldDirection) -> Option<usize> {
+        let rows = self.visible_rows();
+        if rows.is_empty() {
+            return None;
+        }
         let visible_ids: HashSet<&str> = rows
             .iter()
             .map(|r| self.nodes[r.node_index].id.as_str())
@@ -424,37 +563,98 @@ impl SessionTreeState {
             .iter()
             .map(|n| (n.id.as_str(), n.parent_id.as_deref()))
             .collect();
-        for row in &rows {
+
+        // Build visible children map
+        let mut visible_children: HashMap<Option<&str>, Vec<usize>> = HashMap::new();
+        for (row_idx, row) in rows.iter().enumerate() {
             let n = &self.nodes[row.node_index];
             let mut cur = n.parent_id.as_deref();
+            let mut vparent: Option<&str> = None;
             while let Some(pid) = cur {
                 if visible_ids.contains(pid) {
-                    if pid == entry_id {
-                        return true;
-                    }
+                    vparent = Some(pid);
                     break;
                 }
                 cur = id_to_parent.get(pid).copied().flatten();
             }
+            visible_children.entry(vparent).or_default().push(row_idx);
         }
-        false
+
+        let selected_id = self.selected_node().map(|n| n.id.as_str()).unwrap_or("");
+
+        match direction {
+            FoldDirection::Down => {
+                // Walk down: find first descendant that is a segment start
+                let mut current_id = selected_id;
+                loop {
+                    let children = visible_children
+                        .get(&Some(current_id))
+                        .cloned()
+                        .unwrap_or_default();
+                    if children.is_empty() {
+                        return None;
+                    }
+                    if children.len() > 1 {
+                        // First child of a branch = segment start
+                        return Some(children[0]);
+                    }
+                    // Single child: keep walking down
+                    current_id = self.nodes[rows[children[0]].node_index].id.as_str();
+                }
+            }
+            FoldDirection::Up => {
+                // Walk up the visible parent chain looking for a branch point
+                let mut current_id = selected_id;
+                loop {
+                    let mut cur = id_to_parent.get(current_id).copied().flatten();
+                    let mut vparent: Option<&str> = None;
+                    while let Some(pid) = cur {
+                        if visible_ids.contains(pid) {
+                            vparent = Some(pid);
+                            break;
+                        }
+                        cur = id_to_parent.get(pid).copied().flatten();
+                    }
+                    let Some(parent_id) = vparent else {
+                        // Reached root — return current if it's not already selected
+                        let idx = rows
+                            .iter()
+                            .position(|r| self.nodes[r.node_index].id == current_id);
+                        return idx.filter(|&i| i != self.selected);
+                    };
+                    let siblings = visible_children
+                        .get(&Some(parent_id))
+                        .cloned()
+                        .unwrap_or_default();
+                    if siblings.len() > 1 {
+                        // current_id is a segment start under a branch point
+                        let idx = rows
+                            .iter()
+                            .position(|r| self.nodes[r.node_index].id == current_id);
+                        if let Some(i) = idx {
+                            if i < self.selected {
+                                return Some(i);
+                            }
+                        }
+                    }
+                    current_id = parent_id;
+                }
+            }
+        }
     }
 
+    /// Legacy toggle for backward compat (used by mouse double-click fold, etc.)
     pub fn toggle_fold_selected(&mut self) -> bool {
         let Some(node) = self.selected_node().cloned() else {
             return false;
         };
-        if !self.is_foldable(&node.id) && node.child_ids.is_empty() {
-            return false;
-        }
-        if self.folded.contains(&node.id) {
-            self.folded.remove(&node.id);
+        let id = node.id.clone();
+        if self.folded.contains(&id) {
+            self.folded.remove(&id);
+        } else if self.is_foldable(&id) {
+            self.folded.insert(id);
         } else {
-            // Only fold if it has structural or visible children.
-            if node.child_ids.is_empty() && !self.is_foldable(&node.id) {
-                return false;
-            }
-            self.folded.insert(node.id);
+            return false;
         }
         self.clamp_selected();
         true
@@ -469,8 +669,78 @@ impl SessionTreeState {
         self.focus = SessionTreeFocus::LabelEdit;
     }
 
+    /// Begin the "Summarize branch?" prompt for the given entry id.
+    pub fn begin_summarize_prompt(&mut self, entry_id: String) {
+        self.summarize_target_id = Some(entry_id);
+        self.summarize_cursor = 0;
+        self.summarize_custom_draft.clear();
+        self.focus = SessionTreeFocus::SummarizePrompt;
+    }
+
+    /// Move the summarize prompt cursor.
+    pub fn summarize_move(&mut self, delta: isize) {
+        let len = SUMMARIZE_OPTIONS.len() as isize;
+        self.summarize_cursor = ((self.summarize_cursor as isize + delta).rem_euclid(len)) as usize;
+    }
+
+    /// Confirm the current summarize choice. Returns the action to take.
+    pub fn summarize_confirm(&mut self) -> SummarizeConfirmAction {
+        let choice = SUMMARIZE_OPTIONS[self.summarize_cursor].1;
+        match choice {
+            SummarizeChoice::NoSummary => {
+                let entry_id = self.summarize_target_id.take().unwrap_or_default();
+                self.focus = SessionTreeFocus::List;
+                SummarizeConfirmAction::Navigate {
+                    entry_id,
+                    summarize: false,
+                    custom_instructions: None,
+                }
+            }
+            SummarizeChoice::Summarize => {
+                let entry_id = self.summarize_target_id.take().unwrap_or_default();
+                self.focus = SessionTreeFocus::List;
+                SummarizeConfirmAction::Navigate {
+                    entry_id,
+                    summarize: true,
+                    custom_instructions: None,
+                }
+            }
+            SummarizeChoice::CustomPrompt => {
+                self.focus = SessionTreeFocus::SummarizeCustom;
+                SummarizeConfirmAction::EnterCustomEditor
+            }
+        }
+    }
+
+    /// Confirm the custom summarization instructions.
+    pub fn summarize_custom_confirm(&mut self) -> SummarizeConfirmAction {
+        let entry_id = self.summarize_target_id.take().unwrap_or_default();
+        let instructions = if self.summarize_custom_draft.trim().is_empty() {
+            None
+        } else {
+            Some(self.summarize_custom_draft.trim().to_string())
+        };
+        self.focus = SessionTreeFocus::List;
+        SummarizeConfirmAction::Navigate {
+            entry_id,
+            summarize: true,
+            custom_instructions: instructions,
+        }
+    }
+
+    /// Cancel the summarize prompt or custom editor, returning to the tree list.
+    pub fn cancel_summarize(&mut self) {
+        self.summarize_target_id = None;
+        self.summarize_custom_draft.clear();
+        self.focus = SessionTreeFocus::List;
+    }
+
     pub fn clear_search_or_cancel_edit(&mut self) -> SessionTreeEsc {
         match self.focus {
+            SessionTreeFocus::SummarizePrompt | SessionTreeFocus::SummarizeCustom => {
+                self.cancel_summarize();
+                SessionTreeEsc::Consumed
+            }
             SessionTreeFocus::LabelEdit => {
                 self.focus = SessionTreeFocus::List;
                 self.label_draft.clear();
@@ -515,6 +785,19 @@ impl SessionTreeState {
 pub enum SessionTreeEsc {
     Consumed,
     Close,
+}
+
+/// Result of confirming a choice in the summarize prompt flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SummarizeConfirmAction {
+    /// Navigate with the given summarize settings.
+    Navigate {
+        entry_id: String,
+        summarize: bool,
+        custom_instructions: Option<String>,
+    },
+    /// Switch to the custom instructions editor (no navigation yet).
+    EnterCustomEditor,
 }
 
 fn passes_filter(node: &SessionTreeNode, filter: SessionTreeFilter) -> bool {
@@ -630,6 +913,11 @@ pub fn render_session_tree(
 
     let detail_h = if state.detail_expanded {
         (area.height * 45 / 100).clamp(6, area.height.saturating_sub(6))
+    } else if matches!(
+        state.focus,
+        SessionTreeFocus::SummarizePrompt | SessionTreeFocus::SummarizeCustom
+    ) {
+        8.min(area.height.saturating_sub(4))
     } else {
         4.min(area.height.saturating_sub(4))
     };
@@ -804,24 +1092,103 @@ pub fn render_session_tree(
 
     let count = rows.len();
     let pos = if count == 0 { 0 } else { state.selected + 1 };
-    let help = if matches!(state.focus, SessionTreeFocus::LabelEdit) {
-        format!("  label edit · Enter save · Esc cancel  ({pos}/{count})")
-    } else if state.detail_expanded {
-        format!(
-            "  Ctrl+R collapse · ↑/↓ detail  ({pos}/{count}) [{}]",
-            state.filter.label()
-        )
-    } else {
-        format!(
-            "  ({pos}/{count}) [{}]  ↑/↓ · click select · dblclick go · Tab fold · / search · o filter · Enter go · Esc",
-            state.filter.label()
-        )
-    };
+    let help = session_tree_help_line(state, pos, count);
     Paragraph::new(Line::from(Span::styled(
         help,
         Style::default().fg(theme.gray_dim),
     )))
     .render(chunks[3], buf);
+}
+
+/// One help-bar item: the key chord(s) and a short action label.
+/// Declaring keybindings here keeps the help text in sync with the
+/// actual handlers in `app/modals.rs::handle_session_tree_input`.
+struct TreeHelpItem {
+    keys: &'static str,
+    label: &'static str,
+}
+
+/// Full keybinding catalog for the default (list) focus. Mirrors
+/// pi-main's `TREE_HELP_ITEMS` so users see every available action.
+const TREE_HELP_ITEMS: &[TreeHelpItem] = &[
+    TreeHelpItem {
+        keys: "↑/↓",
+        label: "move",
+    },
+    TreeHelpItem {
+        keys: "←/→",
+        label: "page",
+    },
+    TreeHelpItem {
+        keys: "Tab/Alt+←/→",
+        label: "branch",
+    },
+    TreeHelpItem {
+        keys: "c",
+        label: "copy",
+    },
+    TreeHelpItem {
+        keys: "l",
+        label: "label",
+    },
+    TreeHelpItem {
+        keys: "Shift+T",
+        label: "time",
+    },
+    TreeHelpItem {
+        keys: "Ctrl+D/T/U/L/A",
+        label: "filters",
+    },
+    TreeHelpItem {
+        keys: "Ctrl+O",
+        label: "cycle",
+    },
+    TreeHelpItem {
+        keys: "Ctrl+R",
+        label: "detail",
+    },
+    TreeHelpItem {
+        keys: "r",
+        label: "rollback",
+    },
+    TreeHelpItem {
+        keys: "Enter",
+        label: "navigate",
+    },
+    TreeHelpItem {
+        keys: "/",
+        label: "search",
+    },
+    TreeHelpItem {
+        keys: "Esc",
+        label: "close",
+    },
+];
+
+/// Build the contextual help-bar line for the current focus state.
+fn session_tree_help_line(state: &SessionTreeState, pos: usize, count: usize) -> String {
+    if matches!(state.focus, SessionTreeFocus::LabelEdit) {
+        return format!("  label edit · Enter save · Esc cancel  ({pos}/{count})");
+    }
+    if matches!(state.focus, SessionTreeFocus::SummarizePrompt) {
+        return format!("  ↑/↓ navigate · Enter select · Esc cancel  ({pos}/{count})");
+    }
+    if matches!(state.focus, SessionTreeFocus::SummarizeCustom) {
+        return format!("  type instructions · Enter confirm · Esc cancel  ({pos}/{count})");
+    }
+    if state.detail_expanded {
+        return format!(
+            "  Ctrl+R collapse · ↑/↓ scroll detail  ({pos}/{count}) [{}]",
+            state.filter.label()
+        );
+    }
+    // Default list focus: render the full catalog from TREE_HELP_ITEMS.
+    let items = TREE_HELP_ITEMS
+        .iter()
+        .map(|item| format!("{} {}", item.keys, item.label))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    format!("  ({pos}/{count}) [{}]  {items}", state.filter.label())
 }
 
 fn role_styles(node: &SessionTreeNode, selected: bool, theme: &Theme) -> (Style, Style) {
@@ -908,6 +1275,59 @@ fn render_detail(buf: &mut Buffer, area: Rect, state: &SessionTreeState, theme: 
             Span::styled("▌", Style::default().fg(theme.accent_user)),
         ]));
     }
+    let in_summarize = matches!(
+        state.focus,
+        SessionTreeFocus::SummarizePrompt | SessionTreeFocus::SummarizeCustom
+    );
+    if matches!(state.focus, SessionTreeFocus::SummarizePrompt) {
+        lines.push(Line::from(Span::styled(
+            "  Summarize branch?",
+            Style::default()
+                .fg(theme.accent_user)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for (i, (label, _choice)) in SUMMARIZE_OPTIONS.iter().enumerate() {
+            let cursor = if i == state.summarize_cursor {
+                "› "
+            } else {
+                "  "
+            };
+            let style = if i == state.summarize_cursor {
+                Style::default()
+                    .fg(theme.accent_user)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.text_primary)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {cursor}{label}"),
+                style,
+            )));
+        }
+        lines.push(Line::from(Span::styled(
+            "  ↑/↓ navigate · Enter select · Esc cancel",
+            Style::default().fg(theme.gray_dim),
+        )));
+    }
+    if matches!(state.focus, SessionTreeFocus::SummarizeCustom) {
+        lines.push(Line::from(Span::styled(
+            "  Custom summarization instructions:",
+            Style::default()
+                .fg(theme.accent_user)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::raw(state.summarize_custom_draft.clone()),
+            Span::styled("▌", Style::default().fg(theme.accent_user)),
+        ]));
+        lines.push(Line::from(Span::styled(
+            "  Enter confirm · Esc cancel",
+            Style::default().fg(theme.gray_dim),
+        )));
+    }
+    // When a summarize prompt/editor is active it owns the detail pane — skip
+    // the entry body so the prompt isn't crowded or clipped.
     let max_body = if state.detail_expanded {
         inner.height.saturating_sub(2) as usize
     } else {
@@ -915,15 +1335,17 @@ fn render_detail(buf: &mut Buffer, area: Rect, state: &SessionTreeState, theme: 
     };
     let body_lines: Vec<&str> = body.lines().collect();
     let start = state.detail_scroll.min(body_lines.len().saturating_sub(1));
-    let slice = &body_lines[start..(start + max_body).min(body_lines.len())];
-    for line in slice {
-        lines.push(Line::from(Span::raw(format!("  {line}"))));
-    }
-    if !state.detail_expanded && body_lines.len() > max_body {
-        lines.push(Line::from(Span::styled(
-            "  … Ctrl+R expand",
-            Style::default().fg(theme.gray_dim),
-        )));
+    if !in_summarize {
+        let slice = &body_lines[start..(start + max_body).min(body_lines.len())];
+        for line in slice {
+            lines.push(Line::from(Span::raw(format!("  {line}"))));
+        }
+        if !state.detail_expanded && body_lines.len() > max_body {
+            lines.push(Line::from(Span::styled(
+                "  … Ctrl+R expand",
+                Style::default().fg(theme.gray_dim),
+            )));
+        }
     }
     Paragraph::new(lines)
         .wrap(Wrap { trim: false })

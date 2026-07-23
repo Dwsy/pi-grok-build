@@ -406,8 +406,7 @@ pub(crate) fn build_virtual_list(
         .into_iter()
         .map(|i| PickerItem::Fuzzy { original_index: i })
         .collect();
-    if let Some(hits) = content_results
-    {
+    if let Some(hits) = content_results {
         for (hit_idx, hit) in hits.iter().enumerate() {
             if !fuzzy_ids.contains(hit.session_id.as_str()) {
                 items.push(PickerItem::Content { hit_index: hit_idx });
@@ -488,9 +487,8 @@ pub(crate) fn build_entry_map(
         } else {
             Vec::new()
         };
-        let show_content_header = !content_items.is_empty()
-            || (content_loading
-                && !query.trim().is_empty());
+        let show_content_header =
+            !content_items.is_empty() || (content_loading && !query.trim().is_empty());
         if show_content_header {
             map.push(None); // content header
         }
@@ -510,9 +508,7 @@ pub(crate) fn build_entry_map(
             .filter(|i| matches!(i, PickerItem::Fuzzy { .. }))
             .count();
         let content_count = virtual_list.len() - fuzzy_count;
-        let has_header = content_count > 0
-            || (content_loading
-                && !query.trim().is_empty());
+        let has_header = content_count > 0 || (content_loading && !query.trim().is_empty());
         let mut map = Vec::with_capacity(virtual_list.len() + usize::from(has_header));
         for (i, item) in virtual_list.into_iter().enumerate() {
             if has_header && i == fuzzy_count {

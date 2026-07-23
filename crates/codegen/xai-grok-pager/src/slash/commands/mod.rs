@@ -14,6 +14,7 @@ pub mod compact_mode;
 pub mod config_agents;
 pub mod context;
 pub mod copy;
+pub mod create_workflow;
 pub mod dashboard;
 pub mod debug;
 pub mod docs;
@@ -46,13 +47,15 @@ pub mod new;
 pub mod notify;
 pub mod personas;
 pub mod pi_config;
+pub mod pi_shortcut_manager;
 pub mod plan;
+pub mod plan_mode;
 pub mod plugin;
 pub mod privacy;
 pub mod queue;
 pub mod recap;
-pub mod reload;
 pub mod release_notes;
+pub mod reload;
 pub mod remember;
 pub mod rename;
 pub mod resume;
@@ -72,12 +75,10 @@ pub mod transcript;
 pub mod tree;
 pub mod tree_map;
 pub mod usage;
-pub mod plan_mode;
 pub mod view_plan;
 pub mod vim_mode;
 pub mod voice;
 pub mod workflow;
-pub mod create_workflow;
 pub mod workflows;
 use super::command::SlashCommand;
 use std::sync::Arc;
@@ -93,7 +94,6 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(docs::DocsCommand),
         Arc::new(home::HomeCommand),
         Arc::new(new::NewCommand),
-        
         Arc::new(fork::ForkCommand),
         Arc::new(clone_cmd::CloneCommand),
         Arc::new(reload::ReloadCommand),
@@ -141,7 +141,6 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(workflows::WorkflowsCommand),
         Arc::new(btw::BtwCommand),
         Arc::new(recap::RecapCommand),
-        
         Arc::new(doctor::DoctorCommand),
         Arc::new(voice::VoiceCommand),
         Arc::new(loop_cmd::LoopCommand),
@@ -151,6 +150,7 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(timeline::TimelineCommand),
         Arc::new(toggle_mouse_reporting::ToggleMouseReportingCommand),
         Arc::new(pi_config::PiConfigCommand),
+        Arc::new(pi_shortcut_manager::PiShortcutManagerCommand),
         Arc::new(settings_cmd::SettingsCommand),
         Arc::new(privacy::PrivacyCommand),
         Arc::new(rewind::RewindCommand),
@@ -563,7 +563,6 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
-        billing_surface_visible: false,
         };
         let cmd = model::ModelCommand;
         let items = cmd.suggest_args(&ctx, "").expect("should have suggestions");
@@ -589,7 +588,6 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
-        billing_surface_visible: false,
         };
         let cmd = model::ModelCommand;
         assert!(cmd.suggest_args(&ctx, "").is_none());
@@ -673,7 +671,6 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
-        billing_surface_visible: false,
         };
         let cmd = usage::UsageCommand;
         assert!(cmd.takes_args_now(&ctx));
@@ -690,7 +687,6 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: false,
             screen_mode: crate::app::ScreenMode::Fullscreen,
-        billing_surface_visible: false,
         };
         let items = usage::UsageCommand.suggest_args(&ctx, "").unwrap();
         assert_eq!(
@@ -757,7 +753,6 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
-        billing_surface_visible: false,
         };
         assert!(
             !gboom::GboomCommand.visible(&ctx),

@@ -513,16 +513,9 @@ pub(super) fn handle_context_info_complete(
                     .map(str::to_owned)
             })
             .filter(|s| !s.is_empty())
-            .or_else(|| {
-                agent
-                    .session
-                    .session_id
-                    .as_ref()
-                    .map(|id| id.0.to_string())
-            })
+            .or_else(|| agent.session.session_id.as_ref().map(|id| id.0.to_string()))
             .unwrap_or_else(|| "session".into());
-        let export_basename =
-            crate::views::cache_graph::sanitize_export_name(&export_basename);
+        let export_basename = crate::views::cache_graph::sanitize_export_name(&export_basename);
         let cache_metrics = if cache_graph_enabled {
             info.cache_metrics.clone()
         } else {

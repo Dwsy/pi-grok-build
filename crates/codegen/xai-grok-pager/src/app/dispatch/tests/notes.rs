@@ -227,11 +227,11 @@ fn manual_recap_uses_active_model_without_dedicated_override() {
         effects.as_slice(),
         [Effect::SendRecap {
             auto: false,
-            model: Some(model),
+            models,
             thinking_level: Some(level),
             custom_instructions: None,
             ..
-        }] if model == "provider::active-model" && level == "medium"
+        }] if models.as_slice() == ["provider::active-model"] && level == "medium"
     ));
 }
 

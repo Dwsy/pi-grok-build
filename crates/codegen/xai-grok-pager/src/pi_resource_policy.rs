@@ -15,9 +15,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::pi_resource_config::{
-    PiResource, PiResourceCatalog, PiResourceType,
-};
+use crate::pi_resource_config::{PiResource, PiResourceCatalog, PiResourceType};
 
 // ── Default blocklist ────────────────────────────────────────────────────────
 
@@ -77,6 +75,12 @@ pub struct ResourcePolicy {
     /// When `true`, skip the renderer-name heuristic and only apply the
     /// explicit source lists.  Useful for power users who want full control.
     pub disable_heuristics: bool,
+    /// Runtime-only F2 / bridge feature keys currently enabled for this process
+    /// (e.g. `pi_goal`, `pi_ask_user_question`, `pi_subagents`).
+    /// Drives conditional package blocks from
+    /// `assets/native_feature_conflicts.toml`. Not persisted.
+    #[serde(skip)]
+    pub enabled_native_features: Vec<String>,
 }
 
 impl ResourcePolicy {
@@ -137,6 +141,7 @@ impl ResourcePolicy {
             allow: partial.allow,
             block: partial.block,
             disable_heuristics: partial.disable_heuristics.unwrap_or(false),
+            enabled_native_features: Vec::new(),
         }
     }
 
@@ -309,6 +314,12 @@ impl ResourcePolicy {
             }
         }
 
+        // 4b. Feature-gated conflicts from assets/native_feature_conflicts.toml.
+        if let Some(reason) = self.feature_conflict_reason(&resource.source, resource.path.as_path())
+        {
+            return Decision::Block { reason };
+        }
+
         // 5. Renderer name heuristic (unless disabled).
         if !self.disable_heuristics {
             let file_name = resource
@@ -361,15 +372,17 @@ impl ResourcePolicy {
 
         // Default blocklist: match against known conflicting package names.
         for blocked in DEFAULT_BLOCKED_SOURCES {
-            let pkg_name = blocked
-                .strip_prefix("npm:")
-                .unwrap_or(blocked);
+            let pkg_name = blocked.strip_prefix("npm:").unwrap_or(blocked);
             if path.contains(pkg_name) {
                 return Some(format!(
                     "default-blocked: {} conflicts with Grok Pager renderer",
                     blocked
                 ));
             }
+        }
+
+        if let Some(reason) = self.feature_conflict_reason(path, path_buf) {
+            return Some(reason);
         }
 
         // Renderer name heuristic.
@@ -398,10 +411,44 @@ impl ResourcePolicy {
         None
     }
 
+    /// Match against packages listed for currently enabled native features.
+    /// `source_or_path` is either `resource.source` (exact `npm:…`) or a CLI path.
+    fn feature_conflict_reason(&self, source_or_path: &str, path: &Path) -> Option<String> {
+        if self.enabled_native_features.is_empty() {
+            return None;
+        }
+        let table = crate::native_feature_conflicts::FeatureConflictTable::load();
+        let path_str = path.to_string_lossy();
+        for feature in &self.enabled_native_features {
+            for blocked in table.packages_for(feature) {
+                let exact = source_or_path == blocked.as_str();
+                let pkg_name = blocked.strip_prefix("npm:").unwrap_or(blocked.as_str());
+                let path_hit = path_str.contains(pkg_name) || source_or_path.contains(pkg_name);
+                if exact || path_hit {
+                    let reason = table.reason_for(feature);
+                    return Some(if reason.is_empty() {
+                        format!(
+                            "default-blocked: {blocked} conflicts with native feature `{feature}`"
+                        )
+                    } else {
+                        format!(
+                            "default-blocked: {blocked} conflicts with native feature `{feature}` ({reason})"
+                        )
+                    });
+                }
+            }
+        }
+        None
+    }
+
     fn matches_any(&self, source: &str, path: &Path, patterns: &[String]) -> bool {
         let path_str = path.to_string_lossy();
         patterns.iter().any(|pattern| {
-            source == pattern.as_str()
+            // `auto` and `local` are discovery labels, not stable resource
+            // identities. Never let a legacy policy entry for either label
+            // affect every discovered resource.
+            let shared_discovery_label = matches!(pattern.as_str(), "auto" | "local");
+            (!shared_discovery_label && source == pattern.as_str())
                 || path_str.contains(pattern.as_str())
                 || path
                     .file_name()
@@ -463,10 +510,7 @@ impl PiLaunchPlan {
             ]);
         }
         for path in &self.skills {
-            args.extend([
-                "--skill".to_string(),
-                path.to_string_lossy().into_owned(),
-            ]);
+            args.extend(["--skill".to_string(), path.to_string_lossy().into_owned()]);
         }
         for path in &self.prompts {
             args.extend([
@@ -475,10 +519,7 @@ impl PiLaunchPlan {
             ]);
         }
         for path in &self.themes {
-            args.extend([
-                "--theme".to_string(),
-                path.to_string_lossy().into_owned(),
-            ]);
+            args.extend(["--theme".to_string(), path.to_string_lossy().into_owned()]);
         }
     }
 
@@ -518,9 +559,7 @@ pub struct BlockedResource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pi_resource_config::{
-        PiProjectOverride, PiResourceOrigin, PiResourceScope,
-    };
+    use crate::pi_resource_config::{PiProjectOverride, PiResourceOrigin, PiResourceScope};
 
     fn make_resource(
         path: &str,
@@ -603,10 +642,7 @@ mod tests {
         assert_eq!(plan.extensions.len(), 1);
         assert!(plan.extensions[0].ends_with("my-tool/index.ts"));
         assert_eq!(plan.blocked.len(), 2);
-        assert!(plan
-            .blocked
-            .iter()
-            .any(|b| b.reason.contains("pi-pretty")));
+        assert!(plan.blocked.iter().any(|b| b.reason.contains("pi-pretty")));
     }
 
     #[test]
@@ -628,6 +664,83 @@ mod tests {
     }
 
     #[test]
+    fn rpiv_ask_user_question_allowed_when_native_qa_off() {
+        let catalog = make_catalog(vec![make_resource(
+            "/home/user/.pi/agent/npm/node_modules/@juicesharp/rpiv-ask-user-question/index.ts",
+            "npm:@juicesharp/rpiv-ask-user-question",
+            PiResourceType::Extensions,
+            true,
+        )]);
+        let policy = ResourcePolicy::default();
+        let plan = policy.evaluate(&catalog);
+
+        assert_eq!(plan.extensions.len(), 1);
+        assert!(plan.blocked.is_empty());
+        assert!(policy
+            .check_explicit_path(
+                "/home/user/.pi/agent/npm/node_modules/@juicesharp/rpiv-ask-user-question/index.ts",
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn rpiv_ask_user_question_blocked_when_native_qa_on() {
+        let catalog = make_catalog(vec![
+            make_resource(
+                "/home/user/.pi/agent/npm/node_modules/@juicesharp/rpiv-ask-user-question/index.ts",
+                "npm:@juicesharp/rpiv-ask-user-question",
+                PiResourceType::Extensions,
+                true,
+            ),
+            make_resource(
+                "/home/user/.pi/agent/extensions/my-tool/index.ts",
+                "local",
+                PiResourceType::Extensions,
+                true,
+            ),
+        ]);
+        let policy = ResourcePolicy {
+            enabled_native_features: vec!["pi_ask_user_question".to_owned()],
+            ..Default::default()
+        };
+        let plan = policy.evaluate(&catalog);
+
+        assert_eq!(plan.extensions.len(), 1);
+        assert!(plan.extensions[0].ends_with("my-tool/index.ts"));
+        assert_eq!(plan.blocked.len(), 1);
+        assert!(plan.blocked[0]
+            .reason
+            .contains("@juicesharp/rpiv-ask-user-question"));
+
+        let reason = policy.check_explicit_path(
+            "/home/user/.pi/agent/npm/node_modules/@juicesharp/rpiv-ask-user-question/index.ts",
+        );
+        assert!(reason
+            .unwrap()
+            .contains("@juicesharp/rpiv-ask-user-question"));
+    }
+
+    #[test]
+    fn pi_goal_packages_blocked_when_goal_on() {
+        let catalog = make_catalog(vec![make_resource(
+            "/home/user/.pi/agent/npm/node_modules/@narumitw/pi-goal/index.ts",
+            "npm:@narumitw/pi-goal",
+            PiResourceType::Extensions,
+            true,
+        )]);
+        let off = ResourcePolicy::default();
+        assert!(off.evaluate(&catalog).blocked.is_empty());
+
+        let on = ResourcePolicy {
+            enabled_native_features: vec!["pi_goal".to_owned()],
+            ..Default::default()
+        };
+        let plan = on.evaluate(&catalog);
+        assert_eq!(plan.blocked.len(), 1);
+        assert!(plan.blocked[0].reason.contains("pi-goal"));
+    }
+
+    #[test]
     fn user_allow_overrides_default_block() {
         let catalog = make_catalog(vec![make_resource(
             "/home/user/.pi/agent/npm/node_modules/pi-tool-display/index.ts",
@@ -642,6 +755,32 @@ mod tests {
         let plan = policy.evaluate(&catalog);
 
         assert_eq!(plan.extensions.len(), 1);
+        assert!(plan.blocked.is_empty());
+    }
+
+    #[test]
+    fn shared_discovery_labels_do_not_match_every_resource() {
+        let catalog = make_catalog(vec![
+            make_resource(
+                "/home/user/.pi/agent/extensions/alpha.ts",
+                "auto",
+                PiResourceType::Extensions,
+                true,
+            ),
+            make_resource(
+                "/home/user/.pi/agent/extensions/beta.ts",
+                "auto",
+                PiResourceType::Extensions,
+                true,
+            ),
+        ]);
+        let policy = ResourcePolicy {
+            block: vec!["auto".to_owned()],
+            ..Default::default()
+        };
+        let plan = policy.evaluate(&catalog);
+
+        assert_eq!(plan.extensions.len(), 2);
         assert!(plan.blocked.is_empty());
     }
 
@@ -826,7 +965,11 @@ mod tests {
     #[test]
     fn explicit_path_allows_normal_extension() {
         let policy = ResourcePolicy::default();
-        assert!(policy.check_explicit_path("/home/user/my-ext/index.ts").is_none());
+        assert!(
+            policy
+                .check_explicit_path("/home/user/my-ext/index.ts")
+                .is_none()
+        );
     }
 
     #[test]
@@ -835,9 +978,13 @@ mod tests {
             allow: vec!["pi-tool-display".to_owned()],
             ..Default::default()
         };
-        assert!(policy
-            .check_explicit_path("/home/user/.pi/agent/npm/node_modules/pi-tool-display/index.ts")
-            .is_none());
+        assert!(
+            policy
+                .check_explicit_path(
+                    "/home/user/.pi/agent/npm/node_modules/pi-tool-display/index.ts"
+                )
+                .is_none()
+        );
     }
 
     #[test]
@@ -865,7 +1012,11 @@ mod tests {
             disable_heuristics: true,
             ..Default::default()
         };
-        assert!(policy.check_explicit_path("/ext/custom-header-widget/index.ts").is_none());
+        assert!(
+            policy
+                .check_explicit_path("/ext/custom-header-widget/index.ts")
+                .is_none()
+        );
     }
 
     // ── TOML persistence tests ────────────────────────────────────────────
@@ -879,6 +1030,7 @@ mod tests {
             allow: vec!["npm:pi-tool-display".to_owned()],
             block: vec!["my-bad-ext".to_owned()],
             disable_heuristics: true,
+            enabled_native_features: Vec::new(),
         };
         policy.save_to_path(&path).unwrap();
 
@@ -953,6 +1105,7 @@ mod tests {
             allow: vec!["npm:a".to_owned()],
             block: vec!["npm:b".to_owned()],
             disable_heuristics: true,
+            enabled_native_features: Vec::new(),
         };
         // Layer without disable_heuristics key must not reset the flag.
         policy.merge_partial(&PartialPolicy {
@@ -961,10 +1114,7 @@ mod tests {
             disable_heuristics: None,
         });
         assert_eq!(policy.allow, vec!["npm:a".to_owned(), "npm:c".to_owned()]);
-        assert_eq!(
-            policy.block,
-            vec!["npm:b".to_owned(), "npm:d".to_owned()]
-        );
+        assert_eq!(policy.block, vec!["npm:b".to_owned(), "npm:d".to_owned()]);
         assert!(policy.disable_heuristics);
 
         policy.merge_partial(&PartialPolicy {

@@ -6,114 +6,93 @@ import Link from "next/link";
 
 export default function InstallationPage() {
   const dict = useDict();
+  const d = dict.docsPages.installation;
   return (
     <div>
       <h1 className="text-3xl font-bold tracking-tight">
         {dict.docs.sidebar.installation}
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-text-secondary">
-        Single platform binary. Runtime dependency: Pi ≥{" "}
-        <strong className="text-text-primary">0.80.10</strong>. Current release
-        line: <strong className="text-text-primary">0.0.8</strong>.
+        {d.introLead}{" "}
+        <strong className="text-text-primary">0.80.10</strong>
+        {d.introMid}{" "}
+        <strong className="text-text-primary">0.0.8</strong>
+        {d.introEnd}
       </p>
 
-      <h2 className="mt-10 text-xl font-semibold">macOS / Linux</h2>
-      <p className="mt-2 text-text-secondary">
-        Detects platform, installs to{" "}
-        <code className="text-accent font-mono text-sm">~/.local/bin</code>, and
-        creates a <code className="font-mono text-accent text-sm">pi-grok</code>{" "}
-        alias symlink.
-      </p>
+      <h2 className="mt-10 text-xl font-semibold">{d.sections.macos}</h2>
+      <p className="mt-2 text-text-secondary">{d.macosBody}</p>
       <div className="mt-4">
         <CodeBlock
           code="curl -fsSL https://github.com/Dwsy/grok-pi/releases/latest/download/install.sh | sh"
-          label="One-line install"
+          label={d.installLabel}
         />
       </div>
       <p className="mt-3 text-sm text-text-tertiary">
-        Override install dir with{" "}
+        {d.overrideInstall}{" "}
         <code className="font-mono text-accent">GROK_PI_INSTALL_DIR</code>.
       </p>
 
-      <h2 className="mt-10 text-xl font-semibold">Windows</h2>
+      <h2 className="mt-10 text-xl font-semibold">{d.sections.windows}</h2>
       <div className="mt-4">
         <CodeBlock
           code="irm https://github.com/Dwsy/grok-pi/releases/latest/download/install.ps1 | iex"
-          label="PowerShell install"
+          label={d.powershellLabel}
         />
       </div>
 
-      <h2 className="mt-10 text-xl font-semibold">Prerequisites</h2>
+      <h2 className="mt-10 text-xl font-semibold">{d.sections.prereq}</h2>
       <div className="mt-4">
         <CodeBlock
           code="npm install --global @earendil-works/pi-coding-agent"
-          label="Install Pi"
+          label={d.installPiLabel}
         />
       </div>
-      <p className="mt-3 text-sm text-text-secondary">
-        Node.js ≥ 22.19.0 recommended for Pi package installs. grok-pi spawns{" "}
-        <code className="font-mono text-xs text-accent">pi</code> (override with{" "}
-        <code className="font-mono text-xs text-accent">--pi-bin</code> /{" "}
-        <code className="font-mono text-xs text-accent">PI_BIN</code>).
-      </p>
+      <p className="mt-3 text-sm text-text-secondary">{d.prereqBody}</p>
 
-      <h2 className="mt-10 text-xl font-semibold">First run</h2>
+      <h2 className="mt-10 text-xl font-semibold">{d.sections.firstRun}</h2>
       <div className="mt-4 space-y-3">
-        <CodeBlock code="cd your-project && grok-pi" label="New session" />
-        <CodeBlock code="grok-pi --continue" label="Continue last session" />
+        <CodeBlock code="cd your-project && grok-pi" label={d.newSession} />
+        <CodeBlock code="grok-pi --continue" label={d.continueSession} />
         <CodeBlock
           code="grok-pi --session 019f88c"
-          label="Resume by partial UUID"
+          label={d.resumePartial}
         />
       </div>
       <p className="mt-3 text-sm text-text-secondary">
-        Coming from stock Grok or interactive Pi? See{" "}
+        {d.migrationHint}{" "}
         <Link href="/docs/migration/" className="text-accent hover:underline">
-          Migration
+          {d.migrationLink}
         </Link>
         .
       </p>
 
-      <h2 className="mt-10 text-xl font-semibold">Verify</h2>
+      <h2 className="mt-10 text-xl font-semibold">{d.sections.verify}</h2>
       <div className="mt-4">
-        <CodeBlock code="grok-pi --version" label="Check version" />
+        <CodeBlock code="grok-pi --version" label={d.checkVersion} />
       </div>
-      <p className="mt-3 text-sm text-text-tertiary">
-        Expect <code className="font-mono text-accent">grok-pi 0.0.8</code> or
-        newer.
-      </p>
+      <p className="mt-3 text-sm text-text-tertiary">{d.expectVersion}</p>
 
-      <h2 className="mt-10 text-xl font-semibold">Updating</h2>
+      <h2 className="mt-10 text-xl font-semibold">{d.sections.updating}</h2>
       <div className="mt-4 space-y-3">
-        <CodeBlock code="grok-pi update --check" label="Check" />
-        <CodeBlock code="grok-pi update" label="Install latest" />
+        <CodeBlock code="grok-pi update --check" label={d.updateCheck} />
+        <CodeBlock code="grok-pi update" label={d.updateInstall} />
       </div>
-      <p className="mt-3 text-sm text-text-tertiary">
-        Background checks use GitHub Releases (JSP proxy fallback for rate
-        limits). Disable with{" "}
-        <code className="font-mono text-accent">GROK_PI_NO_AUTO_UPDATE=1</code>.
-      </p>
+      <p className="mt-3 text-sm text-text-tertiary">{d.updateNote}</p>
 
-      <h2 className="mt-10 text-xl font-semibold">When an extension crashes startup</h2>
-      <p className="mt-2 text-text-secondary">
-        grok-pi <strong className="text-text-primary">self-heals</strong>: binary-search
-        the extension list, print the culprit, relaunch without it. Manual escape:
-      </p>
+      <h2 className="mt-10 text-xl font-semibold">{d.sections.crash}</h2>
+      <p className="mt-2 text-text-secondary">{d.crashBody}</p>
       <div className="mt-4">
-        <CodeBlock code="grok-pi -ne" label="No extensions" />
+        <CodeBlock code="grok-pi -ne" label={d.noExtLabel} />
       </div>
 
-      <h2 className="mt-10 text-xl font-semibold">Build from source</h2>
-      <p className="mt-2 text-text-secondary">
-        Rust <strong className="text-text-primary">1.92.0</strong> (see{" "}
-        <code className="font-mono text-xs">rust-toolchain.toml</code>), Node.js{" "}
-        <strong className="text-text-primary">22.19.0+</strong>, npm, system Pi.
-      </p>
+      <h2 className="mt-10 text-xl font-semibold">{d.sections.source}</h2>
+      <p className="mt-2 text-text-secondary">{d.sourceBody}</p>
       <div className="mt-4 space-y-3">
-        <CodeBlock code="./build.sh" label="Build" />
+        <CodeBlock code="./build.sh" label={d.buildLabel} />
         <CodeBlock
           code="PI_BIN=pi ./run-local.sh /path/to/project"
-          label="Run locally"
+          label={d.runLocalLabel}
         />
       </div>
     </div>

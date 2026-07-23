@@ -6,14 +6,15 @@
 //! consumes those messages in the `grok-pi` composition binary.
 
 mod background_bash_bridge;
+mod btw_bridge;
 mod cache_metrics;
 mod context_projection;
 mod goal_host;
+mod loop_host;
 mod model;
 mod pi_adapter;
 mod pi_rpc;
 mod pi_workflow_backend;
-mod workflow_host;
 pub mod plan_mode;
 mod prompt_bridge;
 mod psm_session_catalog;
@@ -22,6 +23,7 @@ mod recap_bridge;
 mod subagent_projection;
 mod todo_bridge;
 mod tool_projection;
+mod workflow_host;
 
 pub use model::{PiSessionInfo, PiSessionSwitch, scan_local_sessions};
 pub use pi_adapter::{PiAgent, PiBootstrap};

@@ -2158,6 +2158,7 @@ fn session_picker_entry_maps_to_dormant_roster_row() {
         branch: None,
         repo_name: "repo-app".to_string(),
         worktree_label: Some("wt".to_string()),
+        parent_session_path: None,
         card_detail: None,
     };
     let roster = session_picker_entry_to_roster(&entry);

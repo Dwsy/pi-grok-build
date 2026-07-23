@@ -178,9 +178,12 @@ pub struct NotificationListState {
 
 impl NotificationListState {
     pub fn new(notifications: Vec<ExternalNotification>) -> Self {
+        // Nav-first: e/y/←/→ expand+copy must work before type-to-search.
+        // input_active() left search_active=true while show_search_hint was false,
+        // so printable keys (including e/y) only typed into the query.
         Self {
             notifications,
-            picker: crate::views::picker::PickerState::input_active(),
+            picker: crate::views::picker::PickerState::default(),
         }
     }
 
@@ -239,14 +242,31 @@ mod notification_list_tests {
         state.picker.set_query("limit");
         assert_eq!(state.filtered_notifications()[0].message, "rate limit");
     }
+
+    #[test]
+    fn opens_in_nav_mode_not_search() {
+        let state = NotificationListState::new(vec![notification("hello", Some("info"))]);
+        assert!(
+            !state.picker.search_active,
+            "notifications must open nav-first so e/y/arrows are not swallowed as search input"
+        );
+        assert!(state.picker.query().is_empty());
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArgPickerSelection {
     /// Execute the owning slash command with the selected argument.
     RunCommand,
-    /// Persist the selected model as the dedicated session-recap model.
-    SetRecapModel,
+    /// Persist into a settings model slot (recap/btw chain).
+    SetModelSlot(&'static str),
+}
+
+/// One message in the PSM session-preview surface (Ctrl+→ on External resume).
+#[derive(Debug, Clone)]
+pub struct SessionPreviewMessage {
+    pub role: String,
+    pub content: String,
 }
 
 pub enum ActiveModal {
@@ -279,6 +299,9 @@ pub enum ActiveModal {
         state: crate::views::picker::PickerState,
         /// Previous command palette state (if opened from palette). Restored on Esc.
         previous_palette: Option<PaletteSnapshot>,
+        /// F2 settings modal stashed when opened from a side-model slot.
+        /// Restored on Esc / after commit so the user returns to the group sheet.
+        previous_settings: Option<Box<crate::views::settings_modal::SettingsModalState>>,
         /// Determines what accepting a picker item does.
         selection: ArgPickerSelection,
         /// Shared modal window chrome state.
@@ -337,7 +360,7 @@ pub enum ActiveModal {
         /// Whether session content preview mode is active (Right arrow when PSM open).
         preview_mode: bool,
         /// Loaded session messages for preview mode.
-        preview_messages: Option<Vec<String>>,
+        preview_messages: Option<Vec<SessionPreviewMessage>>,
     },
     /// How-to documentation list modal (wider picker style).
     DocPicker {
@@ -1296,7 +1319,7 @@ pub fn render_context_info_overlay(
     view: crate::views::cache_graph::CacheGraphView,
     cache_enabled: bool,
 ) {
-    use crate::views::cache_graph::{render_cache_view_lines, CacheGraphView};
+    use crate::views::cache_graph::{CacheGraphView, render_cache_view_lines};
     use ratatui::widgets::{Paragraph, Widget, Wrap};
 
     let show_cache = cache_enabled && cache_metrics.is_some();

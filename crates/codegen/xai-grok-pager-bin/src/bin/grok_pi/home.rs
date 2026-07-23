@@ -88,11 +88,7 @@ mod tests {
     #[test]
     fn default_home_ends_with_grok_pi() {
         let p = default_grok_pi_home();
-        assert!(
-            p.ends_with(DEFAULT_GROK_PI_DIRNAME),
-            "got {}",
-            p.display()
-        );
+        assert!(p.ends_with(DEFAULT_GROK_PI_DIRNAME), "got {}", p.display());
     }
 
     #[test]

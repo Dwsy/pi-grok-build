@@ -4447,6 +4447,7 @@ fn dashboard_action_for_id(
         | ActionId::SendToBackground
         | ActionId::CycleThinkingLevel
         | ActionId::CycleMode
+        | ActionId::ReviewSession
         | ActionId::BashMode
         | ActionId::Rewind
         | ActionId::KillBgTask

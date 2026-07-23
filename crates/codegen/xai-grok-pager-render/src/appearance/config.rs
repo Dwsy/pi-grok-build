@@ -33,6 +33,8 @@ pub struct AppearanceConfig {
     pub turn_status: TurnStatusConfig,
     /// Show timestamps on user/agent messages. Toggled via `/timestamps`.
     pub show_timestamps: bool,
+    /// Show raw tool args on Other/generic tool cards. Toggled via F2.
+    pub show_other_tool_args: bool,
     /// Timeline sidebar (per-turn tick rail). Toggled via `/timeline`.
     pub show_timeline: bool,
     /// Whether hooks & plugins UI is disabled (hides /hooks, /plugins commands
@@ -1427,6 +1429,7 @@ impl From<RawAppearanceConfig> for AppearanceConfig {
             },
             turn_status: TurnStatusConfig::default(),
             show_timestamps: true, // runtime-only, loaded from config.toml via persist
+            show_other_tool_args: false, // runtime-only; F2 `[ui].show_other_tool_args`
             // Single source: UiConfig::SHOW_TIMELINE_DEFAULT (loaded from config.toml via persist).
             show_timeline: UiConfig::SHOW_TIMELINE_DEFAULT,
             disable_plugins: raw.disable_plugins,

@@ -725,7 +725,9 @@ pub(super) fn dispatch_send_prompt_inner(
             // A new prompt is taking the wheel (same contract as the
             // immediate-send branch below).
             agent.clear_follow_ups();
-            return interject::dispatch_send_prompt_now(app, text, images);
+            // Phase 2: parked-sendable-wait images also route to interject
+            // (steering semantics, no cancel-and-restart).
+            return interject::dispatch_interject(app, text, images);
         }
 
         if immediate_server_send {

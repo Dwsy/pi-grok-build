@@ -545,10 +545,10 @@ impl AgentView {
         // Must run before scrollback hit-test or trackpad events leak through.
         if let Some(ref mut review) = self.review_state {
             use crate::views::review::ReviewFocus;
-            let in_list = review.list_area.area() > 0
-                && review.list_area.contains((col, row).into());
-            let in_preview = review.preview_area.area() > 0
-                && review.preview_area.contains((col, row).into());
+            let in_list =
+                review.list_area.area() > 0 && review.list_area.contains((col, row).into());
+            let in_preview =
+                review.preview_area.area() > 0 && review.preview_area.contains((col, row).into());
             if in_list {
                 review.focus = ReviewFocus::List;
                 review.move_sel(lines.signum());
@@ -833,8 +833,8 @@ mod scroll_granularity_tests {
         agent.show_goal_detail = false;
 
         // /review-session modal must also absorb wheel (no scrollback leak).
-        use crate::views::review::{ReviewFileItem, ReviewFileKind, ReviewKindFilter, ReviewState};
         use crate::scrollback::entry::EntryId;
+        use crate::views::review::{ReviewFileItem, ReviewFileKind, ReviewKindFilter, ReviewState};
         agent.review_state = Some(ReviewState::new(
             "test",
             vec![ReviewFileItem {

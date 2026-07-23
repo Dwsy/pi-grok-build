@@ -1,3 +1,4 @@
+use super::mcp::Config;
 use super::persist::update_config;
 use anyhow::Result;
 use xai_grok_shared::ui_config::PiBuiltinTools;
@@ -144,15 +145,43 @@ pub async fn set_fork_secondary_model(value: String) -> Result<()> {
 ///
 /// Empty string clears the override (use active session model).
 pub async fn set_recap_model(value: String) -> Result<()> {
+    set_named_model_override("recap_model", value, |cfg, v| cfg.ui.recap_model = v).await
+}
+
+pub async fn set_recap_model_2(value: String) -> Result<()> {
+    set_named_model_override("recap_model_2", value, |cfg, v| cfg.ui.recap_model_2 = v).await
+}
+
+pub async fn set_recap_model_3(value: String) -> Result<()> {
+    set_named_model_override("recap_model_3", value, |cfg, v| cfg.ui.recap_model_3 = v).await
+}
+
+pub async fn set_btw_model(value: String) -> Result<()> {
+    set_named_model_override("btw_model", value, |cfg, v| cfg.ui.btw_model = v).await
+}
+
+pub async fn set_btw_model_2(value: String) -> Result<()> {
+    set_named_model_override("btw_model_2", value, |cfg, v| cfg.ui.btw_model_2 = v).await
+}
+
+pub async fn set_btw_model_3(value: String) -> Result<()> {
+    set_named_model_override("btw_model_3", value, |cfg, v| cfg.ui.btw_model_3 = v).await
+}
+
+async fn set_named_model_override(
+    key: &str,
+    value: String,
+    assign: impl FnOnce(&mut Config, String),
+) -> Result<()> {
     if value.len() > MAX_DEFAULT_MODEL_LEN {
         anyhow::bail!(
-            "recap_model name too long ({} > {} bytes)",
+            "{key} name too long ({} > {} bytes)",
             value.len(),
             MAX_DEFAULT_MODEL_LEN
         );
     }
     update_config(|cfg| {
-        cfg.ui.recap_model = value;
+        assign(cfg, value);
     })
     .await
 }
@@ -215,14 +244,39 @@ pub async fn set_pi_goal(value: bool) -> Result<()> {
     update_config(|cfg| cfg.ui.pi_goal = value).await
 }
 
+/// Persist `[ui].pi_loop` via `update_config`.
+pub async fn set_pi_loop(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.pi_loop = value).await
+}
+
+/// Persist `[ui].pi_ask_user_question` via `update_config`.
+pub async fn set_pi_ask_user_question(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.pi_ask_user_question = value).await
+}
+
+/// Persist `[ui].pi_btw` via `update_config`.
+pub async fn set_pi_btw(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.pi_btw = value).await
+}
+
 /// Persist `[ui].pi_cache_graph` via `update_config`.
 pub async fn set_pi_cache_graph(value: bool) -> Result<()> {
     update_config(|cfg| cfg.ui.pi_cache_graph = value).await
 }
 
+/// Persist `[ui].show_other_tool_args` via `update_config`.
+pub async fn set_show_other_tool_args(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.show_other_tool_args = value).await
+}
+
 /// Persist `[ui].review_file_tree` via `update_config`.
 pub async fn set_review_file_tree(value: bool) -> Result<()> {
     update_config(|cfg| cfg.ui.review_file_tree = value).await
+}
+
+/// Persist `[ui].review_include_reads` via `update_config`.
+pub async fn set_review_include_reads(value: bool) -> Result<()> {
+    update_config(|cfg| cfg.ui.review_include_reads = value).await
 }
 
 /// Bounds for [`set_max_thoughts_width`]. Mirrored from the pager's

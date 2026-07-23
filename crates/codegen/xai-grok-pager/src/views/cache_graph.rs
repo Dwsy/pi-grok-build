@@ -152,7 +152,10 @@ fn compute_cumulative(messages: &[AssistantUsageMetric]) -> CumSeries {
     }
 }
 
-fn bucket_messages(messages: &[AssistantUsageMetric], bucket_count: usize) -> Vec<&[AssistantUsageMetric]> {
+fn bucket_messages(
+    messages: &[AssistantUsageMetric],
+    bucket_count: usize,
+) -> Vec<&[AssistantUsageMetric]> {
     if messages.is_empty() || bucket_count == 0 {
         return vec![];
     }
@@ -410,7 +413,11 @@ fn render_graph_body(
             lines.extend(render_bar_chart(theme, &values, chart_height));
             lines.push(dim_line(
                 theme,
-                format!("   1{:>width$}", messages.len(), width = values.len().saturating_sub(1)),
+                format!(
+                    "   1{:>width$}",
+                    messages.len(),
+                    width = values.len().saturating_sub(1)
+                ),
             ));
             lines.push(dim_line(
                 theme,
@@ -533,11 +540,11 @@ fn render_stats_body(
     width: u16,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    lines.push(accent_line(
+    lines.push(accent_line(theme, "Token/cache stats by assistant message"));
+    lines.push(dim_line(
         theme,
-        "Token/cache stats by assistant message",
+        "B = message is on the current active branch",
     ));
-    lines.push(dim_line(theme, "B = message is on the current active branch"));
     if metrics.estimated_count > 0 {
         lines.push(warning_line(
             theme,
@@ -755,9 +762,7 @@ pub fn sanitize_export_name(name: &str) -> String {
             }
         })
         .collect();
-    let sanitized = sanitized
-        .trim_matches(|c| c == '-' || c == '.')
-        .to_string();
+    let sanitized = sanitized.trim_matches(|c| c == '-' || c == '.').to_string();
     if sanitized.is_empty() {
         "session".into()
     } else {

@@ -121,6 +121,8 @@ impl AgentView {
                     HintItem::new(key!(Esc), "close"),
                     HintItem::paired(key!(Up), key!(Down), "files"),
                     HintItem::new(key!('/'), "filter"),
+                    HintItem::new(key!('t'), "tree"),
+                    HintItem::new(key!('r'), "reads"),
                     HintItem::new(key!(Enter), "preview"),
                     HintItem::paired(key!('n'), key!('p'), "next file"),
                 ],
@@ -128,10 +130,7 @@ impl AgentView {
                     if let Some(ref viewer) = review.viewer {
                         let mut hints = viewer.shortcuts_hints();
                         // Replace viewer Esc=close with review shell meaning.
-                        hints.insert(
-                            1,
-                            HintItem::paired(key!('n'), key!('p'), "file"),
-                        );
+                        hints.insert(1, HintItem::paired(key!('n'), key!('p'), "file"));
                         hints.push(HintItem::new(key!(Left), "files"));
                         hints
                     } else {
@@ -888,27 +887,30 @@ impl AgentView {
         };
         let jump_view_h = if permission_view_h == 0 && question_view_h == 0 && rewind_view_h == 0 {
             if !self.jump_slot_taken() {
-                self.jump_state
-                    .as_ref()
-                    .map_or(0, |state| crate::views::jump::jump_overlay_height(state, area.height))
+                self.jump_state.as_ref().map_or(0, |state| {
+                    crate::views::jump::jump_overlay_height(state, area.height)
+                })
             } else {
                 0
             }
         } else {
             0
         };
-        let fork_view_h =
-            if permission_view_h == 0 && question_view_h == 0 && rewind_view_h == 0 && jump_view_h == 0 {
-                if !self.fork_slot_taken() {
-                    self.fork_state.as_ref().map_or(0, |state| {
-                        crate::views::fork_picker::fork_picker_overlay_height(state, area.height)
-                    })
-                } else {
-                    0
-                }
+        let fork_view_h = if permission_view_h == 0
+            && question_view_h == 0
+            && rewind_view_h == 0
+            && jump_view_h == 0
+        {
+            if !self.fork_slot_taken() {
+                self.fork_state.as_ref().map_or(0, |state| {
+                    crate::views::fork_picker::fork_picker_overlay_height(state, area.height)
+                })
             } else {
                 0
-            };
+            }
+        } else {
+            0
+        };
         let cancel_turn_view_h = if permission_view_h == 0
             && question_view_h == 0
             && rewind_view_h == 0
@@ -3682,14 +3684,17 @@ impl AgentView {
                 width: area.width,
                 height: layout.shortcuts.y.saturating_sub(area.y),
             };
-            let popup_w = ((overlay_area.width as f32 * 0.96) as u16)
+            let popup_w = ((overlay_area.width as f32 * 0.98) as u16)
                 .max(40)
                 .min(overlay_area.width);
-            let popup_h = ((overlay_area.height as f32 * 0.92) as u16)
-                .max(10)
+            // Near full height so filter bar + tree aren't cramped vs prompt row.
+            let popup_h = ((overlay_area.height as f32 * 0.98) as u16)
+                .max(12)
                 .min(overlay_area.height.saturating_sub(1));
             let popup_x = overlay_area.x + (overlay_area.width.saturating_sub(popup_w)) / 2;
-            let popup_y = overlay_area.y + (overlay_area.height.saturating_sub(popup_h)) / 2;
+            // Prefer top-biased placement so modal sits flush above shortcuts.
+            let popup_y = overlay_area.y
+                + (overlay_area.height.saturating_sub(popup_h)).min(1);
             let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
             crate::views::file_search::line_viewer::dim_area(buf, overlay_area, theme.bg_base, 0.5);
             Clear.render(popup_area, buf);
@@ -3895,6 +3900,18 @@ impl AgentView {
                     compact,
                 );
             }
+            self.pane_areas = layout.pane_areas();
+            return (None, crate::terminal::overlay::clear().map(Into::into));
+        }
+        if let Some(ref modal) = self.pi_shortcut_manager {
+            let overlay_area = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: layout.shortcuts.y.saturating_sub(area.y).saturating_sub(1),
+            };
+            let theme = Theme::current();
+            modal.render(overlay_area, buf, &theme);
             self.pane_areas = layout.pane_areas();
             return (None, crate::terminal::overlay::clear().map(Into::into));
         }

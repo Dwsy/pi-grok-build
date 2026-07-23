@@ -1178,6 +1178,46 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "recap_model_2" => {
+            let SettingValue::String(s) = value else {
+                return Err(kind_mismatch("recap_model_2", "String", &value));
+            };
+            xai_grok_shell::util::config::set_recap_model_2(s)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "recap_model_3" => {
+            let SettingValue::String(s) = value else {
+                return Err(kind_mismatch("recap_model_3", "String", &value));
+            };
+            xai_grok_shell::util::config::set_recap_model_3(s)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "btw_model" => {
+            let SettingValue::String(s) = value else {
+                return Err(kind_mismatch("btw_model", "String", &value));
+            };
+            xai_grok_shell::util::config::set_btw_model(s)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "btw_model_2" => {
+            let SettingValue::String(s) = value else {
+                return Err(kind_mismatch("btw_model_2", "String", &value));
+            };
+            xai_grok_shell::util::config::set_btw_model_2(s)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "btw_model_3" => {
+            let SettingValue::String(s) = value else {
+                return Err(kind_mismatch("btw_model_3", "String", &value));
+            };
+            xai_grok_shell::util::config::set_btw_model_3(s)
+                .await
+                .map_err(|e| e.to_string())
+        }
         "pi_builtin_tools" => {
             let SettingValue::PiBuiltinTools(tools) = value else {
                 return Err(kind_mismatch("pi_builtin_tools", "PiBuiltinTools", &value));
@@ -1218,6 +1258,30 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "pi_loop" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("pi_loop", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_pi_loop(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "pi_ask_user_question" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("pi_ask_user_question", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_pi_ask_user_question(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "pi_btw" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("pi_btw", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_pi_btw(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
         "pi_cache_graph" => {
             let SettingValue::Bool(b) = value else {
                 return Err(kind_mismatch("pi_cache_graph", "Bool", &value));
@@ -1226,11 +1290,27 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        "show_other_tool_args" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("show_other_tool_args", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_show_other_tool_args(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
         "review_file_tree" => {
             let SettingValue::Bool(b) = value else {
                 return Err(kind_mismatch("review_file_tree", "Bool", &value));
             };
             xai_grok_shell::util::config::set_review_file_tree(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "review_include_reads" => {
+            let SettingValue::Bool(b) = value else {
+                return Err(kind_mismatch("review_include_reads", "Bool", &value));
+            };
+            xai_grok_shell::util::config::set_review_include_reads(b)
                 .await
                 .map_err(|e| e.to_string())
         }

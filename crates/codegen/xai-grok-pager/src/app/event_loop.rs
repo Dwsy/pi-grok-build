@@ -1340,9 +1340,12 @@ pub(crate) async fn run(
     // the same canonical value after this sync + `prime` below.
     let show_timeline = crate::appearance::cache::load_show_timeline();
     app.current_ui.show_timeline = Some(show_timeline);
-    if app.appearance.show_timeline != show_timeline {
+    if app.appearance.show_timeline != show_timeline
+        || app.appearance.show_other_tool_args != app.current_ui.show_other_tool_args
+    {
         let mut config = app.appearance.clone();
         config.show_timeline = show_timeline;
+        config.show_other_tool_args = app.current_ui.show_other_tool_args;
         app.set_appearance(config);
     }
     // Single-key load so a malformed unrelated `[ui]` field cannot wipe this.
@@ -2433,6 +2436,7 @@ pub(crate) async fn run(
                 config.prompt.compact = app.appearance.prompt.compact;
                 config.show_timestamps = app.appearance.show_timestamps;
                 config.show_timeline = app.appearance.show_timeline;
+                config.show_other_tool_args = app.appearance.show_other_tool_args;
                 tick_interval = config.animation.tick_interval();
                 crate::appearance::set_tab_width(config.scrollback.display.tab_width);
                 app.set_appearance(config);

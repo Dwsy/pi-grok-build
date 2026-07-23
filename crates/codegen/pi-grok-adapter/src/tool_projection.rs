@@ -352,6 +352,10 @@ fn is_ls_tool(name: &str) -> bool {
 /// - `ls` → `target_directory` (ListDir card key)
 /// - `grep` → `-i` alias for `ignoreCase`
 /// - `find` → `output_mode: files_with_matches`
+/// - `bash` / execute → `task_name` → `description` (Pager Execute card title)
+///
+/// Other/generic tools (including `fabric_exec`) keep raw args unchanged; the
+/// pager's F2 `show_other_tool_args` decides whether expanded cards show them.
 pub(crate) fn normalize_tool_raw_input(name: &str, args: Option<Value>) -> Option<Value> {
     let mut args = args?;
     let Some(obj) = args.as_object_mut() else {
@@ -389,6 +393,30 @@ pub(crate) fn normalize_tool_raw_input(name: &str, args: Option<Value>) -> Optio
         }
     }
 
+    // pi-grok-bash uses `task_name`; stock Grok + Pager Execute cards read
+    // `raw_input.description` for the human-readable title (spinner / header).
+    if tool_kind(name) == acp::ToolKind::Execute
+        || lower == "bash"
+        || lower.contains("bash")
+        || lower.contains("shell")
+    {
+        let missing_or_empty_description = obj
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_none();
+        if missing_or_empty_description
+            && let Some(label) = obj
+                .get("task_name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        {
+            obj.insert("description".to_string(), json!(label));
+        }
+    }
+
     Some(args)
 }
 
@@ -415,7 +443,13 @@ pub(crate) fn normalize_tool_raw_output(
                 .and_then(|value| string(value, &["command", "cmd"]))
                 .unwrap_or_default()
                 .to_string();
-            bash_tool_output(&command, result, is_error)
+            let description = args.and_then(|value| {
+                string(value, &["description", "task_name"])
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned)
+            });
+            bash_tool_output(&command, description.as_deref(), result, is_error)
         }
         acp::ToolKind::Search => {
             if is_find_tool(name) {
@@ -734,7 +768,12 @@ fn split_pi_grep_match_line(line: &str) -> Option<(&str, usize, &str)> {
     None
 }
 
-pub(crate) fn bash_tool_output(command: &str, result: &Value, is_error: bool) -> Value {
+pub(crate) fn bash_tool_output(
+    command: &str,
+    description: Option<&str>,
+    result: &Value,
+    is_error: bool,
+) -> Value {
     let text = if result.get("output").and_then(Value::as_str).is_some()
         && result.get("content").is_none()
     {
@@ -780,6 +819,20 @@ pub(crate) fn bash_tool_output(command: &str, result: &Value, is_error: bool) ->
         .unwrap_or("")
         .to_string();
 
+    // Prefer arg label; fall back to tool-result details (background bridge).
+    let description = description
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            result
+                .pointer("/details/description")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
+        });
+
     let bytes = text.as_bytes().to_vec();
     let total_bytes = bytes.len();
     json!({
@@ -791,7 +844,7 @@ pub(crate) fn bash_tool_output(command: &str, result: &Value, is_error: bool) ->
         "truncated": truncated,
         "signal": null,
         "timed_out": false,
-        "description": null,
+        "description": description,
         "current_dir": "",
         "output_file": output_file,
         "total_bytes": total_bytes,
@@ -839,7 +892,7 @@ mod tests {
     fn pi_bash_result_projects_native_bash_raw_output() {
         let raw = normalize_tool_raw_output(
             "bash",
-            Some(&json!({ "command": "ls -la" })),
+            Some(&json!({ "command": "ls -la", "task_name": "列出目录" })),
             &json!({
                 "content": [{ "type": "text", "text": "total 48\nREADME.md\n" }],
                 "details": { "fullOutputPath": null },
@@ -848,6 +901,10 @@ mod tests {
         );
         assert_eq!(raw.get("type").and_then(Value::as_str), Some("Bash"));
         assert_eq!(raw.get("command").and_then(Value::as_str), Some("ls -la"));
+        assert_eq!(
+            raw.get("description").and_then(Value::as_str),
+            Some("列出目录")
+        );
         assert_eq!(raw.get("exit_code").and_then(Value::as_i64), Some(0));
         let output = raw
             .get("output_for_prompt")
@@ -857,6 +914,7 @@ mod tests {
 
         let direct = bash_tool_output(
             "echo hi",
+            Some("print greeting"),
             &json!({
                 "output": "hi\n",
                 "exitCode": 0,
@@ -868,6 +926,47 @@ mod tests {
         assert_eq!(
             direct.get("output_for_prompt").and_then(Value::as_str),
             Some("hi\n")
+        );
+        assert_eq!(
+            direct.get("description").and_then(Value::as_str),
+            Some("print greeting")
+        );
+    }
+
+    #[test]
+    fn pi_bash_task_name_aliases_to_description_for_pager() {
+        let args = normalize_tool_raw_input(
+            "bash",
+            Some(json!({
+                "command": "cargo test -p pi-grok-adapter -- --nocapture",
+                "task_name": "运行 adapter 测试",
+            })),
+        )
+        .unwrap();
+        assert_eq!(
+            args.get("description").and_then(Value::as_str),
+            Some("运行 adapter 测试"),
+            "Pager Execute cards read raw_input.description"
+        );
+        // Keep original field for debuggability / round-trips.
+        assert_eq!(
+            args.get("task_name").and_then(Value::as_str),
+            Some("运行 adapter 测试")
+        );
+
+        // Existing description wins over task_name.
+        let preferred = normalize_tool_raw_input(
+            "bash",
+            Some(json!({
+                "command": "true",
+                "description": "already set",
+                "task_name": "ignored",
+            })),
+        )
+        .unwrap();
+        assert_eq!(
+            preferred.get("description").and_then(Value::as_str),
+            Some("already set")
         );
     }
 
@@ -1016,6 +1115,21 @@ mod tests {
             normalize_tool_raw_input("write", Some(json!({ "path": "a.rs", "content": "x" })))
                 .unwrap();
         assert_eq!(args.get("variant").and_then(Value::as_str), Some("Write"));
+    }
+
+    #[test]
+    fn fabric_exec_raw_input_passes_through_for_other_card() {
+        let args = normalize_tool_raw_input(
+            "fabric_exec",
+            Some(json!({
+                "code": "return 1;",
+                "display": { "name": "scan" },
+            })),
+        )
+        .unwrap();
+        // Must not rewrite to UseTool — F2 show_other_tool_args owns Other-card args.
+        assert!(args.get("variant").is_none());
+        assert_eq!(args.get("code").and_then(Value::as_str), Some("return 1;"));
     }
 
     #[test]

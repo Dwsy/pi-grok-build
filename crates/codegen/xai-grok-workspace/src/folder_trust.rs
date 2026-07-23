@@ -328,7 +328,10 @@ fn collect_repo_config_kinds(cwd: &Path, first_only: bool) -> Vec<&'static str> 
         }
     }
     // Project `.grok/lsp.json`.
-    if xai_grok_config::project_config_dir(cwd).join("lsp.json").is_file() {
+    if xai_grok_config::project_config_dir(cwd)
+        .join("lsp.json")
+        .is_file()
+    {
         hit!("lsp");
     }
     // Project `.cursor/mcp.json` — vendor MCP loading is default-on and tagged
@@ -393,7 +396,9 @@ fn collect_repo_config_kinds(cwd: &Path, first_only: bool) -> Vec<&'static str> 
     if directory_present_or_uncertain(&grok.join("personas")) {
         hit!("personas");
     }
-    if directory_present_or_uncertain(&xai_grok_config::project_config_dir(&hook_root).join("workflows")) {
+    if directory_present_or_uncertain(
+        &xai_grok_config::project_config_dir(&hook_root).join("workflows"),
+    ) {
         hit!("workflows");
     }
     // `~/.claude.json` `projects.<cwd>.mcpServers`.

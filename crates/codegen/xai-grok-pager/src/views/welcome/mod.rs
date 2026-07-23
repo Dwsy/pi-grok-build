@@ -2690,6 +2690,7 @@ mod tests {
             branch: None,
             repo_name: repo_name.into(),
             worktree_label: None,
+            parent_session_path: None,
             card_detail: None,
         }
     }

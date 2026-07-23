@@ -1819,7 +1819,10 @@ mod tests {
         assert_eq!(user_prompt_count(&app.agents[&id], "ls -la"), 0);
     }
 
-    /// Composer/local-row send-now paints at dispatch too.
+    /// Composer/local-row send-now now routes through the steering interject
+    /// path (queue-architecture-redesign Phase 1): it paints a user prompt
+    /// block locally and fires `Effect::SendInterject` instead of the removed
+    /// cancel-and-restart `Effect::SendPromptNow`.
     #[test]
     fn send_prompt_now_paints_user_block_at_arm() {
         let mut app = test_app_with_agent();
@@ -1832,7 +1835,7 @@ mod tests {
             },
             &mut app,
         );
-        assert!(matches!(effects.as_slice(), [Effect::SendPromptNow { .. }]));
+        assert!(matches!(effects.as_slice(), [Effect::SendInterject { .. }]));
         assert_eq!(user_prompt_count(&app.agents[&id], "hurry"), 1);
     }
 

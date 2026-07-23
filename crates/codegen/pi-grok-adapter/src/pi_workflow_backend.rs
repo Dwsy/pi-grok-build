@@ -91,9 +91,8 @@ impl WorkflowAgentBackend for PiWorkflowAgentBackend {
         if request.cancel_token.is_cancelled() {
             return Err(HostError::Cancelled);
         }
-        std::fs::create_dir_all(&self.scratch_dir).map_err(|e| {
-            HostError::Failed(format!("workflow spawn scratch dir: {e}"))
-        })?;
+        std::fs::create_dir_all(&self.scratch_dir)
+            .map_err(|e| HostError::Failed(format!("workflow spawn scratch dir: {e}")))?;
         let id = uuid::Uuid::now_v7().simple().to_string();
         let req_path = self.scratch_dir.join(format!("spawn-{id}.req.json"));
         let resp_path = self.scratch_dir.join(format!("spawn-{id}.resp.json"));
@@ -145,9 +144,8 @@ impl WorkflowAgentBackend for PiWorkflowAgentBackend {
         let raw = std::fs::read_to_string(&resp_path).map_err(|e| {
             HostError::Failed(format!("read spawn response {}: {e}", resp_path.display()))
         })?;
-        let resp: SpawnResponseFile = serde_json::from_str(&raw).map_err(|e| {
-            HostError::Failed(format!("parse spawn response: {e}; body={raw}"))
-        })?;
+        let resp: SpawnResponseFile = serde_json::from_str(&raw)
+            .map_err(|e| HostError::Failed(format!("parse spawn response: {e}; body={raw}")))?;
         let _ = std::fs::remove_file(&req_path);
         let _ = std::fs::remove_file(&resp_path);
 

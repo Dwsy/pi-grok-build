@@ -7,7 +7,7 @@
 //! compatible proxies on resume), fall back to `ceil(len/4)` content
 //! estimates for input/output so the graph is not a flat zero timeline.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::model::string;
 
@@ -56,8 +56,14 @@ pub(crate) fn collect_cache_session_metrics(entries_payload: &Value) -> Value {
             continue;
         }
 
-        let (mut input, mut output, mut cache_read, mut cache_write, mut total_tokens, mut estimated) =
-            extract_usage(message);
+        let (
+            mut input,
+            mut output,
+            mut cache_read,
+            mut cache_write,
+            mut total_tokens,
+            mut estimated,
+        ) = extract_usage(message);
 
         // Provider wrote zeros / omitted usage — estimate from content so resume
         // graphs are not a flat zero timeline (context bar already estimates).
@@ -118,7 +124,14 @@ pub(crate) fn collect_cache_session_metrics(entries_payload: &Value) -> Value {
             "usageEstimated": estimated,
         });
 
-        add_to_totals(&mut tree_totals, input, output, cache_read, cache_write, total_tokens);
+        add_to_totals(
+            &mut tree_totals,
+            input,
+            output,
+            cache_read,
+            cache_write,
+            total_tokens,
+        );
 
         if is_on_active_branch {
             active_branch_sequence = active_branch_sequence.saturating_add(1);
@@ -173,7 +186,10 @@ fn extract_usage(message: &Value) -> (u64, u64, u64, u64, u64, bool) {
 }
 
 fn usage_field(usage: &Value, names: &[&str]) -> u64 {
-    names.iter().find_map(|name| json_u64(usage.get(*name))).unwrap_or(0)
+    names
+        .iter()
+        .find_map(|name| json_u64(usage.get(*name)))
+        .unwrap_or(0)
 }
 
 /// Accept u64 / i64 / f64 / numeric string — RPC and providers are inconsistent.
@@ -266,7 +282,9 @@ fn estimate_prompt_proxy_tokens(message: &Value, output_tokens: u64) -> u64 {
                 .count()
         })
         .unwrap_or(0);
-    let base = output_tokens.saturating_mul(4).max(output_tokens.saturating_add(256));
+    let base = output_tokens
+        .saturating_mul(4)
+        .max(output_tokens.saturating_add(256));
     if tool_calls > 0 {
         base.saturating_add((tool_calls as u64).saturating_mul(128))
     } else {
@@ -305,7 +323,10 @@ fn totals_json(totals: &(u64, u64, u64, u64, u64, u64)) -> Value {
     })
 }
 
-fn active_branch_id_set(entries: &[Value], leaf_id: Option<&str>) -> std::collections::HashSet<String> {
+fn active_branch_id_set(
+    entries: &[Value],
+    leaf_id: Option<&str>,
+) -> std::collections::HashSet<String> {
     let mut by_id: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::with_capacity(entries.len());
     for entry in entries {
@@ -418,8 +439,14 @@ mod tests {
         let metrics = collect_cache_session_metrics(&payload);
         let all = metrics["allMessages"].as_array().unwrap();
         assert_eq!(all.len(), 1);
-        assert!(all[0]["output"].as_u64().unwrap() > 0, "output estimated from content");
-        assert!(all[0]["input"].as_u64().unwrap() > 0, "input proxy estimated");
+        assert!(
+            all[0]["output"].as_u64().unwrap() > 0,
+            "output estimated from content"
+        );
+        assert!(
+            all[0]["input"].as_u64().unwrap() > 0,
+            "input proxy estimated"
+        );
         assert_eq!(all[0]["usageEstimated"], true);
         assert_eq!(metrics["estimatedCount"], 1);
         // No real cache data — hit stays 0

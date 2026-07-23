@@ -567,6 +567,7 @@ pub(in crate::app::dispatch) fn dispatch_trigger_deep_search(
     if app.chat_mode {
         return dispatch_chat_search_refetch(app, force);
     }
+    let psm_on = app.current_ui.psm_resume_index;
     if let Some(agent) = get_active_agent_mut(app)
         && let Some(ActiveModal::SessionPicker {
             state,
@@ -578,6 +579,12 @@ pub(in crate::app::dispatch) fn dispatch_trigger_deep_search(
         }) = agent.active_modal.as_mut()
     {
         if *source_filter == crate::views::session_picker::SourceFilter::External {
+            // PSM full-text only when F2 `psm_resume_index` is on.
+            if !psm_on {
+                *content_results = None;
+                *content_loading = false;
+                return vec![];
+            }
             let query = state.query().trim().to_string();
             *deep_search_seq += 1;
             let seq = *deep_search_seq;
@@ -609,6 +616,11 @@ pub(in crate::app::dispatch) fn dispatch_trigger_deep_search(
         return vec![Effect::DebounceSessionSearch { query, seq }];
     }
     if app.session_picker_source_filter == crate::views::session_picker::SourceFilter::External {
+        if !app.current_ui.psm_resume_index {
+            app.session_picker_content_results = None;
+            app.session_picker_content_loading = false;
+            return vec![];
+        }
         let query = app.session_picker_state.query().trim().to_string();
         app.session_picker_deep_search_seq += 1;
         let seq = app.session_picker_deep_search_seq;
@@ -756,8 +768,19 @@ pub(in crate::app::dispatch) fn dispatch_pick_content_session(
     session_id: String,
     cwd: String,
 ) -> Vec<Effect> {
+    // PSM full-text hits (External filter) are Pi sessions — load by id+cwd.
     if session_picker_external_filter_active(app) {
-        return vec![];
+        if let Some(agent) = get_active_agent_mut(app) {
+            agent.active_modal = None;
+        }
+        app.session_picker_entries = None;
+        app.session_picker_loading = false;
+        app.session_picker_state.reset();
+        app.session_picker_content_results = None;
+        app.session_picker_content_loading = false;
+        invalidate_picker_fetch_on_dismiss(app);
+        let session_cwd = (!cwd.trim().is_empty()).then(|| std::path::PathBuf::from(&cwd));
+        return dispatch_load_session(app, session_id, session_cwd, false);
     }
     let chat_kind = session_picker_entry_is_conversation(app, &session_id);
     app.session_picker_entries = None;
@@ -1071,19 +1094,25 @@ pub(in crate::app::dispatch) fn handle_session_search_debounce_expired(
     if live_deep_search_seq(app) != Some(seq) {
         return vec![];
     }
-    // Route External (Pi) sources to the PSM full-text search path.
+    // Route External (Pi) sources to PSM full-text only when the F2 flag is on.
     if session_picker_is_external(app) {
+        if !psm_resume_features_enabled(app) {
+            return vec![];
+        }
         let cwd = active_picker_cwd(app);
         return vec![Effect::PiSessionSearch { query, cwd, seq }];
     }
     vec![Effect::DeepSearchSessions { query, seq }]
 }
 /// Whether the live session-picker surface is filtered to External (Pi) sources.
+fn psm_resume_features_enabled(app: &AppView) -> bool {
+    app.current_ui.psm_resume_index
+}
+
 fn session_picker_is_external(app: &AppView) -> bool {
     use crate::views::modal::ActiveModal;
     if let Some(agent) = get_active_agent(app)
-        && let Some(ActiveModal::SessionPicker { source_filter, .. }) =
-            agent.active_modal.as_ref()
+        && let Some(ActiveModal::SessionPicker { source_filter, .. }) = agent.active_modal.as_ref()
     {
         return *source_filter == crate::views::session_picker::SourceFilter::External;
     }
@@ -1244,6 +1273,37 @@ pub(in crate::app::dispatch) fn handle_deep_search_results(
 /// Ctrl+S / "Resume session", in-session Ctrl+S (which still dispatches
 /// [`Action::FetchSessionList`]), and `/resume`. Grok's session-store list is
 /// never used for external agents.
+/// Apply async PSM message preview into the live SessionPicker.
+pub(in crate::app::dispatch) fn handle_session_preview_loaded(
+    app: &mut AppView,
+    session_id: String,
+    messages: Vec<crate::views::modal::SessionPreviewMessage>,
+    generation: u64,
+) -> Vec<Effect> {
+    use crate::views::modal::ActiveModal;
+    // Stale if the global detail generation moved on (user navigated away).
+    if generation != app.session_picker_detail_generation {
+        return vec![];
+    }
+    if let Some(agent) = get_active_agent_mut(app)
+        && let Some(ActiveModal::SessionPicker {
+            preview_mode,
+            preview_messages,
+            preview_scroll,
+            ..
+        }) = agent.active_modal.as_mut()
+    {
+        if *preview_mode {
+            // Keep a small identity tag so re-entry can skip redundant loads.
+            let _ = &session_id;
+            *preview_messages = Some(messages);
+            *preview_scroll = 0;
+        }
+        return vec![];
+    }
+    vec![]
+}
+
 pub(in crate::app::dispatch) fn dispatch_show_session_picker(app: &mut AppView) -> Vec<Effect> {
     use super::lifecycle::discard_welcome_prewarm;
     use crate::views::modal::ActiveModal;

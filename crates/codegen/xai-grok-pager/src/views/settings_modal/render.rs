@@ -1268,10 +1268,9 @@ pub(super) fn take_picker_choice_rects() -> Vec<Rect> {
     PICKER_RECTS_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
 }
 
-/// Render the group sub-sheet: title + description + one row per child Bool
-/// toggle (`<marker> <Label> … <on/off>`). Returns the per-child hit-rects
-/// (parallel to the group's children) for mouse routing. Mirrors the enum
-/// chooser's title/description/list shape but for independent toggles.
+/// Render the group sub-sheet: title + description + one row per child
+/// (`Bool` → on/off, `DynamicEnum`/String → current value or "(no override)").
+/// Returns the per-child hit-rects for mouse routing.
 fn render_picking_group(
     buf: &mut Buffer,
     area: Rect,
@@ -1345,13 +1344,28 @@ fn render_picking_group(
             Style::default().fg(theme.text_primary).bg(bg)
         };
 
-        // Value read live from the snapshot (refreshed after each toggle).
-        let on = matches!(state.value_for(child_key), Some(SettingValue::Bool(true)));
-        let value_text = if on { "on" } else { "off" };
-        let value_style = if on {
-            Style::default().fg(theme.accent_user).bg(bg)
-        } else {
-            Style::default().fg(theme.gray).bg(bg)
+        // Value read live from the snapshot (refreshed after each change).
+        let (value_text, value_style) = match state.value_for(child_key) {
+            Some(SettingValue::Bool(true)) => (
+                "on".to_string(),
+                Style::default().fg(theme.accent_user).bg(bg),
+            ),
+            Some(SettingValue::Bool(false)) => (
+                "off".to_string(),
+                Style::default().fg(theme.gray).bg(bg),
+            ),
+            Some(SettingValue::String(s)) if !s.is_empty() => (
+                s,
+                Style::default().fg(theme.accent_user).bg(bg),
+            ),
+            Some(SettingValue::String(_)) | None => (
+                "(no override)".to_string(),
+                Style::default().fg(theme.gray).bg(bg),
+            ),
+            other => (
+                format!("{other:?}"),
+                Style::default().fg(theme.gray).bg(bg),
+            ),
         };
 
         // " <marker>  <label> … <value> " (value right-aligned with a pad).
@@ -1370,7 +1384,7 @@ fn render_picking_group(
             );
         }
         let label_x = area.x.saturating_add(PICKER_PREFIX_W);
-        let value_w = value_text.width() as u16;
+        let value_w = value_text.as_str().width() as u16;
         let value_x = (area.x + area.width)
             .saturating_sub(value_w + 1)
             .max(label_x);
@@ -1390,7 +1404,7 @@ fn render_picking_group(
             );
         }
         if value_x + value_w <= area.x + area.width {
-            buf.set_span(value_x, y, &Span::styled(value_text, value_style), value_w);
+            buf.set_span(value_x, y, &Span::styled(value_text.as_str(), value_style), value_w);
         }
         y = y.saturating_add(1);
     }
@@ -2892,7 +2906,7 @@ pub(super) fn build_shortcuts(state: &SettingsModalState) -> Vec<Shortcut<'stati
                 id: 0,
             },
             Shortcut {
-                label: "Space/Enter toggle",
+                label: "Space/Enter open",
                 clickable: false,
                 id: 0,
             },

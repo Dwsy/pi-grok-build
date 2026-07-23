@@ -26,6 +26,7 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | Todo / plan list | Native+Adapted | Pi `@juicesharp/rpiv-todo` `todo` tool `details.tasks` → ACP `Plan` → native TodoPane/badge; `todo` card suppressed in scrollback |
 | Plan mode | Native+Adapted | Pager-native Plan toggle → adapter-owned `Inactive/Pending/Active/ExitPending` tracker; full/sparse system-reminder prefix; session-private `.plan.md` sidecar; injected Pi `tool_call` gate blocks `edit`/`write`/`bash` except the plan file; Pi `exit_plan_mode` opens native `x.ai/exit_plan_mode` approval and persists `.plan-mode.json` state |
 | Goal mode (`/goal`) | Adapted (MVP legacy) | F2 `[ui].pi_goal` **default off** (restart required). Injected extension: `/goal` + `update_goal` + control file; adapter GoalHost emits native `GoalUpdated` (`goal_detail` / status). Active → `agent_settled` follow-up continuation. **Not** full shell multi-agent classifier/planner/strategist (residual). |
+| Loop scheduler (`/loop`) | Adapted (MVP) | F2 `[ui].pi_loop` **default off** (restart required). Injected extension: `/loop` + `scheduler_create/delete/list` + process timers; adapter maps bridge → native `ScheduledTask*` (tasks pane). Session-only (no durable / loop subagent). |
 | Diff rendering | Native+Adapted | edit-like tool metadata enters the Grok tool/diff pipeline |
 | Images | Native+Adapted | Pi image blocks → ACP `ImageContent`; actual terminal display depends on Grok/terminal capability |
 | Scroll / find / copy / transcript / export | Native | Grok Pager |
@@ -79,7 +80,7 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 
 | Method | Status | Grok component |
 |---|---|---|
-| `notify` | Native+Adapted | warning/error → native toast; explicit `info` is single-surface (short → toast, multi-line → `SystemMessage` scrollback, never both); `/notify` uses a native searchable modal to view all in-process, Pi-session-isolated info/warning/error events (not persisted) |
+| `notify` | Native+Adapted | warning/error → native toast; explicit `info` → `SystemMessage` scrollback only (Pi `showStatus` / chat append, never toast-only); `/notify` uses a native searchable modal to view all in-process, Pi-session-isolated info/warning/error events (not persisted) |
 | `setStatus` | Native+Adapted | sticky banner/status |
 | `setWidget` | Native+Adapted | persistent native banner surface |
 | `setTitle` | Native+Adapted | terminal title |
@@ -89,11 +90,12 @@ Status definitions: **Native** = implemented by a Grok Pager component; **Adapte
 | `input` | Native+Adapted | QuestionView freeform PromptWidget |
 | `editor` | Native+Adapted | QuestionView multiline PromptWidget |
 | timeout/cancel | Adapted | Pi timeout revokes the corresponding QuestionView, returning `cancelled:true` |
+| Native Q&A (`ask_user_question` tool) | Adapted | F2 `[ui].pi_ask_user_question` **default off** (restart). Injected extension registers tool; adapter opens multi-question `x.ai/ask_user_question` → native QuestionView; control-dir returns answers to tool result. Tagline: *Grok Build asks the right questions to nail the details.* Conflict packages: `assets/native_feature_conflicts.toml` — when on, host blocks listed npm packages (e.g. `@juicesharp/rpiv-ask-user-question`); F2 description lists them. |
 | raw terminal hook | Boundary | Pi RPC explicitly does not support it |
 | custom header/footer/component | Boundary | Pi RPC explicitly does not support component factory |
 | Remote TUI (experimental) | Experimental | `PI_GROK_REMOTE_TUI` default-on: **does not modify Pi source**; npm/Node Pi starts through its official `rpc-entry.js`, so argv-only third-party RPC guards do not see outer `--mode rpc`; the first injected compatibility extension projects `ExtensionRunner`'s extension-visible `ctx.mode` from `rpc` to `tui` only while the Remote TUI host is active. Pi core and JSONL transport remain real RPC. It injects the `ctx.ui.custom` host + `setWidget` frame projection; keys via temp keyfile; Pager ANSI parsing. Default-on bare `/login`/`/logout` via `pi-grok-auth` (resume-x style); broader `/pi-*` selectors remain opt-in (`PI_GROK_NATIVE_COMMANDS`) |
-| `rpiv-ask-user-question` (`custom` questionnaire) | Boundary | depends on non-serializable `ctx.ui.custom(factory)`; RPC stub always declines; experimental Remote TUI may attempt it, but adapting the plugin without changes is still not a stable mapping |
-| `rpiv-btw` | Boundary | in-process side model + TUI overlay; should go through native `/btw` + adapter `x.ai/btw` (not yet implemented), not map the juicesharp package |
+| Native feature package conflicts | Host policy | Defaults: `assets/native_feature_conflicts.toml`. Runtime overlays (no rebuild): `$GROK_HOME/native-feature-conflicts.toml` then `$GROK_PROJECT_DIR/native-feature-conflicts.toml` (package union). Gated by F2/bridge: `pi_ask_user_question`, `pi_goal`, `pi_workflows`, always-on `pi_subagents`. User `allow` still wins. |
+| `rpiv-btw` | Boundary | blocked when F2 `pi_btw` on; use native `/btw` + adapter `x.ai/btw` + `pi-grok-btw` extension (opt-in, default off) |
 
 ## Slash Commands
 

@@ -20,6 +20,7 @@ use crate::scrollback::state::ScrollbackState;
 use crate::scrollback::state::verb_group::verb_group_kind_changed;
 use agent_client_protocol as acp;
 use chrono::{DateTime, Local, TimeZone};
+use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -617,10 +618,15 @@ impl AcpUpdateTracker {
             self.retry_activity = None;
         }
         if let Some(new_start) = meta.stream_start_ms {
-            if self
+            let stream_boundary = self
                 .last_stream_start_ms
-                .is_some_and(|prev| prev != new_start)
-            {
+                .map(|prev| prev != new_start)
+                // First live streamStartMs of a turn: same empty-window
+                // Thinking… pre-create stock Grok uses on StreamStarted.
+                // External agents (Pi) only start stamping meta mid-session;
+                // without this arm the first segment never pre-creates.
+                .unwrap_or(!meta.is_replay);
+            if stream_boundary {
                 let thinking_has_content = self
                     .current_thinking
                     .and_then(|id| scrollback.get_by_id(id))
@@ -1893,6 +1899,9 @@ fn tool_call_to_block(tc: &acp::ToolCall, session_cwd: Option<&Path>) -> RenderB
                 (name.into_owned(), ToolCallBlock::Other)
             };
             let mut block = OtherToolCallBlock::new(label, summary);
+            if let Some(input_json) = format_other_tool_input(tc) {
+                block = block.with_input_json(input_json);
+            }
             let ct = content_text(tc);
             if !success {
                 block.error = Some(if ct.is_empty() {
@@ -2546,6 +2555,20 @@ fn maybe_pretty_json(s: &str) -> String {
         s.to_owned()
     }
 }
+/// Pretty-print Other-tool `raw_input` for the generic tool card body.
+///
+/// Display is gated by F2 `show_other_tool_args` at render time; this only
+/// materializes JSON for storage on the block.
+fn format_other_tool_input(tc: &acp::ToolCall) -> Option<String> {
+    let raw = tc.raw_input.as_ref()?;
+    if raw.is_null() || raw.as_object().is_some_and(|o| o.is_empty()) {
+        return None;
+    }
+    serde_json::to_string_pretty(raw)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
 /// Extract input arguments from a use_tool call's raw_input.tool_input.
 ///
 /// Flattens the top-level JSON object into key-value string pairs for display.
@@ -4276,6 +4299,56 @@ mod tests {
             agent_timestamp_ms: Some(stream_start + 100),
             ..Default::default()
         }
+    }
+    /// First live streamStartMs of a turn must pre-create empty Thinking…
+    /// (external agents stamp meta from the first update, not a prior sentinel).
+    #[test]
+    fn first_stream_start_pre_creates_thinking() {
+        crate::appearance::cache::set_show_thinking_blocks(true);
+        let mut sb = ScrollbackState::new();
+        let mut tracker = AcpUpdateTracker::new();
+        assert!(tracker.last_stream_start_ms.is_none());
+        // Mode update is a no-op body, but stream meta still runs the boundary.
+        tracker.handle_update(
+            acp::SessionUpdate::CurrentModeUpdate(acp::CurrentModeUpdate::new(
+                acp::SessionModeId::new("default"),
+            )),
+            &meta_stream(1_000),
+            &mut sb,
+        );
+        assert!(
+            tracker.current_thinking.is_some(),
+            "first live streamStartMs must pre-create Thinking…"
+        );
+        assert_eq!(tracker.last_stream_start_ms, Some(1_000));
+        assert!(
+            sb.get(0)
+                .is_some_and(|e| matches!(&e.block, RenderBlock::Thinking(t) if t.text().is_empty())),
+            "pre-create should be an empty streaming Thinking block"
+        );
+        crate::appearance::cache::set_show_thinking_blocks(true);
+    }
+    /// Replay must not pre-create empty thinking on first streamStartMs alone.
+    #[test]
+    fn first_replay_stream_start_does_not_pre_create_thinking() {
+        crate::appearance::cache::set_show_thinking_blocks(true);
+        let mut sb = ScrollbackState::new();
+        let mut tracker = AcpUpdateTracker::new();
+        let mut m = meta_stream(1_000);
+        m.is_replay = true;
+        tracker.handle_update(
+            acp::SessionUpdate::CurrentModeUpdate(acp::CurrentModeUpdate::new(
+                acp::SessionModeId::new("default"),
+            )),
+            &m,
+            &mut sb,
+        );
+        assert!(
+            tracker.current_thinking.is_none(),
+            "replay must not invent empty Thinking… on first streamStartMs"
+        );
+        assert_eq!(sb.len(), 0);
+        crate::appearance::cache::set_show_thinking_blocks(true);
     }
     /// Regression test: agent message (stream A) → thinking (stream B) → agent message (stream B).
     ///

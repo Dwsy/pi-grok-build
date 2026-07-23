@@ -105,8 +105,7 @@ impl ExternalWorkflowRuntime {
         args: serde_json::Value,
         agent_budget: Option<u64>,
     ) -> Result<(String, tokio::sync::oneshot::Receiver<WorkflowOutcome>), LaunchError> {
-        let resolved =
-            resolve_inline(script).map_err(|e| LaunchError::Store(e.to_string()))?;
+        let resolved = resolve_inline(script).map_err(|e| LaunchError::Store(e.to_string()))?;
         let mut manager = self.manager.lock().await;
         manager.launch(
             resolved,
@@ -138,9 +137,7 @@ impl ExternalWorkflowRuntime {
     pub fn elapsed_ms(&self, run_id: &str) -> u64 {
         self.tracker.lock().elapsed_ms(run_id)
     }
-
 }
-
 
 /// Build a test-only runtime with mock agent backend (no Grok subagent channel).
 #[cfg(test)]

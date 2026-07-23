@@ -224,6 +224,7 @@ impl AgentView {
             terminal_size_stale: false,
             inline_media_hits: InlineMediaHitAreas::default(),
             extensions_modal: None,
+            pi_shortcut_manager: None,
             agents_modal: None,
             persona_detail: None,
             btw_state: None,

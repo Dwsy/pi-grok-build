@@ -36,6 +36,8 @@ const COMBINE_QUEUED_PROMPTS_DEFAULT: bool = false;
 const SIMPLE_MODE_DEFAULT: bool = true;
 /// Vim-mode scrollback default — matches the previous on-disk default.
 const VIM_MODE_DEFAULT: bool = false;
+/// PSM resume index + full-text/preview (defaults OFF; opt-in).
+const PSM_RESUME_INDEX_DEFAULT: bool = false;
 const SHOW_THINKING_BLOCKS_DEFAULT: bool = true;
 const GROUP_TOOL_VERBS_DEFAULT: bool = true;
 /// Collapsed-Edit-blocks rollout flag defaults OFF (legacy expanded diffs).
@@ -255,6 +257,38 @@ pub fn load_vim_mode() -> bool {
 pub fn set_vim_mode(enabled: bool) {
     VIM_MODE_CURRENT.with(|c| c.set(enabled));
     VIM_MODE_LOADED.with(|l| l.set(true));
+}
+
+// -- PSM resume index (catalog + full-text + preview) -------------------------
+
+thread_local! {
+    static PSM_RESUME_INDEX_CURRENT: Cell<bool> =
+        const { Cell::new(PSM_RESUME_INDEX_DEFAULT) };
+    static PSM_RESUME_INDEX_LOADED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Read cached `[ui].psm_resume_index` (default OFF).
+///
+/// Gates PSM SQLite catalog, Ctrl+F full-text search, and session preview.
+pub fn load_psm_resume_index() -> bool {
+    PSM_RESUME_INDEX_LOADED.with(|loaded| {
+        if !loaded.get() {
+            PSM_RESUME_INDEX_CURRENT.with(|c| {
+                c.set(load_bool_from_effective_config(
+                    "psm_resume_index",
+                    PSM_RESUME_INDEX_DEFAULT,
+                ))
+            });
+            loaded.set(true);
+        }
+    });
+    PSM_RESUME_INDEX_CURRENT.with(|c| c.get())
+}
+
+/// Replace cached `psm_resume_index`.
+pub fn set_psm_resume_index(enabled: bool) {
+    PSM_RESUME_INDEX_CURRENT.with(|c| c.set(enabled));
+    PSM_RESUME_INDEX_LOADED.with(|l| l.set(true));
 }
 
 // -- Show thinking blocks ----------------------------------------------------
@@ -611,6 +645,7 @@ pub fn prime(ui: &UiConfig) {
             .unwrap_or(COMBINE_QUEUED_PROMPTS_DEFAULT),
     );
     set_simple_mode(ui.simple_mode.unwrap_or(SIMPLE_MODE_DEFAULT));
+    set_psm_resume_index(ui.psm_resume_index);
     set_keep_text_selection(text_selection_from_ui(ui));
     // Layered-config keys (not the `UiConfig` arg) — seed so the first frame
     // skips disk. `load_*` is a no-op when already set (e.g. resolve at startup).
@@ -718,6 +753,7 @@ mod tests {
     #[test]
     fn cache_initial_defaults_match_ui_config_default() {
         let ui = UiConfig::default();
+        assert_eq!(PSM_RESUME_INDEX_DEFAULT, ui.psm_resume_index);
         assert_eq!(COMPACT_DEFAULT, ui.compact_mode);
         assert_eq!(TIMESTAMPS_DEFAULT, ui.show_timestamps.unwrap_or(true));
         assert_eq!(TIMELINE_DEFAULT, ui.show_timeline_enabled());

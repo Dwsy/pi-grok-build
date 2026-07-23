@@ -42,6 +42,7 @@ impl AgentView {
             || !pane_owns_prompt
             || self.active_modal.is_some()
             || self.extensions_modal.is_some()
+            || self.pi_shortcut_manager.is_some()
             || self.agents_modal.is_some()
             || self.persona_detail.is_some()
             || self.scrollback_search.is_some()
@@ -88,6 +89,7 @@ impl AgentView {
             && self.video_viewer.is_none()
             && self.gboom.is_none()
             && self.extensions_modal.is_none()
+            && self.pi_shortcut_manager.is_none()
             && self.btw_state.is_none()
             && self.scrollback_search.is_none()
     }
@@ -122,6 +124,7 @@ impl AgentView {
     /// (turn/close), video (seek/close), or image (close).
     fn modal_owns_input(&self) -> bool {
         self.extensions_modal.is_some()
+            || self.pi_shortcut_manager.is_some()
             || self.active_modal.is_some()
             || self.gboom.is_some()
             || self.video_viewer.is_some()
@@ -937,7 +940,8 @@ impl AgentView {
                         return InputOutcome::Unchanged;
                     }
                     if registry.matches_id(ActionId::CancelTurn, key)
-                        && (self.session.state.is_turn_running() || self.session.state.is_cancelling())
+                        && (self.session.state.is_turn_running()
+                            || self.session.state.is_cancelling())
                     {
                         self.dismiss_jump_picker();
                         return self
@@ -959,10 +963,12 @@ impl AgentView {
                         return InputOutcome::Unchanged;
                     }
                     if registry.matches_id(ActionId::CancelTurn, key)
-                        && (self.session.state.is_turn_running() || self.session.state.is_cancelling())
+                        && (self.session.state.is_turn_running()
+                            || self.session.state.is_cancelling())
                     {
                         self.dismiss_fork_picker();
-                        return self.handle_agent_action_with_registry(ActionId::CancelTurn, registry);
+                        return self
+                            .handle_agent_action_with_registry(ActionId::CancelTurn, registry);
                     }
                     self.handle_fork_picker_key(key)
                 }

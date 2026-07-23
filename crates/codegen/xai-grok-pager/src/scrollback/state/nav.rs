@@ -137,7 +137,11 @@ impl ScrollbackState {
         let Some(entry_idx) = self.index_of_id(prompt_id) else {
             return false;
         };
-        let Some(turn_idx) = self.turns.iter().position(|turn| turn.prompt_index == entry_idx) else {
+        let Some(turn_idx) = self
+            .turns
+            .iter()
+            .position(|turn| turn.prompt_index == entry_idx)
+        else {
             return false;
         };
         self.activate_turn(turn_idx);

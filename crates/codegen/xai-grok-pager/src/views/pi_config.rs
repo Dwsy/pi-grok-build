@@ -118,21 +118,39 @@ enum PiConfigRow {
         resource_count: usize,
         preview: PiResource,
     },
-    ResourceType {
+    Root {
+        id: String,
         label: String,
+        resource_count: usize,
+        preview: PiResource,
+    },
+    ResourceType {
+        id: String,
+        label: String,
+        depth: usize,
         preview: PiResource,
     },
     Resource(PiResource),
 }
 
 impl PiConfigRow {
-    fn is_source(&self) -> bool {
-        matches!(self, Self::Source { .. })
+    fn is_group(&self) -> bool {
+        matches!(self, Self::Root { .. } | Self::Source { .. } | Self::ResourceType { .. })
+    }
+
+    fn group_id(&self) -> Option<&str> {
+        match self {
+            Self::Root { id, .. } | Self::Source { id, .. } | Self::ResourceType { id, .. } => {
+                Some(id)
+            }
+            Self::Resource(_) => None,
+        }
     }
 
     fn preview_resource(&self) -> &PiResource {
         match self {
-            Self::Source { preview, .. }
+            Self::Root { preview, .. }
+            | Self::Source { preview, .. }
             | Self::ResourceType { preview, .. }
             | Self::Resource(preview) => preview,
         }
@@ -315,10 +333,13 @@ impl PiConfigModalState {
                 PiConfigOutcome::Changed
             }
             MouseEventKind::ScrollUp => {
+                // List interaction leaves search (F2/picker parity); keep query.
+                self.search_active = false;
                 self.move_selection(-3);
                 PiConfigOutcome::Changed
             }
             MouseEventKind::ScrollDown => {
+                self.search_active = false;
                 self.move_selection(3);
                 PiConfigOutcome::Changed
             }
@@ -330,6 +351,8 @@ impl PiConfigModalState {
                     self.search_active = true;
                     return PiConfigOutcome::Changed;
                 }
+                // Clicking the tree is browse mode — Space/j/k must not type.
+                self.search_active = false;
                 let Some(index) = self.hit_test_row(mouse.column, mouse.row) else {
                     return PiConfigOutcome::Changed;
                 };
@@ -339,9 +362,9 @@ impl PiConfigModalState {
                 if self
                     .visible_rows()
                     .get(index)
-                    .is_some_and(PiConfigRow::is_source)
+                    .is_some_and(PiConfigRow::is_group)
                 {
-                    self.toggle_selected_source();
+                    self.toggle_selected_group();
                 } else if was_selected {
                     self.toggle_selected_resource();
                 } else {
@@ -354,6 +377,12 @@ impl PiConfigModalState {
     }
 
     fn handle_search_key(&mut self, key: &KeyEvent) -> PiConfigOutcome {
+        // Nav / toggle leave search focus and re-dispatch (picker + F2 pattern).
+        // Keep query so the filtered list stays; only Esc clears it.
+        if Self::search_exit_nav_key(key) {
+            self.search_active = false;
+            return self.handle_key(key);
+        }
         match key.code {
             KeyCode::Tab | KeyCode::BackTab if self.catalog.project_trusted => {
                 // Keep the query so users can compare the same match across
@@ -372,6 +401,7 @@ impl PiConfigModalState {
                     self.reset_after_filter_change();
                 }
             }
+            // Commit filter → list focus (preserve query for Space toggle).
             KeyCode::Enter => self.search_active = false,
             KeyCode::Backspace => {
                 if self.search_query.pop().is_some() {
@@ -387,58 +417,92 @@ impl PiConfigModalState {
         PiConfigOutcome::Changed
     }
 
+    /// Arrow/page nav leaves search (picker parity). Char keys still type.
+    fn search_exit_nav_key(key: &KeyEvent) -> bool {
+        matches!(
+            key.code,
+            KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::Left
+                | KeyCode::Right
+        )
+    }
+
     fn visible_rows(&self) -> Vec<PiConfigRow> {
-        let mut groups: BTreeMap<String, (String, Vec<PiResource>)> = BTreeMap::new();
+        let mut roots: BTreeMap<String, (String, Vec<PiResource>)> = BTreeMap::new();
         for resource in self.catalog.resources_for_scope(self.scope) {
             if !self.matches_resource(resource) {
                 continue;
             }
-            let id = source_id(resource);
-            groups
+            let (id, label) = root_group(resource);
+            roots
                 .entry(id)
-                .or_insert_with(|| (source_label(resource), Vec::new()))
+                .or_insert_with(|| (label, Vec::new()))
                 .1
                 .push(resource.clone());
         }
 
         let searching = !self.search_query.trim().is_empty();
         let mut rows = Vec::new();
-        for (id, (label, mut resources)) in groups {
+        for (root_id, (root_label, mut resources)) in roots {
             resources.sort_by_cached_key(|resource| {
                 (
                     resource.resource_type,
+                    resource.source.clone(),
                     resource.display_name().to_lowercase(),
                 )
             });
             let preview = resources[0].clone();
-            let resource_count = resources.len();
-            let folded = !searching && self.folded_sources.contains(&id);
-            rows.push(PiConfigRow::Source {
-                id,
-                label,
-                resource_count,
+            rows.push(PiConfigRow::Root {
+                id: root_id.clone(),
+                label: root_label,
+                resource_count: resources.len(),
                 preview,
             });
-            if !folded {
-                for resource_type in [
-                    crate::pi_resource_config::PiResourceType::Extensions,
-                    crate::pi_resource_config::PiResourceType::Skills,
-                    crate::pi_resource_config::PiResourceType::Prompts,
-                    crate::pi_resource_config::PiResourceType::Themes,
-                ] {
-                    let typed = resources
-                        .iter()
-                        .filter(|resource| resource.resource_type == resource_type)
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    if let Some(preview) = typed.first().cloned() {
-                        rows.push(PiConfigRow::ResourceType {
-                            label: resource_type.label().to_owned(),
-                            preview,
-                        });
-                        rows.extend(typed.into_iter().map(PiConfigRow::Resource));
-                    }
+            if !searching && self.folded_sources.contains(&root_id) {
+                continue;
+            }
+
+            if resources.iter().all(|resource| resource.origin == PiResourceOrigin::Package) {
+                let mut packages: BTreeMap<String, (String, Vec<PiResource>)> = BTreeMap::new();
+                for resource in resources {
+                    let id = source_id(&resource);
+                    packages
+                        .entry(id)
+                        .or_insert_with(|| (source_label(&resource), Vec::new()))
+                        .1
+                        .push(resource);
                 }
+                for (source, (label, package_resources)) in packages {
+                    let preview = package_resources[0].clone();
+                    rows.push(PiConfigRow::Source {
+                        id: source.clone(),
+                        label,
+                        resource_count: package_resources.len(),
+                        preview,
+                    });
+                    append_type_rows(
+                        &mut rows,
+                        &self.folded_sources,
+                        searching,
+                        &source,
+                        package_resources,
+                        2,
+                    );
+                }
+            } else {
+                append_type_rows(
+                    &mut rows,
+                    &self.folded_sources,
+                    searching,
+                    &root_id,
+                    resources,
+                    1,
+                );
             }
         }
         rows
@@ -448,7 +512,15 @@ impl PiConfigModalState {
         self.catalog
             .resources_for_scope(self.scope)
             .into_iter()
-            .map(source_id)
+            .flat_map(|resource| {
+                let (root_id, _) = root_group(resource);
+                let mut ids = vec![root_id];
+                if resource.origin == PiResourceOrigin::Package {
+                    ids.push(source_id(resource));
+                }
+                ids.push(type_group_id(&source_id(resource), resource.resource_type));
+                ids
+            })
             .collect()
     }
 
@@ -465,9 +537,10 @@ impl PiConfigModalState {
         if query.is_empty() {
             return true;
         }
-        let policy_state = if self.policy.allow.iter().any(|source| source == &resource.source) {
+        let policy_key = policy_key(resource);
+        let policy_state = if self.policy.allow.iter().any(|entry| entry == &policy_key) {
             "policy allowed"
-        } else if self.policy.block.iter().any(|source| source == &resource.source) {
+        } else if self.policy.block.iter().any(|entry| entry == &policy_key) {
             "policy blocked"
         } else if crate::pi_resource_policy::DEFAULT_BLOCKED_SOURCES
             .iter()
@@ -506,16 +579,20 @@ impl PiConfigModalState {
         if self
             .visible_rows()
             .get(self.selected)
-            .is_some_and(PiConfigRow::is_source)
+            .is_some_and(PiConfigRow::is_group)
         {
-            self.toggle_selected_source();
+            self.toggle_selected_group();
         } else {
             self.toggle_selected_resource();
         }
     }
 
-    fn toggle_selected_source(&mut self) {
-        let Some(PiConfigRow::Source { id, .. }) = self.visible_rows().get(self.selected).cloned()
+    fn toggle_selected_group(&mut self) {
+        let Some(id) = self
+            .visible_rows()
+            .get(self.selected)
+            .and_then(PiConfigRow::group_id)
+            .map(str::to_owned)
         else {
             return;
         };
@@ -528,7 +605,11 @@ impl PiConfigModalState {
     }
 
     fn set_selected_source_folded(&mut self, folded: bool) {
-        let Some(PiConfigRow::Source { id, .. }) = self.visible_rows().get(self.selected).cloned()
+        let Some(id) = self
+            .visible_rows()
+            .get(self.selected)
+            .and_then(PiConfigRow::group_id)
+            .map(str::to_owned)
         else {
             return;
         };
@@ -573,24 +654,28 @@ impl PiConfigModalState {
         else {
             return;
         };
-        let source = &resource.source;
-        let in_allow = self.policy.allow.iter().any(|s| s == source);
-        let in_block = self.policy.block.iter().any(|s| s == source);
+        let key = policy_key(&resource);
+        let in_allow = self.policy.allow.iter().any(|entry| entry == &key);
+        let in_block = self.policy.block.iter().any(|entry| entry == &key);
         if in_allow {
             // allow → default (remove from allow)
-            self.policy.allow.retain(|s| s != source);
-            self.notice = Some(format!("Policy: removed allow for {source}"));
+            self.policy.allow.retain(|entry| entry != &key);
+            self.notice = Some(format!(
+                "Policy: removed allow for {}",
+                resource.display_name()
+            ));
         } else if in_block {
             // block → allow
-            self.policy.block.retain(|s| s != source);
-            self.policy.allow.push(source.clone());
+            self.policy.block.retain(|entry| entry != &key);
+            self.policy.allow.push(key.clone());
             self.notice = Some(format!(
-                "Policy: {source} → allow (overrides default blocklist)"
+                "Policy: {} → allow (overrides default blocklist)",
+                resource.display_name()
             ));
         } else {
             // default → block
-            self.policy.block.push(source.clone());
-            self.notice = Some(format!("Policy: {source} → block"));
+            self.policy.block.push(key);
+            self.notice = Some(format!("Policy: {} → block", resource.display_name()));
         }
         if let Err(error) = self.policy.save_to_config() {
             self.notice = Some(format!("Failed to save policy: {error}"));
@@ -704,6 +789,72 @@ fn next_override(current: PiProjectOverride, inherited_enabled: bool) -> PiProje
     }
 }
 
+fn policy_key(resource: &PiResource) -> String {
+    if resource.origin == PiResourceOrigin::Package {
+        resource.source.clone()
+    } else {
+        resource.path.to_string_lossy().into_owned()
+    }
+}
+
+fn root_group(resource: &PiResource) -> (String, String) {
+    match resource.origin {
+        PiResourceOrigin::Auto if resource.path.starts_with(&resource.base_dir) => {
+            ("auto".to_owned(), "Auto-discovered".to_owned())
+        }
+        PiResourceOrigin::Auto => ("manual".to_owned(), "Manual paths".to_owned()),
+        PiResourceOrigin::Settings => ("settings".to_owned(), "Settings paths".to_owned()),
+        PiResourceOrigin::Package if github_repo(&resource.source).is_some() => (
+            "github".to_owned(),
+            "GitHub".to_owned(),
+        ),
+        PiResourceOrigin::Package if resource.source.starts_with("npm:") => {
+            ("npm".to_owned(), "npm".to_owned())
+        }
+        PiResourceOrigin::Package => ("packages".to_owned(), "Packages".to_owned()),
+    }
+}
+
+fn type_group_id(parent: &str, resource_type: crate::pi_resource_config::PiResourceType) -> String {
+    format!("{parent}:type:{:?}", resource_type)
+}
+
+fn append_type_rows(
+    rows: &mut Vec<PiConfigRow>,
+    folded: &HashSet<String>,
+    searching: bool,
+    parent_id: &str,
+    resources: Vec<PiResource>,
+    depth: usize,
+) {
+    for resource_type in [
+        crate::pi_resource_config::PiResourceType::Extensions,
+        crate::pi_resource_config::PiResourceType::Skills,
+        crate::pi_resource_config::PiResourceType::Prompts,
+        crate::pi_resource_config::PiResourceType::Themes,
+    ] {
+        let typed = resources
+            .iter()
+            .filter(|resource| resource.resource_type == resource_type)
+            .cloned()
+            .collect::<Vec<_>>();
+        let Some(preview) = typed.first().cloned() else {
+            continue;
+        };
+        let id = type_group_id(parent_id, resource_type);
+        rows.push(PiConfigRow::ResourceType {
+            id: id.clone(),
+            label: resource_type.label().to_owned(),
+            depth,
+            preview,
+        });
+        if !searching && folded.contains(&id) {
+            continue;
+        }
+        rows.extend(typed.into_iter().map(PiConfigRow::Resource));
+    }
+}
+
 fn source_id(resource: &PiResource) -> String {
     format!(
         "{}:{}:{}",
@@ -716,7 +867,10 @@ fn source_id(resource: &PiResource) -> String {
 fn source_label(resource: &PiResource) -> String {
     match resource.origin {
         PiResourceOrigin::Package if github_repo(&resource.source).is_some() => {
-            format!("GitHub · {}", github_repo(&resource.source).unwrap_or_default())
+            format!(
+                "GitHub · {}",
+                github_repo(&resource.source).unwrap_or_default()
+            )
         }
         PiResourceOrigin::Package if resource.source.starts_with("npm:") => {
             format!("npm · {}", resource.source.trim_start_matches("npm:"))
@@ -955,7 +1109,7 @@ fn render_resource_tree(
                     .fg(theme.fuzzy_accent)
                     .bg(theme.bg_visual)
                     .add_modifier(Modifier::BOLD)
-            } else if row.is_source() {
+            } else if matches!(row, PiConfigRow::Root { .. } | PiConfigRow::Source { .. }) {
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD)
@@ -967,7 +1121,13 @@ fn render_resource_tree(
                 Style::default().fg(theme.gray_bright)
             };
             let text = match row {
-                PiConfigRow::Source {
+                PiConfigRow::Root {
+                    id,
+                    label,
+                    resource_count,
+                    ..
+                }
+                | PiConfigRow::Source {
                     id,
                     label,
                     resource_count,
@@ -979,13 +1139,21 @@ fn render_resource_tree(
                     } else {
                         "▾"
                     };
-                    format!("{fold} {label} · {resource_count}")
+                    let indent = matches!(row, PiConfigRow::Source { .. });
+                    format!("{} {fold} {label} · {resource_count}", if indent { "  " } else { "" })
                 }
-                PiConfigRow::ResourceType { label, .. } => format!("  {label}"),
+                PiConfigRow::ResourceType { id, label, depth, .. } => {
+                    let fold = if state.folded_sources.contains(id) && state.search_query.is_empty() {
+                        "▸"
+                    } else {
+                        "▾"
+                    };
+                    format!("{} {fold} {label}", "  ".repeat(*depth))
+                }
                 PiConfigRow::Resource(resource) => {
                     let policy_tag = policy_marker(&state.policy, resource);
                     format!(
-                        "    {} {}{}",
+                        "      {} {}{}",
                         marker_for(resource, state.scope),
                         resource.display_name(),
                         policy_tag,
@@ -1001,17 +1169,24 @@ fn render_resource_tree(
     let detail = rows.get(state.selected).map_or_else(
         || "No resource selected".to_owned(),
         |row| match row {
-            PiConfigRow::Source { label, .. } => format!("{label} · Space/Enter toggles"),
-            PiConfigRow::ResourceType { label, .. } => format!("{label} resources"),
+            PiConfigRow::Root { label, .. } | PiConfigRow::Source { label, .. } => {
+                format!("{label} · Space/Enter toggles")
+            }
+            PiConfigRow::ResourceType { label, .. } => format!("{label} · Space/Enter toggles"),
             PiConfigRow::Resource(resource) => {
-                let pol = if state.policy.allow.iter().any(|s| s == &resource.source) {
+                let key = policy_key(resource);
+                let pol = if state.policy.allow.iter().any(|entry| entry == &key) {
                     " · policy: allow"
-                } else if state.policy.block.iter().any(|s| s == &resource.source) {
+                } else if state.policy.block.iter().any(|entry| entry == &key) {
                     " · policy: block"
                 } else {
                     ""
                 };
-                format!("{} · {}{pol}", resource.path.display(), resource.scope.label())
+                format!(
+                    "{} · {}{pol}",
+                    resource.path.display(),
+                    resource.scope.label()
+                )
             }
         },
     );
@@ -1141,16 +1316,16 @@ fn marker_for(resource: &PiResource, scope: PiResourceScope) -> &'static str {
 /// Policy tag shown next to a resource name in the tree.
 /// Returns a short suffix like " ⛔ blocked" or " ✅ forced" or empty string.
 fn policy_marker(policy: &ResourcePolicy, resource: &PiResource) -> String {
-    let source = &resource.source;
-    if policy.allow.iter().any(|s| s == source) {
+    let source = policy_key(resource);
+    if policy.allow.iter().any(|entry| entry == &source) {
         return " ✅ forced".to_owned();
     }
-    if policy.block.iter().any(|s| s == source) {
+    if policy.block.iter().any(|entry| entry == &source) {
         return " ⛔ blocked".to_owned();
     }
-    // Check default blocklist
+    // Check default blocklist by package source.
     for blocked in crate::pi_resource_policy::DEFAULT_BLOCKED_SOURCES {
-        if source == blocked {
+        if resource.source == *blocked {
             return " ⛔ default-blocked".to_owned();
         }
     }
@@ -1279,11 +1454,73 @@ mod tests {
     }
 
     #[test]
+    fn search_active_arrow_keys_exit_to_list_nav() {
+        let mut state = state();
+        state.search_query = "alpha".to_owned();
+        state.search_active = true;
+
+        let down = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE);
+        state.handle_key(&down);
+        assert!(!state.search_active, "Down leaves search focus");
+        assert_eq!(state.search_query, "alpha", "query preserved");
+
+        // Space while still searching types into the query (not toggle).
+        state.search_active = true;
+        let space = KeyEvent::new(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
+        state.handle_key(&space);
+        assert!(state.search_active);
+        assert!(state.search_query.ends_with(' '));
+    }
+
+    #[test]
+    fn mouse_list_click_blurs_search_so_space_is_list_action() {
+        let mut state = state();
+        state.search_active = true;
+        state.search_query = "alpha".to_owned();
+        state.list_rect = Some(Rect::new(0, 2, 40, 10));
+        state.list_viewport = 10;
+        state.search_rect = Some(Rect::new(0, 0, 40, 1));
+
+        let resource_idx = state
+            .visible_rows()
+            .iter()
+            .position(|row| matches!(row, PiConfigRow::Resource(_)))
+            .expect("search expands matching resource rows");
+
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 2 + resource_idx as u16,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        state.handle_mouse(&mouse);
+        assert!(!state.search_active, "list click must blur search");
+        assert_eq!(state.search_query, "alpha");
+        assert_eq!(state.selected, resource_idx);
+
+        // After blur, Space is list nav (not query append). Do not call
+        // real toggle — set_global_enabled writes disk.
+        let space = KeyEvent::new(KeyCode::Char(' '), crossterm::event::KeyModifiers::NONE);
+        let query_before = state.search_query.clone();
+        state.handle_key(&space);
+        assert!(!state.search_active);
+        assert_eq!(state.search_query, query_before, "Space must not type after list focus");
+    }
+
+    #[test]
     fn automatic_resource_names_keep_the_relative_path() {
         assert_eq!(
             resource("extensions/alpha.ts", "auto").display_name(),
             "extensions/alpha.ts"
         );
+    }
+
+    #[test]
+    fn policy_key_is_unique_for_auto_discovered_resources() {
+        let alpha = resource("extensions/alpha.ts", "auto");
+        let beta = resource("extensions/beta.ts", "auto");
+        assert_ne!(policy_key(&alpha), policy_key(&beta));
+        assert_eq!(policy_key(&alpha), "/tmp/pi/extensions/alpha.ts");
     }
 
     #[test]

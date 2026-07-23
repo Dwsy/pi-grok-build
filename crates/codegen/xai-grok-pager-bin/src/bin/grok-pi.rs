@@ -4,46 +4,56 @@
 //! production TUI composition package. The Pi crate is a protocol adapter only;
 //! every terminal surface is created and rendered by `xai-grok-pager`.
 
+#[path = "grok_pi/ask_user_extension.rs"]
+mod ask_user_extension;
 #[path = "grok_pi/auth_extension.rs"]
 mod auth_extension;
 #[path = "grok_pi/bash_extension.rs"]
 mod bash_extension;
+#[path = "grok_pi/btw_extension.rs"]
+mod btw_extension;
 #[path = "grok_pi/cli.rs"]
 mod cli;
-#[path = "grok_pi/home.rs"]
-mod home;
-#[path = "grok_pi/migrate_home.rs"]
-mod migrate_home;
 #[path = "grok_pi/context_extension.rs"]
 mod context_extension;
 #[path = "grok_pi/export_extension.rs"]
 mod export_extension;
+#[path = "grok_pi/goal_extension.rs"]
+mod goal_extension;
+#[path = "grok_pi/home.rs"]
+mod home;
+#[path = "grok_pi/loop_extension.rs"]
+mod loop_extension;
+#[path = "grok_pi/migrate_home.rs"]
+mod migrate_home;
 #[path = "grok_pi/native_commands_extension.rs"]
 mod native_commands_extension;
-#[path = "grok_pi/plan_mode_extension.rs"]
-mod plan_mode_extension;
 #[path = "grok_pi/pi_version.rs"]
 mod pi_version;
+#[path = "grok_pi/plan_mode_extension.rs"]
+mod plan_mode_extension;
 #[path = "grok_pi/recap_extension.rs"]
 mod recap_extension;
 #[path = "grok_pi/remote_tui_extension.rs"]
 mod remote_tui_extension;
-#[path = "grok_pi/rpc_compat_extension.rs"]
-mod rpc_compat_extension;
-#[path = "grok_pi/session_paths.rs"]
-mod session_paths;
-#[path = "grok_pi/subagent_extension.rs"]
-mod subagent_extension;
-#[path = "grok_pi/workflow_extension.rs"]
-mod workflow_extension;
-#[path = "grok_pi/goal_extension.rs"]
-mod goal_extension;
 #[path = "grok_pi/rollback_extension.rs"]
 mod rollback_extension;
+#[path = "grok_pi/rpc_compat_extension.rs"]
+mod rpc_compat_extension;
+#[path = "grok_pi/rust_tui_bridge_extension.rs"]
+mod rust_tui_bridge_extension;
+#[path = "grok_pi/session_paths.rs"]
+mod session_paths;
+#[path = "grok_pi/shortcut_manager_extension.rs"]
+mod shortcut_manager_extension;
+#[path = "grok_pi/subagent_extension.rs"]
+mod subagent_extension;
 #[path = "grok_pi/tools_extension.rs"]
 mod tools_extension;
 #[path = "grok_pi/tree_bridge.rs"]
 mod tree_bridge;
+#[path = "grok_pi/workflow_extension.rs"]
+mod workflow_extension;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -59,26 +69,31 @@ use xai_grok_pager::{
     pi_resource_policy::ResourcePolicy,
 };
 
+use ask_user_extension::write_ask_user_extension;
 use auth_extension::write_auth_extension;
 use bash_extension::write_bash_extension;
+use btw_extension::write_btw_extension;
 use cli::{Args, Command, normalize_compound_short_flags, pi_args_with_startup_flags};
 use context_extension::write_context_extension;
 use export_extension::write_export_extension;
+use goal_extension::write_goal_extension;
+use loop_extension::write_loop_extension;
 use native_commands_extension::write_native_commands_extension;
-use plan_mode_extension::write_plan_mode_extension;
 use pi_version::ensure_compatible_pi_host;
+use plan_mode_extension::write_plan_mode_extension;
 use recap_extension::write_recap_extension;
 use remote_tui_extension::write_remote_tui_extension;
 use rpc_compat_extension::write_rpc_compat_extension;
+use rust_tui_bridge_extension::write_rust_tui_bridge_extension;
 use session_paths::pi_session_dir;
+use shortcut_manager_extension::write_shortcut_manager_extension;
 use subagent_extension::write_subagent_extension;
-use workflow_extension::write_workflow_extension;
-use goal_extension::write_goal_extension;
 use tools_extension::{
     configured_builtin_tools, excluded_tools, has_explicit_tools_arg, has_no_tools_arg,
     write_tools_extension,
 };
 use tree_bridge::write_navigate_tree_extension;
+use workflow_extension::write_workflow_extension;
 
 /// Grok pager commands that are meaningful when Pi is the ACP backend.
 ///
@@ -116,6 +131,8 @@ const PI_GROK_NATIVE_COMMANDS: &[&str] = &[
     "dashboard",
     // Display-only session recap via injected Pi extension + adapter bridge.
     "recap",
+    // Native /btw side questions (F2 pi_btw + pi-grok-btw extension).
+    "btw",
     // Native Grok transcript/navigation surfaces over the Pi-backed session.
     "copy",
     "find",
@@ -142,6 +159,8 @@ const PI_GROK_NATIVE_COMMANDS: &[&str] = &[
     "doctor",
     // Pager-native Pi resource manager (`/pi-config`, `/pi-resources`).
     "pi-config",
+    // Native Pi extension-shortcut manager (independent of remote-tui).
+    "pi-shortcut-manager",
 ];
 
 /// Block-character π mark for the native Grok welcome / minimal logo surface.
@@ -285,6 +304,27 @@ async fn run(mut args: Args) -> Result<()> {
     } else {
         None
     };
+    // F2 `[ui].pi_loop` (default off). Restart required — inject at startup only.
+    let loop_extension = if bridge_extensions_enabled && loop_enabled() {
+        Some(write_loop_extension().context("failed to create Pi loop extension")?)
+    } else {
+        None
+    };
+    // F2 `[ui].pi_ask_user_question` (default off). Restart required — inject at startup only.
+    let ask_user_extension = if bridge_extensions_enabled && ask_user_enabled() {
+        Some(
+            write_ask_user_extension()
+                .context("failed to create Pi ask_user_question extension")?,
+        )
+    } else {
+        None
+    };
+    // F2 `[ui].pi_btw` (default off). Restart required — inject at startup only.
+    let btw_extension = if bridge_extensions_enabled && btw_enabled() {
+        Some(write_btw_extension().context("failed to create Pi btw extension")?)
+    } else {
+        None
+    };
     let recap_extension = bridge_extensions_enabled
         .then(|| write_recap_extension())
         .transpose()
@@ -317,11 +357,31 @@ async fn run(mut args: Args) -> Result<()> {
     } else {
         None
     };
-    let rpc_compat_extension = if remote_tui_enabled {
-        Some(write_rpc_compat_extension().context("failed to create Pi RPC compatibility extension")?)
+    // RPC-compat is always injected with bridge extensions: argument-completion
+    // enrichment for get_commands does not depend on Remote TUI. TUI mode rewrite
+    // remains gated by PI_GROK_EXTENSION_TUI_COMPAT (set only when remote-tui on).
+    let rpc_compat_extension = bridge_extensions_enabled
+        .then(|| write_rpc_compat_extension())
+        .transpose()
+        .context("failed to create Pi RPC compatibility extension")?;
+    let shortcut_manager_extension = if remote_tui_enabled {
+        Some(
+            write_shortcut_manager_extension()
+                .context("failed to create Pi shortcut manager extension")?,
+        )
     } else {
         None
     };
+    // Optional experimental Rust TUI bridge (does not replace remote-tui).
+    let rust_tui_bridge_extension =
+        if remote_tui_enabled && env_flag_default_off("PI_GROK_RUST_TUI_BRIDGE") {
+            Some(
+                write_rust_tui_bridge_extension()
+                    .context("failed to create Pi Rust TUI bridge extension")?,
+            )
+        } else {
+            None
+        };
     let plan_mode_extension = bridge_extensions_enabled
         .then(|| write_plan_mode_extension())
         .transpose()
@@ -341,7 +401,33 @@ async fn run(mut args: Args) -> Result<()> {
     // Disable Pi's auto-discovery and load only policy-approved resources.
     // Bridge extensions (subagent, bash, recap, etc.) are appended separately
     // below and always load regardless of policy.
-    let resource_policy = ResourcePolicy::load_from_config();
+    let mut resource_policy = ResourcePolicy::load_from_config();
+    // Feature-gated package blocks (assets/native_feature_conflicts.toml).
+    if ask_user_extension.is_some() {
+        resource_policy
+            .enabled_native_features
+            .push("pi_ask_user_question".to_owned());
+    }
+    if goal_extension.is_some() {
+        resource_policy
+            .enabled_native_features
+            .push("pi_goal".to_owned());
+    }
+    if workflow_extension.is_some() {
+        resource_policy
+            .enabled_native_features
+            .push("pi_workflows".to_owned());
+    }
+    if subagent_extension.is_some() {
+        resource_policy
+            .enabled_native_features
+            .push("pi_subagents".to_owned());
+    }
+    if btw_extension.is_some() {
+        resource_policy
+            .enabled_native_features
+            .push("pi_btw".to_owned());
+    }
     // Mirror Pi's --approve / --no-approve so the catalog's project-resource
     // discovery matches what Pi itself will trust for this run.
     // (Agent-home cwd is handled inside PiResourceCatalog::load_with_trust.)
@@ -352,9 +438,8 @@ async fn run(mut args: Args) -> Result<()> {
     } else {
         None
     };
-    let resource_catalog =
-        PiResourceCatalog::load_with_trust(cwd.clone(), trust_override)
-            .context("failed to load Pi resource catalog for admission policy")?;
+    let resource_catalog = PiResourceCatalog::load_with_trust(cwd.clone(), trust_override)
+        .context("failed to load Pi resource catalog for admission policy")?;
     let launch_plan = resource_policy.evaluate(&resource_catalog);
     if let Some(summary) = launch_plan.blocked_summary() {
         tracing::warn!("{summary}");
@@ -388,8 +473,18 @@ async fn run(mut args: Args) -> Result<()> {
     // bypass the user-resource policy just like the other host bridge files.
     let mut startup_extensions = Vec::new();
     for path in [
-        rpc_compat_extension.as_ref().map(|extension| extension.path()),
-        remote_tui_extension.as_ref().map(|extension| extension.path()),
+        rpc_compat_extension
+            .as_ref()
+            .map(|extension| extension.path()),
+        remote_tui_extension
+            .as_ref()
+            .map(|extension| extension.path()),
+        shortcut_manager_extension
+            .as_ref()
+            .map(|extension| extension.path()),
+        rust_tui_bridge_extension
+            .as_ref()
+            .map(|extension| extension.path()),
     ]
     .into_iter()
     .flatten()
@@ -404,8 +499,7 @@ async fn run(mut args: Args) -> Result<()> {
     // Disable Pi auto-discovery; we supply approved resources explicitly.
     // Respect the user's own --no-* CLI flags (both Clap and passthrough):
     // if they already disabled a category, don't re-add approved resources.
-    let has_no_extensions =
-        args.no_extensions || pi_args.iter().any(|a| a == "--no-extensions");
+    let has_no_extensions = args.no_extensions || pi_args.iter().any(|a| a == "--no-extensions");
     let has_no_skills = args.no_skills || pi_args.iter().any(|a| a == "--no-skills");
     let has_no_prompts = pi_args.iter().any(|a| a == "--no-prompt-templates");
     let has_no_themes = pi_args.iter().any(|a| a == "--no-themes");
@@ -422,10 +516,7 @@ async fn run(mut args: Args) -> Result<()> {
     if !has_no_skills {
         pi_args.push("--no-skills".to_string());
         for path in &launch_plan.skills {
-            pi_args.extend([
-                "--skill".to_string(),
-                path.to_string_lossy().into_owned(),
-            ]);
+            pi_args.extend(["--skill".to_string(), path.to_string_lossy().into_owned()]);
         }
     }
     if !has_no_prompts {
@@ -440,10 +531,7 @@ async fn run(mut args: Args) -> Result<()> {
     if !has_no_themes {
         pi_args.push("--no-themes".to_string());
         for path in &launch_plan.themes {
-            pi_args.extend([
-                "--theme".to_string(),
-                path.to_string_lossy().into_owned(),
-            ]);
+            pi_args.extend(["--theme".to_string(), path.to_string_lossy().into_owned()]);
         }
     }
 
@@ -485,6 +573,13 @@ async fn run(mut args: Args) -> Result<()> {
         goal_extension
             .as_ref()
             .map(|extension| extension.source_path()),
+        loop_extension
+            .as_ref()
+            .map(|extension| extension.source_path()),
+        ask_user_extension
+            .as_ref()
+            .map(|extension| extension.source_path()),
+        btw_extension.as_ref().map(|extension| extension.path()),
         recap_extension.as_ref().map(|extension| extension.path()),
         context_extension
             .as_ref()
@@ -552,6 +647,35 @@ async fn run(mut args: Args) -> Result<()> {
             std::env::remove_var("PI_GROK_GOAL");
         }
     }
+    if let Some(extension) = loop_extension.as_ref() {
+        env.push(("PI_GROK_LOOP".to_string(), "1".to_string()));
+        env.push((
+            "PI_GROK_LOOP_CONTROL".to_string(),
+            extension.control_path().to_string_lossy().into_owned(),
+        ));
+        unsafe {
+            std::env::set_var("PI_GROK_LOOP", "1");
+        }
+    } else {
+        unsafe {
+            std::env::remove_var("PI_GROK_LOOP");
+        }
+    }
+    if let Some(extension) = ask_user_extension.as_ref() {
+        let dir = extension.dir_path().to_string_lossy().into_owned();
+        env.push(("PI_GROK_ASK_USER".to_string(), "1".to_string()));
+        env.push(("PI_GROK_ASK_USER_DIR".to_string(), dir.clone()));
+        // SAFETY: single-threaded startup; parent adapter reads the same dir.
+        unsafe {
+            std::env::set_var("PI_GROK_ASK_USER", "1");
+            std::env::set_var("PI_GROK_ASK_USER_DIR", &dir);
+        }
+    } else {
+        unsafe {
+            std::env::remove_var("PI_GROK_ASK_USER");
+            std::env::remove_var("PI_GROK_ASK_USER_DIR");
+        }
+    }
     if let Some(context_extension) = context_extension.as_ref() {
         env.push((
             "PI_GROK_CONTEXT_BREAKDOWN".to_string(),
@@ -581,10 +705,29 @@ async fn run(mut args: Args) -> Result<()> {
             env.push(("PI_GROK_REMOTE_TUI_WIDTH".to_string(), cols.to_string()));
             env.push(("PI_GROK_REMOTE_TUI_ROWS".to_string(), rows.to_string()));
         }
+        // Instance-scoped shortcut dispatch keyfile (parent adapter + Pi child).
+        // Avoids global meta races when multiple grok-pi processes run.
+        let shortcut_keys = std::env::temp_dir().join(format!(
+            "pi-grok-shortcut-keys-host-{}.jsonl",
+            std::process::id()
+        ));
+        if let Err(err) = std::fs::write(&shortcut_keys, b"") {
+            tracing::warn!(%err, "failed to create shortcut dispatch keyfile");
+        } else {
+            let keys = shortcut_keys.to_string_lossy().into_owned();
+            env.push(("PI_GROK_SHORTCUT_KEYS".to_string(), keys.clone()));
+            // SAFETY: single-threaded startup; adapter reads same path.
+            unsafe {
+                std::env::set_var("PI_GROK_SHORTCUT_KEYS", &keys);
+            }
+        }
     }
     // Tree file rollback checkpoint extension env.
     if let Some(extension) = plan_mode_extension.as_ref() {
-        env.push(("PI_GROK_PLAN_CONTROL".to_string(), extension.control_path().to_string_lossy().into_owned()));
+        env.push((
+            "PI_GROK_PLAN_CONTROL".to_string(),
+            extension.control_path().to_string_lossy().into_owned(),
+        ));
     }
     if rollback_ext.is_some() {
         env.push(("PI_GROK_ROLLBACK".to_string(), "1".to_string()));
@@ -605,14 +748,20 @@ async fn run(mut args: Args) -> Result<()> {
     // ── Extension self-heal: spawn Pi, and if an extension crashes the RPC
     // child during bootstrap, binary-search the culprit (VSCode-style),
     // print a diagnostic, and relaunch without it. ──────────────────────────
-    let (process, bootstrap, pi_args) = spawn_with_extension_self_heal(
-        &args,
-        &cwd,
-        pi_args,
-        &env,
-    )
-    .await?;
-    let bash_control_meta = bash_extension
+    let (process, bootstrap, pi_args) =
+        spawn_with_extension_self_heal(&args, &cwd, pi_args, &env).await?;
+    
+    if btw_extension.is_some() {
+        env.push(("PI_GROK_BTW".to_string(), "1".to_string()));
+        unsafe {
+            std::env::set_var("PI_GROK_BTW", "1");
+        }
+    } else {
+        unsafe {
+            std::env::remove_var("PI_GROK_BTW");
+        }
+    }
+let bash_control_meta = bash_extension
         .as_ref()
         .map(|extension| extension.control_meta_path().to_path_buf());
     let context_breakdown = context_extension
@@ -628,6 +777,7 @@ async fn run(mut args: Args) -> Result<()> {
     let _navigate_tree_extension = navigate_tree_extension;
     let _bash_extension = bash_extension;
     let _subagent_extension = subagent_extension;
+    let _btw_extension = btw_extension;
     let _recap_extension = recap_extension;
     let _context_extension = context_extension;
     let _auth_extension = auth_extension;
@@ -635,8 +785,11 @@ async fn run(mut args: Args) -> Result<()> {
     let _native_commands_extension = native_commands_extension;
     let _remote_tui_extension = remote_tui_extension;
     let _rpc_compat_extension = rpc_compat_extension;
+    let _shortcut_manager_extension = shortcut_manager_extension;
+    let _rust_tui_bridge_extension = rust_tui_bridge_extension;
     let _plan_mode_extension = plan_mode_extension;
     let _goal_extension = goal_extension;
+    let _loop_extension = loop_extension;
     let _tools_extension = tools_extension;
     let _rollback_extension = rollback_ext;
 
@@ -649,17 +802,19 @@ async fn run(mut args: Args) -> Result<()> {
         .or_else(|| Some("Pi".to_string()));
 
     let (client_channel, mut agent_channel) = acp_channels();
-    let adapter = Rc::new(PiAgent::new(
-        process.rpc,
-        agent_channel.tx.clone(),
-        bootstrap,
-        pi_session_dir,
-        bash_control_meta,
-        context_breakdown,
-        plan_mode_control,
-        goal_control,
-    )
-    .context("failed to restore Pi plan-mode state")?);
+    let adapter = Rc::new(
+        PiAgent::new(
+            process.rpc,
+            agent_channel.tx.clone(),
+            bootstrap,
+            pi_session_dir,
+            bash_control_meta,
+            context_breakdown,
+            plan_mode_control,
+            goal_control,
+        )
+        .context("failed to restore Pi plan-mode state")?,
+    );
 
     let event_adapter = adapter.clone();
     tokio::task::spawn_local(async move {
@@ -878,9 +1033,7 @@ async fn spawn_with_extension_self_heal(
             );
             eprintln!("    [pi.resources]");
             eprintln!("    block = [\"{bad_path}\"]");
-            eprintln!(
-                "  Or project sidecar: .grok-pi/pi-resources.toml  block = [\"...\"]"
-            );
+            eprintln!("  Or project sidecar: .grok-pi/pi-resources.toml  block = [\"...\"]");
             eprintln!();
 
             // After successful bisection: Y / any key = report, only N = skip.
@@ -932,8 +1085,7 @@ async fn spawn_with_extension_self_heal(
 
 // ── Extension crash telemetry (privacy: name + package_dir only) ─────────────
 
-const DEFAULT_EXT_TELEMETRY_URL: &str =
-    "https://ext-crash-telemetry.dwsycode.workers.dev";
+const DEFAULT_EXT_TELEMETRY_URL: &str = "https://ext-crash-telemetry.dwsycode.workers.dev";
 
 /// After bisection succeeds: interactive confirm then fire-and-forget POST.
 ///
@@ -1141,6 +1293,42 @@ fn goal_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// F2 `[ui].pi_loop` — enable Grok-style /loop scheduler for this process.
+fn loop_enabled() -> bool {
+    let Ok(config) = xai_grok_shell::config::load_effective_config() else {
+        return false;
+    };
+    config
+        .get("ui")
+        .and_then(|ui| ui.get("pi_loop"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// F2 `[ui].pi_btw` — enable native /btw for this process.
+fn btw_enabled() -> bool {
+    let Ok(config) = xai_grok_shell::config::load_effective_config() else {
+        return false;
+    };
+    config
+        .get("ui")
+        .and_then(|ui| ui.get("pi_btw"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// F2 `[ui].pi_ask_user_question` — enable native Q&A for this process.
+fn ask_user_enabled() -> bool {
+    let Ok(config) = xai_grok_shell::config::load_effective_config() else {
+        return false;
+    };
+    config
+        .get("ui")
+        .and_then(|ui| ui.get("pi_ask_user_question"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
+}
+
 /// Extract all `--extension <path>` values from pi_args.
 fn extract_extension_paths(pi_args: &[String]) -> Vec<String> {
     let mut paths = Vec::new();
@@ -1283,6 +1471,7 @@ mod env_flag_tests {
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"fork"));
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"clone"));
         assert!(PI_GROK_NATIVE_COMMANDS.contains(&"reload"));
+        assert!(PI_GROK_NATIVE_COMMANDS.contains(&"pi-shortcut-manager"));
     }
 
     #[test]

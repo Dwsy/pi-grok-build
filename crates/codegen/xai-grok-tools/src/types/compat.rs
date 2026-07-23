@@ -385,7 +385,9 @@ impl CompatConfig {
         use std::sync::OnceLock;
         static GROK_RULES: OnceLock<&'static str> = OnceLock::new();
         let grok_rules = *GROK_RULES.get_or_init(|| {
-            Box::leak(format!("{}/rules", xai_grok_config::project_config_dirname()).into_boxed_str())
+            Box::leak(
+                format!("{}/rules", xai_grok_config::project_config_dirname()).into_boxed_str(),
+            )
         });
         let mut dirs = vec![grok_rules];
         if self.claude.rules {

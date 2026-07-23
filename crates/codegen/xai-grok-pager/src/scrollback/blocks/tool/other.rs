@@ -16,6 +16,8 @@ pub struct OtherToolCallBlock {
     pub name: String,
     /// Summary/target.
     pub summary: String,
+    /// Pretty JSON of ACP `raw_input` when present (for arg display).
+    pub input_json: Option<String>,
     /// Error message if the tool call failed (None = success).
     pub error: Option<String>,
     /// Optional output.
@@ -40,6 +42,7 @@ impl OtherToolCallBlock {
         Self {
             name: name.into(),
             summary: summary.into(),
+            input_json: None,
             error: None,
             output: None,
             started_at: None,
@@ -47,6 +50,13 @@ impl OtherToolCallBlock {
             image_refs: Vec::new(),
             video_refs: Vec::new(),
         }
+    }
+
+    /// Attach pretty-printed tool args (`raw_input`) for display.
+    pub fn with_input_json(mut self, input_json: impl Into<String>) -> Self {
+        let text = input_json.into();
+        self.input_json = (!text.trim().is_empty()).then_some(text);
+        self
     }
 
     /// Set error (marks as failed).
@@ -181,6 +191,21 @@ impl OtherToolCallBlock {
             line
         }
     }
+
+    fn push_input_lines(&self, lines: &mut Vec<BlockLine>, theme: &Theme, width: usize) {
+        let Some(input) = self.input_json.as_deref() else {
+            return;
+        };
+        lines.push(Line::from("").into());
+        let styled_lines: Vec<Line<'static>> = input
+            .lines()
+            .map(|line| Line::from(Span::styled(format!("  {line}"), theme.muted())))
+            .collect();
+        let wrapped = word_wrap_lines(styled_lines, width.saturating_sub(2).max(20));
+        for wrapped_line in wrapped {
+            lines.push(BlockLine::styled(wrapped_line));
+        }
+    }
 }
 
 impl BlockContent for OtherToolCallBlock {
@@ -243,6 +268,8 @@ impl BlockContent for OtherToolCallBlock {
             return BlockOutput { lines };
         }
 
+        // F2 show_other_tool_args: args only when expanded/truncated — collapsed stays name-only.
+        let show_args = ctx.appearance.show_other_tool_args;
         match ctx.mode {
             DisplayMode::Collapsed => BlockOutput {
                 lines: vec![
@@ -253,6 +280,10 @@ impl BlockContent for OtherToolCallBlock {
             DisplayMode::Truncated | DisplayMode::Expanded => {
                 let mut lines: Vec<BlockLine> =
                     vec![self.collapsed_line(&theme, false, None).into()];
+
+                if show_args {
+                    self.push_input_lines(&mut lines, &theme, width);
+                }
 
                 if let Some(output) = &self.output {
                     // Try to render as structured Q&A (AskUserQuestion output).

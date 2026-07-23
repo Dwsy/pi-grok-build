@@ -121,9 +121,7 @@ impl AgentView {
 
     fn jump_select_outcome(&self, id: crate::scrollback::entry::EntryId) -> InputOutcome {
         match self.jump_state.as_ref().map(|s| s.purpose) {
-            Some(JumpPurpose::Review) => {
-                InputOutcome::Action(Action::ReviewOpenForTurn(id))
-            }
+            Some(JumpPurpose::Review) => InputOutcome::Action(Action::ReviewOpenForTurn(id)),
             _ => InputOutcome::Action(Action::JumpPickerSelect(id)),
         }
     }
@@ -151,12 +149,8 @@ impl AgentView {
                 let purpose = state.purpose;
                 match jump_activate(state) {
                     JumpInput::Select(id) => match purpose {
-                        JumpPurpose::Review => {
-                            InputOutcome::Action(Action::ReviewOpenForTurn(id))
-                        }
-                        JumpPurpose::Navigate => {
-                            InputOutcome::Action(Action::JumpPickerSelect(id))
-                        }
+                        JumpPurpose::Review => InputOutcome::Action(Action::ReviewOpenForTurn(id)),
+                        JumpPurpose::Navigate => InputOutcome::Action(Action::JumpPickerSelect(id)),
                     },
                     other => Self::jump_input_to_outcome(other),
                 }

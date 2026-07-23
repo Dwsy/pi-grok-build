@@ -9,9 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::home::{
-    display_home, effective_grok_home, legacy_grok_home, MIGRATE_MARKER,
-};
+use super::home::{MIGRATE_MARKER, display_home, effective_grok_home, legacy_grok_home};
 
 /// Files and directories under legacy home that are useful for grok-pi.
 ///
@@ -60,7 +58,12 @@ impl MigrateReport {
     pub fn copied_count(&self) -> usize {
         self.entries
             .iter()
-            .filter(|e| matches!(e.action, Action::Copied | Action::Overwritten | Action::WouldCopy))
+            .filter(|e| {
+                matches!(
+                    e.action,
+                    Action::Copied | Action::Overwritten | Action::WouldCopy
+                )
+            })
             .count()
     }
 
@@ -403,13 +406,8 @@ pub(super) fn run_cli(
     let report = migrate(&opts).map_err(|e| anyhow::anyhow!("{e}"))?;
     print!("{}", report.format_human());
     if !opts.dry_run {
-        println!(
-            "marker: {}",
-            display_home(&opts.to.join(MIGRATE_MARKER))
-        );
-        println!(
-            "note: Pi sessions remain under ~/.pi (not part of this migrate)."
-        );
+        println!("marker: {}", display_home(&opts.to.join(MIGRATE_MARKER)));
+        println!("note: Pi sessions remain under ~/.pi (not part of this migrate).");
         println!(
             "note: source {} was left intact (copy, not move).",
             display_home(&opts.from)
@@ -478,8 +476,11 @@ mod tests {
         })
         .unwrap();
         assert_eq!(fs::read_to_string(to.join("pager.toml")).unwrap(), "keep\n");
-        assert!(r1.entries.iter().any(|e| e.name == "pager.toml"
-            && e.action == Action::SkippedExists));
+        assert!(
+            r1.entries
+                .iter()
+                .any(|e| e.name == "pager.toml" && e.action == Action::SkippedExists)
+        );
 
         let r2 = migrate(&MigrateOptions {
             from,
@@ -491,8 +492,11 @@ mod tests {
         })
         .unwrap();
         assert_eq!(fs::read_to_string(to.join("pager.toml")).unwrap(), "from\n");
-        assert!(r2.entries.iter().any(|e| e.name == "pager.toml"
-            && e.action == Action::Overwritten));
+        assert!(
+            r2.entries
+                .iter()
+                .any(|e| e.name == "pager.toml" && e.action == Action::Overwritten)
+        );
     }
 
     #[test]

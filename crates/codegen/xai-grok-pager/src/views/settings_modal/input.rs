@@ -200,6 +200,26 @@ fn handle_picking_enum(state: &mut SettingsModalState, key: &KeyEvent) -> Settin
 /// Group sub-sheet key routing. Up/Down moves between the child toggles;
 /// Space/Enter toggles the focused child in place (the sheet stays open);
 /// Esc returns to Browse.
+fn is_side_model_slot(key: &str) -> bool {
+    matches!(
+        key,
+        "recap_model"
+            | "recap_model_2"
+            | "recap_model_3"
+            | "btw_model"
+            | "btw_model_2"
+            | "btw_model_3"
+    )
+}
+
+fn open_side_model_picker_action(key: &'static str) -> Option<Action> {
+    if is_side_model_slot(key) {
+        Some(Action::OpenSideModelPicker { slot_key: key })
+    } else {
+        None
+    }
+}
+
 fn handle_picking_group(state: &mut SettingsModalState, key: &KeyEvent) -> SettingsKeyOutcome {
     let (group_key, child_idx) = match &state.state.mode {
         SettingsMode::PickingGroup { key, child_idx } => (*key, *child_idx),
@@ -227,13 +247,15 @@ fn handle_picking_group(state: &mut SettingsModalState, key: &KeyEvent) -> Setti
             state.transition_to_picking_group(group_key, child_idx - 1);
             SettingsKeyOutcome::Changed
         }
-        // Space/Enter toggle the focused child Bool and stay in the sheet so the
-        // user can flip several tips in a row. The dispatcher refreshes the
-        // modal snapshot, so the new value paints on the next frame.
+        // Space/Enter: Bool children toggle in place; model-slot children open
+        // the native searchable picker (same surface as top-level Enter).
         KeyCode::Char(' ') | KeyCode::Enter => {
             let Some(child_key) = children.get(child_idx).copied() else {
                 return SettingsKeyOutcome::Unchanged;
             };
+            if let Some(action) = open_side_model_picker_action(child_key) {
+                return SettingsKeyOutcome::Action(action);
+            }
             let cur = match state.value_for(child_key) {
                 Some(SettingValue::Bool(b)) => b,
                 _ => return SettingsKeyOutcome::Unchanged,
@@ -689,12 +711,16 @@ fn handle_browse(state: &mut SettingsModalState, key: &KeyEvent) -> SettingsKeyO
             if matches!(state.focused_setting(), Some(("pi_config", _))) {
                 return SettingsKeyOutcome::Action(Action::OpenPiConfig);
             }
-            if matches!(state.focused_setting(), Some(("recap_model", _))) {
-                return SettingsKeyOutcome::Action(Action::OpenRecapModelPicker);
-            }
-            // Group row → open its sub-sheet of child toggles.
+            // Group row → open its sub-sheet of child slots.
             if state.try_enter_picking_group() {
                 return SettingsKeyOutcome::Changed;
+            }
+            // Recap/btw model slots: always use the native searchable /model picker
+            // (Enter and click share this path — never the settings DynamicEnum list).
+            if let Some((key, _)) = state.focused_setting()
+                && let Some(action) = open_side_model_picker_action(key)
+            {
+                return SettingsKeyOutcome::Action(action);
             }
             // For Bool, Enter behaves like Space (the keyboard
             // map gives both keys the toggle semantics).
@@ -703,6 +729,7 @@ fn handle_browse(state: &mut SettingsModalState, key: &KeyEvent) -> SettingsKeyO
             }
             // Enum row → enter PickingEnum mode. The picker's chooser
             // sub-pane takes over rendering and key routing from here.
+            // Side-model slots are handled above; other DynamicEnums stay here.
             if state.try_enter_picking_enum() {
                 return SettingsKeyOutcome::Changed;
             }
@@ -1037,6 +1064,11 @@ pub fn handle_settings_mouse(
                 if state.try_enter_picking_group() {
                     return SettingsKeyOutcome::Changed;
                 }
+                if let Some((key, _)) = state.focused_setting()
+                    && let Some(action) = open_side_model_picker_action(key)
+                {
+                    return SettingsKeyOutcome::Action(action);
+                }
                 if let Some(action) = state.toggle_focused_bool() {
                     return SettingsKeyOutcome::Action(action);
                 }
@@ -1188,6 +1220,9 @@ fn handle_group_mouse(
     let Some(child_key) = children.get(idx).copied() else {
         return SettingsKeyOutcome::Changed;
     };
+    if let Some(action) = open_side_model_picker_action(child_key) {
+        return SettingsKeyOutcome::Action(action);
+    }
     let cur = matches!(state.value_for(child_key), Some(SettingValue::Bool(true)));
     match action_for_bool(child_key, !cur) {
         Some(action) => SettingsKeyOutcome::Action(action),

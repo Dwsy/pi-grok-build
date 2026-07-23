@@ -13,8 +13,9 @@ pub struct UiConfig {
     /// default preserves Pi's own default tool set; F2 writes this as a group.
     #[serde(default, skip_serializing_if = "PiBuiltinTools::is_default")]
     pub pi_builtin_tools: PiBuiltinTools,
-    /// Use PSM's local SQLite session index for external Pi `/resume` catalogs.
-    /// Disabled by default; the adapter still falls back to Pi JSONL on failure.
+    /// Use Pi Session Manager for external Pi `/resume`: SQLite catalog,
+    /// Ctrl+F full-text search, and message preview. Requires PSM running.
+    /// Disabled by default; off → Pi JSONL list only (no PSM SQLite paths).
     #[serde(default)]
     pub psm_resume_index: bool,
     /// Track write/edit preimages and allow file-only rollback from SessionTree.
@@ -33,24 +34,61 @@ pub struct UiConfig {
     /// Default off; takes effect for new grok-pi sessions only.
     #[serde(default)]
     pub pi_goal: bool,
+    /// Enable Grok-style `/loop` scheduled recurring prompts for grok-pi.
+    /// Default off; takes effect for new grok-pi sessions only.
+    #[serde(default)]
+    pub pi_loop: bool,
+    /// Enable native Q&A (`ask_user_question` → Grok QuestionView) in grok-pi.
+    /// Default off; takes effect for new grok-pi sessions only.
+    #[serde(default)]
+    pub pi_ask_user_question: bool,
+    /// Enable native `/btw` side questions for grok-pi (Pi extension + x.ai/btw).
+    /// Default off; takes effect for new grok-pi sessions only.
+    #[serde(default)]
+    pub pi_btw: bool,
     /// Show pi-cache-graph views (1/2/3/s/e) inside the Context modal.
     /// Default on for grok-pi; F2 can disable without restart.
     #[serde(default = "default_true")]
     pub pi_cache_graph: bool,
+    /// Show `raw_input` args on Other/generic tool cards when expanded.
+    /// Default off; F2 can enable without restart. Not fabric-only.
+    #[serde(default)]
+    pub show_other_tool_args: bool,
     /// Default file-list layout in `/review-*` modal: tree (cwd-relative,
     /// compact Java packages) vs flat basenames. Default off; `t` in modal
     /// toggles and persists via F2 `review_file_tree`.
     #[serde(default)]
     pub review_file_tree: bool,
+    /// Include session `read` tool ops in `/review-*` file list. Default off;
+    /// `r` in modal toggles and persists via F2 `review_include_reads`.
+    #[serde(default)]
+    pub review_include_reads: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     /// Model ID to use for the secondary agent when forking.
     /// Defaults to the main default model (from default_models.json).
     pub fork_secondary_model: String,
     /// Optional model for display-only session recap (`/recap` + auto away recap).
-    /// Empty string = use the active session model. Written by F2 settings.
+    /// Empty string = fall through to slot 2/3 or the active session model.
+    /// Written by F2 settings.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub recap_model: String,
+    /// Recap fallback model slot 2 (tried after `recap_model`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub recap_model_2: String,
+    /// Recap fallback model slot 3 (tried after `recap_model_2`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub recap_model_3: String,
+    /// Optional model for native `/btw` side questions (slot 1).
+    /// Empty = fall through to slot 2/3 or the active session model.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub btw_model: String,
+    /// `/btw` fallback model slot 2.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub btw_model_2: String,
+    /// `/btw` fallback model slot 3.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub btw_model_3: String,
     /// Auto session-recap when returning from away. `None` = on (default).
     /// Manual `/recap` still follows agent capability (`sessionRecap`); this only
     /// gates the automatic return-from-away path. Written by F2 settings.
@@ -342,11 +380,21 @@ impl Default for UiConfig {
             pi_tree_skip_summary_prompt: false,
             pi_workflows: false,
             pi_goal: false,
+            pi_loop: false,
+            pi_ask_user_question: false,
+            pi_btw: false,
             pi_cache_graph: true,
+            show_other_tool_args: false,
             review_file_tree: false,
+            review_include_reads: false,
             theme: None,
             fork_secondary_model: xai_grok_models::default_model().to_string(),
             recap_model: String::new(),
+            recap_model_2: String::new(),
+            recap_model_3: String::new(),
+            btw_model: String::new(),
+            btw_model_2: String::new(),
+            btw_model_3: String::new(),
             session_recap: None,
             recap_mermaid: None,
             progress_bar: None,

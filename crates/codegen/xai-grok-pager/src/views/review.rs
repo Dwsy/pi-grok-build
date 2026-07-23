@@ -22,21 +22,35 @@ use crate::views::block_viewer::BlockViewerPane;
 /// Which tool ops appear in the review list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReviewKindFilter {
+    /// Edit + write only (default).
     #[default]
     Changes,
+    /// Edit + write + read (`r` toggle / F2 `review_include_reads`).
+    All,
     #[allow(dead_code)]
     Reads,
     #[allow(dead_code)]
     Shell,
-    #[allow(dead_code)]
-    All,
+}
+
+impl ReviewKindFilter {
+    pub fn includes_reads(self) -> bool {
+        matches!(self, Self::All | Self::Reads)
+    }
+
+    pub fn with_reads(self, include: bool) -> Self {
+        if include {
+            Self::All
+        } else {
+            Self::Changes
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewFileKind {
     Edit,
     Write,
-    #[allow(dead_code)]
     Read,
     #[allow(dead_code)]
     Shell,
@@ -88,6 +102,8 @@ pub struct ReviewState {
     pub selected: usize,
     pub focus: ReviewFocus,
     pub filter: ReviewKindFilter,
+    /// Entry index range used for extract (None = whole session).
+    pub entry_range: Option<std::ops::Range<usize>>,
     /// File-list filter query (`/` when list focused).
     pub list_query: String,
     /// True while typing into the file-list filter bar.
@@ -126,6 +142,17 @@ impl ReviewState {
         tree_mode: bool,
         cwd: impl Into<String>,
     ) -> Self {
+        Self::with_options_range(title, files, filter, tree_mode, cwd, None)
+    }
+
+    pub fn with_options_range(
+        title: impl Into<String>,
+        files: Vec<ReviewFileItem>,
+        filter: ReviewKindFilter,
+        tree_mode: bool,
+        cwd: impl Into<String>,
+        entry_range: Option<std::ops::Range<usize>>,
+    ) -> Self {
         let filtered: Vec<usize> = (0..files.len()).collect();
         let mut state = Self {
             title: title.into(),
@@ -134,6 +161,7 @@ impl ReviewState {
             selected: 0,
             focus: ReviewFocus::List,
             filter,
+            entry_range,
             list_query: String::new(),
             list_filter_active: false,
             tree_mode,
@@ -148,6 +176,28 @@ impl ReviewState {
         };
         state.rebuild_tree();
         state
+    }
+
+    /// Replace file set after filter change (preserve path cursor when possible).
+    pub fn replace_files(&mut self, files: Vec<ReviewFileItem>, include_reads: bool) {
+        let keep = self.current_file().map(|f| f.path.clone());
+        self.files = files;
+        self.filter = self.filter.with_reads(include_reads);
+        self.list_query.clear();
+        self.list_filter_active = false;
+        self.filtered = (0..self.files.len()).collect();
+        self.rebuild_tree();
+        if let Some(path) = keep {
+            self.select_path(&path);
+        } else {
+            self.selected = 0;
+        }
+        self.viewer = None;
+        // Title count is best-effort; leave as-is if empty title pattern unknown.
+        if let Some(prefix) = self.title.split('·').next() {
+            let n = self.files.len();
+            self.title = format!("{}· {} file(s)", prefix.trim_end(), n);
+        }
     }
 
     pub fn set_tree_mode(&mut self, enabled: bool) {
@@ -191,7 +241,9 @@ impl ReviewState {
     pub fn current_file(&self) -> Option<&ReviewFileItem> {
         if self.tree_mode {
             let row = self.tree_rows.get(self.selected)?;
-            let idx = row.file_idx.or_else(|| self.first_file_under_tree(self.selected))?;
+            let idx = row
+                .file_idx
+                .or_else(|| self.first_file_under_tree(self.selected))?;
             self.files.get(idx)
         } else {
             self.filtered
@@ -201,9 +253,7 @@ impl ReviewState {
     }
 
     fn first_file_under_tree(&self, start: usize) -> Option<usize> {
-        self.tree_rows[start..]
-            .iter()
-            .find_map(|r| r.file_idx)
+        self.tree_rows[start..].iter().find_map(|r| r.file_idx)
     }
 
     fn select_path(&mut self, path: &str) {
@@ -215,9 +265,11 @@ impl ReviewState {
             }) {
                 self.selected = i;
             }
-        } else if let Some(i) = self.filtered.iter().position(|&fi| {
-            self.files.get(fi).is_some_and(|f| f.path == path)
-        }) {
+        } else if let Some(i) = self
+            .filtered
+            .iter()
+            .position(|&fi| self.files.get(fi).is_some_and(|f| f.path == path))
+        {
             self.selected = i;
         }
     }
@@ -270,6 +322,27 @@ impl ReviewState {
         }
     }
 
+    /// Keep `selected` in the last-drawn list viewport; no-op when all rows fit.
+    pub fn ensure_list_visible(&mut self, viewport: usize) {
+        let len = self.nav_len();
+        if len == 0 {
+            self.list_view_start = 0;
+            return;
+        }
+        let viewport = viewport.max(1);
+        if len <= viewport {
+            self.list_view_start = 0;
+            return;
+        }
+        let max_start = len - viewport;
+        if self.selected < self.list_view_start {
+            self.list_view_start = self.selected;
+        } else if self.selected >= self.list_view_start + viewport {
+            self.list_view_start = self.selected + 1 - viewport;
+        }
+        self.list_view_start = self.list_view_start.min(max_start);
+    }
+
     /// Build / refresh the right-pane BlockViewerPane for the current file.
     pub fn ensure_viewer(&mut self, scrollback: &ScrollbackState) {
         let Some(file) = self.current_file().cloned() else {
@@ -284,12 +357,12 @@ impl ReviewState {
             return;
         }
         let entry = scrollback.get_by_id(file.entry_id);
-        self.viewer = match entry {
-            // Prefer dual-gutter edit viewer (search/filter/wrap/copy + line nos).
-            Some(e) => BlockViewerPane::for_edit_review(file.entry_id, e).or_else(|| {
-                Some(plain_review_fallback(&file.path, &file.plain_fallback))
-            }),
-            None => Some(plain_review_fallback(&file.path, &file.plain_fallback)),
+        self.viewer = match (file.kind, entry) {
+            (ReviewFileKind::Read, Some(e)) => BlockViewerPane::for_read(file.entry_id, e)
+                .or_else(|| Some(plain_review_fallback(&file.path, &file.plain_fallback))),
+            (_, Some(e)) => BlockViewerPane::for_edit_review(file.entry_id, e)
+                .or_else(|| Some(plain_review_fallback(&file.path, &file.plain_fallback))),
+            (_, None) => Some(plain_review_fallback(&file.path, &file.plain_fallback)),
         };
     }
 }
@@ -318,6 +391,10 @@ pub enum ReviewInput {
     Changed,
     /// Tree/flat toggled — caller persists `SetReviewFileTree(tree_mode)`.
     ToggleTree,
+    /// Include-reads toggled — caller persists `SetReviewIncludeReads`.
+    ToggleIncludeReads,
+    /// Ctrl+click (or path hit) — open current file in OS default app.
+    OpenPath,
     Consumed,
 }
 
@@ -368,6 +445,10 @@ pub fn handle_review_list_key(state: &mut ReviewState, key: &KeyEvent) -> Review
         }
         // t toggles tree/flat; caller persists via SetReviewFileTree.
         KeyCode::Char('t') if key.modifiers == KeyModifiers::NONE => ReviewInput::ToggleTree,
+        // r toggles include-reads; caller persists via SetReviewIncludeReads.
+        KeyCode::Char('r') if key.modifiers == KeyModifiers::NONE => {
+            ReviewInput::ToggleIncludeReads
+        },
         KeyCode::Up | KeyCode::Char('k') => {
             state.move_sel(-1);
             ReviewInput::Changed
@@ -406,7 +487,10 @@ pub fn handle_review_list_key(state: &mut ReviewState, key: &KeyEvent) -> Review
 }
 
 /// Keys handled at the review shell when preview is focused (before routing to viewer).
-pub fn handle_review_preview_shell_key(state: &mut ReviewState, key: &KeyEvent) -> Option<ReviewInput> {
+pub fn handle_review_preview_shell_key(
+    state: &mut ReviewState,
+    key: &KeyEvent,
+) -> Option<ReviewInput> {
     if key.kind == crossterm::event::KeyEventKind::Release {
         return Some(ReviewInput::Consumed);
     }
@@ -435,8 +519,9 @@ pub fn handle_review_preview_shell_key(state: &mut ReviewState, key: &KeyEvent) 
             state.move_sel(-1);
             Some(ReviewInput::Changed)
         }
-        KeyCode::Char('t') if key.modifiers == KeyModifiers::NONE => {
-            Some(ReviewInput::ToggleTree)
+        KeyCode::Char('t') if key.modifiers == KeyModifiers::NONE => Some(ReviewInput::ToggleTree),
+        KeyCode::Char('r') if key.modifiers == KeyModifiers::NONE => {
+            Some(ReviewInput::ToggleIncludeReads)
         }
         KeyCode::Tab => {
             state.focus = ReviewFocus::List;
@@ -467,7 +552,15 @@ pub fn extract_review_files(
     range: Option<std::ops::Range<usize>>,
     filter: ReviewKindFilter,
 ) -> Vec<ReviewFileItem> {
-    if matches!(filter, ReviewKindFilter::Reads | ReviewKindFilter::Shell) {
+    if matches!(filter, ReviewKindFilter::Shell) {
+        return Vec::new();
+    }
+    let want_changes = matches!(
+        filter,
+        ReviewKindFilter::Changes | ReviewKindFilter::All
+    );
+    let want_reads = filter.includes_reads();
+    if !want_changes && !want_reads {
         return Vec::new();
     }
 
@@ -483,59 +576,118 @@ pub fn extract_review_files(
         if idx < start || idx >= end {
             continue;
         }
-        let RenderBlock::ToolCall(ToolCallBlock::Edit(edit)) = &entry.block else {
-            continue;
-        };
-
-        let is_write = edit.prefix.starts_with("Creating");
-        let kind = if is_write {
-            ReviewFileKind::Write
-        } else {
-            ReviewFileKind::Edit
-        };
-        let path = edit.path.clone();
-        let (additions, deletions) = count_hunk_changes(&edit.hunks);
-        let plain_fallback = if edit.hunks.is_empty() {
-            if is_write {
-                format!("(new file) {path}\n")
-            } else {
-                format!("(no diff captured) {path}\n")
-            }
-        } else {
-            edit.copy_text()
-        };
-
-        if let Some(&i) = index_of.get(&path) {
-            let item = &mut by_path[i].1;
-            item.op_count += 1;
-            item.additions += additions;
-            item.deletions += deletions;
-            if edit.error.is_some() {
-                item.is_error = true;
-            }
-            // Prefer latest op as the openable entry.
-            item.entry_id = entry_id;
-            item.kind = kind;
-            item.plain_fallback = plain_fallback;
-        } else {
-            index_of.insert(path.clone(), by_path.len());
-            by_path.push((
-                path.clone(),
-                ReviewFileItem {
+        match &entry.block {
+            RenderBlock::ToolCall(ToolCallBlock::Edit(edit)) if want_changes => {
+                let is_write = edit.prefix.starts_with("Creating");
+                let kind = if is_write {
+                    ReviewFileKind::Write
+                } else {
+                    ReviewFileKind::Edit
+                };
+                let path = edit.path.clone();
+                let (additions, deletions) = count_hunk_changes(&edit.hunks);
+                let plain_fallback = if edit.hunks.is_empty() {
+                    if is_write {
+                        format!("(new file) {path}\n")
+                    } else {
+                        format!("(no diff captured) {path}\n")
+                    }
+                } else {
+                    edit.copy_text()
+                };
+                upsert_review_item(
+                    &mut by_path,
+                    &mut index_of,
                     path,
                     kind,
                     entry_id,
                     additions,
                     deletions,
-                    is_error: edit.error.is_some(),
-                    op_count: 1,
+                    edit.error.is_some(),
                     plain_fallback,
-                },
-            ));
+                    /*prefer_kind_over_read*/ true,
+                );
+            }
+            RenderBlock::ToolCall(ToolCallBlock::Read(read)) if want_reads => {
+                let path = read.path.clone();
+                let plain_fallback = read
+                    .content
+                    .clone()
+                    .unwrap_or_else(|| {
+                        read.error
+                            .clone()
+                            .unwrap_or_else(|| format!("(empty read) {path}\n"))
+                    });
+                upsert_review_item(
+                    &mut by_path,
+                    &mut index_of,
+                    path,
+                    ReviewFileKind::Read,
+                    entry_id,
+                    0,
+                    0,
+                    read.error.is_some(),
+                    plain_fallback,
+                    /*prefer_kind_over_read*/ false,
+                );
+            }
+            _ => {}
         }
     }
 
     by_path.into_iter().map(|(_, item)| item).collect()
+}
+
+fn upsert_review_item(
+    by_path: &mut Vec<(String, ReviewFileItem)>,
+    index_of: &mut std::collections::HashMap<String, usize>,
+    path: String,
+    kind: ReviewFileKind,
+    entry_id: EntryId,
+    additions: usize,
+    deletions: usize,
+    is_error: bool,
+    plain_fallback: String,
+    prefer_kind_over_read: bool,
+) {
+    if let Some(&i) = index_of.get(&path) {
+        let item = &mut by_path[i].1;
+        item.op_count += 1;
+        item.additions += additions;
+        item.deletions += deletions;
+        if is_error {
+            item.is_error = true;
+        }
+        // Prefer latest change over pure read when both exist for same path.
+        let replace = match (item.kind, kind) {
+            (ReviewFileKind::Read, _) if prefer_kind_over_read => true,
+            (_, ReviewFileKind::Read) if !prefer_kind_over_read && item.kind != ReviewFileKind::Read => {
+                // Keep existing edit/write as primary viewer; still count op.
+                false
+            }
+            _ => true,
+        };
+        if replace {
+            item.entry_id = entry_id;
+            item.kind = kind;
+            item.plain_fallback = plain_fallback;
+        }
+    } else {
+        index_of.insert(path.clone(), by_path.len());
+        by_path.push((
+            path.clone(),
+            ReviewFileItem {
+                path,
+                kind,
+                entry_id,
+                additions,
+                deletions,
+                is_error,
+                op_count: 1,
+                plain_fallback,
+            },
+        ));
+    }
 }
 
 pub fn turn_range_for_prompt(
@@ -575,13 +727,17 @@ pub fn render_review_modal(
         }
         ReviewFocus::List => {
             let layout = if state.tree_mode { "tree" } else { "flat" };
+            let reads = if state.filter.includes_reads() {
+                "reads:on"
+            } else {
+                "reads:off"
+            };
             format!(
-                " j/k  /=filter  t={layout}  Enter→preview  n/p  Esc "
+                " j/k  /=filter  t={layout}  r={reads}  Enter→preview  ^click=open  n/p  Esc "
             )
         }
         ReviewFocus::Preview => {
-            " j/k scroll  /=search  f=filter  w=wrap  y=copy  n/p file  ← list  Esc close "
-                .into()
+            " j/k scroll  /=search  f=filter  w=wrap  y=copy  n/p file  ← list  Esc close ".into()
         }
     };
 
@@ -691,10 +847,10 @@ fn render_file_list(buf: &mut Buffer, area: Rect, state: &mut ReviewState, theme
     }
 
     let visible = rows_area.height as usize;
-    let start = state
-        .selected
-        .saturating_sub(visible.saturating_sub(1) / 2);
-    state.list_view_start = start;
+    // Sticky viewport: only scroll when selection leaves the window.
+    // When the whole tree fits, force start=0 so the top is never clipped.
+    state.ensure_list_visible(visible);
+    let start = state.list_view_start;
     let end = (start + visible).min(nav_len);
 
     for (row, nav_i) in (start..end).enumerate() {
@@ -712,11 +868,29 @@ fn render_file_list(buf: &mut Buffer, area: Rect, state: &mut ReviewState, theme
         buf.set_style(row_area, Style::default().bg(row_bg));
 
         if state.tree_mode {
-            render_tree_row(buf, rows_area.x, y, rows_area.width, &state.tree_rows[nav_i], selected, row_bg, theme);
+            render_tree_row(
+                buf,
+                rows_area.x,
+                y,
+                rows_area.width,
+                &state.tree_rows[nav_i],
+                selected,
+                row_bg,
+                theme,
+            );
         } else {
             let file_i = state.filtered[nav_i];
             let file = &state.files[file_i];
-            render_flat_row(buf, rows_area.x, y, rows_area.width, file, selected, row_bg, theme);
+            render_flat_row(
+                buf,
+                rows_area.x,
+                y,
+                rows_area.width,
+                file,
+                selected,
+                row_bg,
+                theme,
+            );
         }
     }
 }
@@ -732,37 +906,45 @@ fn render_flat_row(
     theme: &Theme,
 ) {
     let kind_tag = kind_tag(file.kind);
-    let stats = format!(" +{} -{}", file.additions, file.deletions);
+    let icon = file_type_icon(&file.path, false);
+    let stats_w = diffstat_display_width(file.additions, file.deletions);
+    let prefix_w = 2 + icon.map(|_| 2).unwrap_or(0); // "~ " + optional "󰈙 "
     let name = truncate_str(
         &basename(&file.path),
-        width.saturating_sub(stats.len() as u16 + 4) as usize,
+        width.saturating_sub(stats_w as u16 + prefix_w) as usize,
     );
     let kind_fg = kind_fg(file.kind, theme);
-    let mut spans = vec![
-        Span::styled(
-            format!("{kind_tag} "),
-            Style::default().fg(kind_fg).bg(row_bg),
-        ),
-        Span::styled(
-            name,
-            Style::default()
-                .fg(if file.is_error {
-                    theme.accent_error
-                } else {
-                    theme.text_primary
-                })
-                .bg(row_bg)
-                .add_modifier(if selected {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        ),
-    ];
-    if width > stats.len() as u16 + 6 {
+    let mut spans = vec![Span::styled(
+        format!("{kind_tag} "),
+        Style::default().fg(kind_fg).bg(row_bg),
+    )];
+    if let Some(ic) = icon {
         spans.push(Span::styled(
-            stats,
-            Style::default().fg(theme.gray).bg(row_bg),
+            format!("{ic} "),
+            Style::default().fg(theme.accent_tool).bg(row_bg),
+        ));
+    }
+    spans.push(Span::styled(
+        name,
+        Style::default()
+            .fg(if file.is_error {
+                theme.accent_error
+            } else {
+                theme.text_primary
+            })
+            .bg(row_bg)
+            .add_modifier(if selected {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
+    ));
+    if width > stats_w as u16 + 6 {
+        spans.extend(diffstat_spans(
+            file.additions,
+            file.deletions,
+            row_bg,
+            theme,
         ));
     }
     buf.set_line(x, y, &Line::from(spans), width);
@@ -778,45 +960,105 @@ fn render_tree_row(
     row_bg: ratatui::style::Color,
     theme: &Theme,
 ) {
-    let indent = "  ".repeat(row.depth as usize);
-    let glyph = if row.is_dir { "▸ " } else { "  " };
+    // Tree gutters: "│ " rails + branch marker; less double-space clutter.
+    let mut gutter = String::new();
+    for d in 0..row.depth {
+        if d + 1 == row.depth {
+            gutter.push_str(if row.is_dir { "├─" } else { "└─" });
+        } else {
+            gutter.push_str("│ ");
+        }
+    }
+    let glyph = if row.is_dir { "▾ " } else { " " };
     let tag = row.kind.map(kind_tag).unwrap_or(" ");
-    let stats = if row.additions + row.deletions > 0 {
-        format!(" +{} -{}", row.additions, row.deletions)
+    let show_stats = row.additions + row.deletions > 0;
+    let stats_w = if show_stats {
+        diffstat_display_width(row.additions, row.deletions)
     } else {
-        String::new()
+        0
     };
-    let prefix = format!("{indent}{glyph}{tag} ");
-    let name_w = width.saturating_sub(prefix.len() as u16 + stats.len() as u16);
+    // Tree leaf labels are basenames; dirs use folder glyph.
+    let icon = file_type_icon(&row.label, row.is_dir);
+    let kind_part = format!("{tag} ");
+    let icon_part = icon.map(|ic| format!("{ic} ")).unwrap_or_default();
+    let prefix = format!("{gutter}{glyph}");
+    let name_w = width.saturating_sub(
+        prefix.len() as u16
+            + kind_part.len() as u16
+            + icon_part.len() as u16
+            + stats_w as u16,
+    );
     let name = truncate_str(&row.label, name_w as usize);
-    let kind_fg = row.kind.map(|k| kind_fg(k, theme)).unwrap_or(theme.gray_bright);
+    let kind_fg = row
+        .kind
+        .map(|k| kind_fg(k, theme))
+        .unwrap_or(theme.gray_bright);
     let mut spans = vec![
-        Span::styled(prefix, Style::default().fg(kind_fg).bg(row_bg)),
-        Span::styled(
-            name,
-            Style::default()
-                .fg(if row.is_error {
-                    theme.accent_error
-                } else if row.is_dir {
-                    theme.gray_bright
-                } else {
-                    theme.text_primary
-                })
-                .bg(row_bg)
-                .add_modifier(if selected {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        ),
+        Span::styled(prefix, Style::default().fg(theme.gray_dim).bg(row_bg)),
+        Span::styled(kind_part, Style::default().fg(kind_fg).bg(row_bg)),
     ];
-    if !stats.is_empty() && width > stats.len() as u16 + 6 {
+    if !icon_part.is_empty() {
         spans.push(Span::styled(
-            stats,
-            Style::default().fg(theme.gray).bg(row_bg),
+            icon_part,
+            Style::default()
+                .fg(if row.is_dir {
+                    theme.warning
+                } else {
+                    theme.accent_tool
+                })
+                .bg(row_bg),
+        ));
+    }
+    spans.push(Span::styled(
+        name,
+        Style::default()
+            .fg(if row.is_error {
+                theme.accent_error
+            } else if row.is_dir {
+                theme.gray_bright
+            } else {
+                theme.text_primary
+            })
+            .bg(row_bg)
+            .add_modifier(if selected {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
+    ));
+    if show_stats && width > stats_w as u16 + 6 {
+        spans.extend(diffstat_spans(
+            row.additions,
+            row.deletions,
+            row_bg,
+            theme,
         ));
     }
     buf.set_line(x, y, &Line::from(spans), width);
+}
+
+/// ` +N -M` display width (same glyph budget as the colored spans).
+fn diffstat_display_width(additions: usize, deletions: usize) -> usize {
+    format!(" +{additions} -{deletions}").len()
+}
+
+/// Colored ` +N` / ` -M` spans — matches Edit collapsed header (`diff_insert_fg` / `diff_delete_fg`).
+fn diffstat_spans(
+    additions: usize,
+    deletions: usize,
+    row_bg: ratatui::style::Color,
+    theme: &Theme,
+) -> [Span<'static>; 2] {
+    [
+        Span::styled(
+            format!(" +{additions}"),
+            Style::default().fg(theme.diff_insert_fg).bg(row_bg),
+        ),
+        Span::styled(
+            format!(" -{deletions}"),
+            Style::default().fg(theme.diff_delete_fg).bg(row_bg),
+        ),
+    ]
 }
 
 fn kind_tag(kind: ReviewFileKind) -> &'static str {
@@ -832,7 +1074,78 @@ fn kind_fg(kind: ReviewFileKind, theme: &Theme) -> ratatui::style::Color {
     match kind {
         ReviewFileKind::Write => theme.accent_success,
         ReviewFileKind::Edit => theme.warning,
-        _ => theme.gray,
+        ReviewFileKind::Read => theme.accent_tool,
+        ReviewFileKind::Shell => theme.gray,
+    }
+}
+
+/// Nerd Font file/dir glyph when ambient probe says PUA is safe; else `None`.
+/// Uses [`crate::git_info::nerd_fonts_available`] (env `GROK_NERD_FONTS` override).
+fn file_type_icon(path: &str, is_dir: bool) -> Option<&'static str> {
+    if !crate::git_info::nerd_fonts_available() {
+        return None;
+    }
+    Some(nerd_file_icon(path, is_dir))
+}
+
+/// Minimal nvim-web-devicons-style map (common review paths only).
+fn nerd_file_icon(path: &str, is_dir: bool) -> &'static str {
+    if is_dir {
+        return "\u{f07b}"; // nf-fa-folder
+    }
+    let name = path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    match name.as_str() {
+        // Match nvim-web-devicons: nf-seti-rust U+E68B (), not nf-dev-rust U+E7A8 (often a blob).
+        "cargo.toml" | "cargo.lock" => return "\u{e68b}",
+        "license" | "license.md" | "license.txt" => return "\u{f02d}",
+        ".gitignore" | ".gitattributes" | ".gitmodules" => return "\u{f1d3}",
+        "dockerfile" | "docker-compose.yml" | "docker-compose.yaml" => return "\u{f308}",
+        "makefile" | "justfile" => return "\u{f489}",
+        "package.json" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock" => {
+            return "\u{e718}"
+        }
+        "tsconfig.json" | "jsconfig.json" => return "\u{e628}",
+        "readme.md" | "readme" => return "\u{f48a}",
+        "security.md" => return "\u{f21b}",
+        _ => {}
+    }
+    let ext = name.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    match ext {
+        "rs" => "\u{e68b}", // nf-seti-rust 
+        "ts" | "tsx" | "mts" | "cts" => "\u{e628}",
+        "js" | "jsx" | "mjs" | "cjs" => "\u{e781}",
+        "py" => "\u{e73c}",
+        "go" => "\u{e724}",
+        "java" => "\u{e738}",
+        "kt" | "kts" => "\u{e634}",
+        "c" | "h" => "\u{e61e}",
+        "cpp" | "cc" | "cxx" | "hpp" => "\u{e61d}",
+        "cs" => "\u{f81a}",
+        "rb" => "\u{e739}",
+        "php" => "\u{e73d}",
+        "swift" => "\u{e755}",
+        "md" | "mdx" | "markdown" => "\u{f48a}",
+        "json" | "jsonc" => "\u{e60b}",
+        "toml" | "yaml" | "yml" | "ini" | "cfg" | "conf" => "\u{e615}",
+        "xml" | "html" | "htm" => "\u{e736}",
+        "css" | "scss" | "sass" | "less" => "\u{e749}",
+        "vue" => "\u{e6a0}",
+        "svelte" => "\u{e697}",
+        "sh" | "bash" | "zsh" | "fish" | "ps1" => "\u{f489}",
+        "sql" => "\u{f1c0}",
+        "svg" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "ico" => "\u{f1c5}",
+        "pdf" => "\u{f1c1}",
+        "txt" | "log" => "\u{f15c}",
+        "lock" => "\u{f023}",
+        "zip" | "tar" | "gz" | "tgz" | "7z" | "rar" => "\u{f1c6}",
+        "wasm" => "\u{e6a1}",
+        "proto" => "\u{e60a}",
+        "graphql" | "gql" => "\u{e662}",
+        _ => "\u{f15b}", // default file
     }
 }
 
@@ -940,11 +1253,23 @@ pub fn handle_review_mouse(state: &mut ReviewState, mouse: &MouseEvent) -> Revie
             }
         }
         MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+            let ctrl = mouse.modifiers.contains(KeyModifiers::CONTROL);
             if let Some(idx) = list_row_at(state, mouse.column, mouse.row) {
                 state.select_filtered(idx);
+                if ctrl {
+                    // Ctrl+click file/dir row → open leaf path in OS default app.
+                    return ReviewInput::OpenPath;
+                }
                 // Click selects and jumps to preview (edit-viewer TUI).
                 state.focus = ReviewFocus::Preview;
                 return ReviewInput::Changed;
+            }
+            // Ctrl+click preview title path (first row of preview pane).
+            if ctrl
+                && point_in(state.preview_area, mouse.column, mouse.row)
+                && mouse.row == state.preview_area.y
+            {
+                return ReviewInput::OpenPath;
             }
             if point_in(state.preview_area, mouse.column, mouse.row) {
                 state.focus = ReviewFocus::Preview;
@@ -969,17 +1294,11 @@ pub fn handle_review_mouse(state: &mut ReviewState, mouse: &MouseEvent) -> Revie
 }
 
 fn point_in(area: Rect, col: u16, row: u16) -> bool {
-    col >= area.x
-        && col < area.x + area.width
-        && row >= area.y
-        && row < area.y + area.height
+    col >= area.x && col < area.x + area.width && row >= area.y && row < area.y + area.height
 }
 
 fn basename(path: &str) -> String {
-    path.rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(path)
-        .to_string()
+    path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1014,6 +1333,16 @@ pub fn strip_cwd_prefix(path: &str, cwd: &str) -> String {
 }
 
 fn is_java_package_seg(s: &str) -> bool {
+    // Common Maven/Gradle path folders must stay slash-joined, not dotted.
+    const NOT_PKG: &[&str] = &[
+        "src", "main", "test", "java", "kotlin", "scala", "groovy",
+        "resources", "generated", "classes", "target", "build",
+        "out", "bin", "lib", "libs", "webapp", "static", "public",
+        "assets", "dist", "node_modules", "vendor", "pkg",
+    ];
+    if NOT_PKG.iter().any(|p| *p == s) {
+        return false;
+    }
     let mut chars = s.chars();
     match chars.next() {
         Some(c) if c.is_ascii_lowercase() => {}
@@ -1161,9 +1490,9 @@ fn aggregate_stats(node: &TrieNode) -> (usize, usize, bool) {
 mod tests {
     use super::*;
     use crate::diff::DiffLine;
-    use crate::scrollback::blocks::tool::edit::EditToolCallBlock;
-    use crate::scrollback::blocks::tool::execute::ExecuteToolCallBlock;
-    use crate::scrollback::blocks::tool::read::ReadToolCallBlock;
+    use crate::scrollback::blocks::tool::EditToolCallBlock;
+    use crate::scrollback::blocks::tool::ExecuteToolCallBlock;
+    use crate::scrollback::blocks::tool::ReadToolCallBlock;
     use crate::scrollback::entry::ScrollbackEntry;
 
     fn edit_entry(path: &str, write: bool) -> ScrollbackEntry {
@@ -1212,6 +1541,34 @@ mod tests {
     }
 
     #[test]
+    fn extract_all_includes_reads() {
+        let mut sb = ScrollbackState::new();
+        sb.push(edit_entry("a.rs", false));
+        sb.push(ScrollbackEntry::new(RenderBlock::ToolCall(
+            ToolCallBlock::Read(ReadToolCallBlock::new("c.rs").with_content("hi\n".into(), 1)),
+        )));
+        let files = extract_review_files(&sb, None, ReviewKindFilter::All);
+        let paths: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["a.rs", "c.rs"]);
+        assert!(matches!(files[1].kind, ReviewFileKind::Read));
+        assert_eq!(files[1].additions, 0);
+    }
+
+    #[test]
+    fn extract_all_edit_wins_over_same_path_read() {
+        let mut sb = ScrollbackState::new();
+        sb.push(ScrollbackEntry::new(RenderBlock::ToolCall(
+            ToolCallBlock::Read(ReadToolCallBlock::new("a.rs")),
+        )));
+        let edit_id = sb.push(edit_entry("a.rs", false));
+        let files = extract_review_files(&sb, None, ReviewKindFilter::All);
+        assert_eq!(files.len(), 1);
+        assert!(matches!(files[0].kind, ReviewFileKind::Edit));
+        assert_eq!(files[0].entry_id, edit_id);
+        assert_eq!(files[0].op_count, 2);
+    }
+
+    #[test]
     fn extract_merges_same_path_keeps_latest_entry() {
         let mut sb = ScrollbackState::new();
         let id1 = sb.push(edit_entry("a.rs", false));
@@ -1243,11 +1600,7 @@ mod tests {
             "src/main/java/com/foo/Bar.java"
         );
         assert_eq!(
-            compact_join(&[
-                "com".into(),
-                "example".into(),
-                "app".into(),
-            ]),
+            compact_join(&["com".into(), "example".into(), "app".into(),]),
             "com.example.app"
         );
         assert_eq!(
@@ -1295,7 +1648,9 @@ mod tests {
         let labels: Vec<_> = rows.iter().map(|r| r.label.as_str()).collect();
         // Single-child dir chain src→main→java compacted; java packages dotted.
         assert!(
-            labels.iter().any(|l| l.contains("com.example.app") || *l == "com.example.app"),
+            labels
+                .iter()
+                .any(|l| l.contains("com.example.app") || *l == "com.example.app"),
             "expected compacted java package, got {labels:?}"
         );
         assert!(labels.iter().any(|l| *l == "Service.java"));
@@ -1321,5 +1676,80 @@ mod tests {
         assert_eq!(list_row_at(&state, 2, 8), Some(3));
         // Click on title row (outside body) → miss
         assert_eq!(list_row_at(&state, 2, 5), None);
+    }
+
+    #[test]
+    fn nerd_file_icon_maps_common_extensions() {
+        assert_eq!(nerd_file_icon("foo.rs", false), "\u{e68b}");
+        assert_eq!(nerd_file_icon("App.tsx", false), "\u{e628}");
+        assert_eq!(nerd_file_icon("Cargo.toml", false), "\u{e68b}");
+        assert_eq!(nerd_file_icon("README.md", false), "\u{f48a}");
+        assert_eq!(nerd_file_icon("src", true), "\u{f07b}");
+        // Unknown still returns a default file glyph (caller gates on probe).
+        assert_eq!(nerd_file_icon("weird.xyz", false), "\u{f15b}");
+    }
+
+    #[test]
+    fn ensure_list_visible_no_scroll_when_all_rows_fit() {
+        let mut sb = ScrollbackState::new();
+        for name in ["a.rs", "b.rs", "c.rs"] {
+            sb.push(edit_entry(name, false));
+        }
+        let files = extract_review_files(&sb, None, ReviewKindFilter::Changes);
+        let mut state = ReviewState::new("t", files, ReviewKindFilter::Changes);
+        state.selected = 2;
+        state.list_view_start = 1; // would have been force-centered
+        state.ensure_list_visible(10); // viewport bigger than 3 rows
+        assert_eq!(state.list_view_start, 0);
+    }
+
+    #[test]
+    fn ensure_list_visible_scrolls_only_when_out_of_window() {
+        let mut sb = ScrollbackState::new();
+        for name in ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs", "f.rs"] {
+            sb.push(edit_entry(name, false));
+        }
+        let files = extract_review_files(&sb, None, ReviewKindFilter::Changes);
+        let mut state = ReviewState::new("t", files, ReviewKindFilter::Changes);
+        state.list_view_start = 0;
+        state.selected = 1;
+        state.ensure_list_visible(3);
+        assert_eq!(state.list_view_start, 0, "still in window");
+        state.selected = 5;
+        state.ensure_list_visible(3);
+        assert_eq!(state.list_view_start, 3, "scroll to keep last rows");
+        state.selected = 0;
+        state.ensure_list_visible(3);
+        assert_eq!(state.list_view_start, 0, "scroll up to selection");
+    }
+
+    #[test]
+    fn ctrl_click_list_row_opens_path() {
+        let mut sb = ScrollbackState::new();
+        sb.push(edit_entry("a.rs", false));
+        sb.push(edit_entry("b.rs", false));
+        let files = extract_review_files(&sb, None, ReviewKindFilter::Changes);
+        let mut state = ReviewState::new("t", files, ReviewKindFilter::Changes);
+        state.list_body_area = Rect::new(0, 1, 20, 5);
+        state.list_view_start = 0;
+        let mouse = MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 2,
+            row: 1,
+            modifiers: KeyModifiers::CONTROL,
+        };
+        assert!(matches!(handle_review_mouse(&mut state, &mouse), ReviewInput::OpenPath));
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn review_diffstat_spans_use_diff_colors() {
+        let theme = Theme::current();
+        let spans = diffstat_spans(12, 3, theme.bg_base, &theme);
+        assert_eq!(spans[0].content.as_ref(), " +12");
+        assert_eq!(spans[0].style.fg, Some(theme.diff_insert_fg));
+        assert_eq!(spans[1].content.as_ref(), " -3");
+        assert_eq!(spans[1].style.fg, Some(theme.diff_delete_fg));
+        assert_eq!(diffstat_display_width(12, 3), " +12 -3".len());
     }
 }

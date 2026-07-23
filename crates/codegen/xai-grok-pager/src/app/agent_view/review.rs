@@ -8,8 +8,27 @@ use crate::views::review::{
     handle_review_preview_shell_key,
 };
 use crossterm::event::{KeyEvent, MouseEvent};
+use std::path::Path;
 
 impl AgentView {
+    fn open_review_path(&mut self) -> InputOutcome {
+        let path = self
+            .review_state
+            .as_ref()
+            .and_then(|s| s.current_file())
+            .map(|f| f.path.clone());
+        let Some(path) = path else {
+            self.show_toast("No file to open");
+            return InputOutcome::Changed;
+        };
+        if crate::app::link_opener::open_path(Path::new(&path)) {
+            self.show_toast(&format!("Opening {path}\u{2026}"));
+        } else {
+            self.show_toast(&format!("Could not open {path}"));
+        }
+        InputOutcome::Changed
+    }
+
     pub(super) fn handle_review_key(&mut self, key: &KeyEvent) -> InputOutcome {
         let Some(state) = self.review_state.as_mut() else {
             return InputOutcome::Unchanged;
@@ -23,6 +42,11 @@ impl AgentView {
                     state.ensure_viewer(&self.scrollback);
                     InputOutcome::Action(Action::SetReviewFileTree(enabled))
                 }
+                ReviewInput::ToggleIncludeReads => {
+                    let enabled = !state.filter.includes_reads();
+                    InputOutcome::Action(Action::SetReviewIncludeReads(enabled))
+                }
+                ReviewInput::OpenPath => self.open_review_path(),
                 ReviewInput::Changed | ReviewInput::Consumed => {
                     state.ensure_viewer(&self.scrollback);
                     InputOutcome::Changed
@@ -38,6 +62,11 @@ impl AgentView {
                             state.ensure_viewer(&self.scrollback);
                             InputOutcome::Action(Action::SetReviewFileTree(enabled))
                         }
+                        ReviewInput::ToggleIncludeReads => {
+                            let enabled = !state.filter.includes_reads();
+                            InputOutcome::Action(Action::SetReviewIncludeReads(enabled))
+                        }
+                        ReviewInput::OpenPath => self.open_review_path(),
                         ReviewInput::Changed | ReviewInput::Consumed => {
                             state.ensure_viewer(&self.scrollback);
                             InputOutcome::Changed
@@ -59,10 +88,7 @@ impl AgentView {
                 };
                 if !viewer.handle_key(key) {
                     // Unconsumed Esc while list not focused → go to list.
-                    if matches!(
-                        key.code,
-                        crossterm::event::KeyCode::Esc
-                    ) {
+                    if matches!(key.code, crossterm::event::KeyCode::Esc) {
                         state.focus = ReviewFocus::List;
                         return InputOutcome::Changed;
                     }
@@ -99,6 +125,11 @@ impl AgentView {
                 state.ensure_viewer(&self.scrollback);
                 InputOutcome::Action(Action::SetReviewFileTree(enabled))
             }
+            ReviewInput::ToggleIncludeReads => {
+                let enabled = !state.filter.includes_reads();
+                InputOutcome::Action(Action::SetReviewIncludeReads(enabled))
+            }
+            ReviewInput::OpenPath => self.open_review_path(),
             ReviewInput::Changed | ReviewInput::Consumed => {
                 state.ensure_viewer(&self.scrollback);
                 // Drain drag copy after mouse up.

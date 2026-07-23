@@ -1218,9 +1218,72 @@ fn recap_model_setting_opens_native_model_picker() {
     assert_eq!(command, "model");
     assert_eq!(
         *selection,
-        crate::views::modal::ArgPickerSelection::SetRecapModel
+        crate::views::modal::ArgPickerSelection::SetModelSlot("recap_model")
     );
     assert_eq!(items[0].display, "(no override)");
+}
+
+#[test]
+fn side_model_picker_stashes_open_settings_modal() {
+    use crate::views::modal::ActiveModal;
+    use crate::views::settings_modal::SettingsModalState;
+    use std::sync::Arc;
+
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let model_id = acp::ModelId::new("test-provider::test-model");
+    app.agents
+        .get_mut(&id)
+        .expect("agent")
+        .session
+        .models
+        .available
+        .insert(
+            model_id.clone(),
+            acp::ModelInfo::new(model_id, "Test Model"),
+        );
+
+    // Seed an open F2 settings modal (as if user is in Recap models group).
+    let registry = crate::settings::SettingsRegistry::defaults();
+    let mut settings = SettingsModalState::new(
+        Arc::new(registry),
+        app.current_ui.clone(),
+        crate::settings::PagerLocalSnapshot::default(),
+    );
+    // Enter the recap models group if present.
+    if let Some(idx) = settings.rows.iter().position(|r| {
+        matches!(r, crate::views::settings_modal::RowEntry::Setting { key, .. } if *key == "recap_models")
+    }) {
+        settings.selected = idx;
+        let _ = settings.try_enter_picking_group();
+    }
+    app.agents.get_mut(&id).unwrap().active_modal = Some(ActiveModal::Settings {
+        state: Box::new(settings),
+    });
+
+    let effects = dispatch(
+        Action::OpenSideModelPicker {
+            slot_key: "recap_model",
+        },
+        &mut app,
+    );
+    assert!(effects.is_empty());
+    let Some(ActiveModal::ArgPicker {
+        previous_settings,
+        selection,
+        ..
+    }) = &app.agents[&id].active_modal
+    else {
+        panic!("expected ArgPicker stacked over settings");
+    };
+    assert!(
+        previous_settings.is_some(),
+        "settings modal must be stashed while choosing a side model"
+    );
+    assert_eq!(
+        *selection,
+        crate::views::modal::ArgPickerSelection::SetModelSlot("recap_model")
+    );
 }
 
 #[test]

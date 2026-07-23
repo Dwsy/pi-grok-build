@@ -397,12 +397,9 @@ fn discover_scope(
         for kind in RESOURCE_TYPES {
             let filters = package.filters.get(&kind);
             for path in package_resource_paths(&package_dir, kind, package.filtered) {
-                let Some(enabled) = package_enabled_state(
-                    &path,
-                    package.autoload,
-                    filters,
-                    &package_dir,
-                ) else {
+                let Some(enabled) =
+                    package_enabled_state(&path, package.autoload, filters, &package_dir)
+                else {
                     continue;
                 };
                 resources.push(resource(
@@ -947,7 +944,9 @@ pub fn resolve_pi_agent_dir() -> Result<PathBuf> {
         }
     }
     let home = dirs::home_dir().context("could not resolve home directory for Pi config")?;
-    Ok(canonical_or_clean(&home.join(CONFIG_DIR_NAME).join("agent")))
+    Ok(canonical_or_clean(
+        &home.join(CONFIG_DIR_NAME).join("agent"),
+    ))
 }
 
 fn agent_dir() -> Result<PathBuf> {
@@ -1346,7 +1345,10 @@ mod tests {
             .filter(|resource| resource.origin == PiResourceOrigin::Package)
             .collect::<Vec<_>>();
         assert_eq!(resources.len(), 1);
-        assert_eq!(resources[0].path, canonical_or_clean(&package.join("index.ts")));
+        assert_eq!(
+            resources[0].path,
+            canonical_or_clean(&package.join("index.ts"))
+        );
         assert_eq!(resources[0].source, "git:github.com/owner/repo");
         assert!(resources[0].enabled);
     }
@@ -1386,8 +1388,11 @@ mod tests {
         .expect("manifest");
         fs::write(extension.join("index.ts"), "export default () => {}; ")
             .expect("extension entry");
-        fs::write(extension.join("internal.ts"), "export const helper = true; ")
-            .expect("internal module");
+        fs::write(
+            extension.join("internal.ts"),
+            "export const helper = true; ",
+        )
+        .expect("internal module");
 
         assert_eq!(
             package_resource_paths(&package, PiResourceType::Extensions, false),
@@ -1408,10 +1413,16 @@ mod tests {
         .expect("manifest");
         fs::write(extensions.join("index.ts"), "export default () => {}; ")
             .expect("extension entry");
-        fs::write(extensions.join("overlay.compat.test.ts"), "import 'bun:test'; ")
-            .expect("test module");
-        fs::write(extensions.join("overlay.ts"), "export const overlay = true; ")
-            .expect("internal module");
+        fs::write(
+            extensions.join("overlay.compat.test.ts"),
+            "import 'bun:test'; ",
+        )
+        .expect("test module");
+        fs::write(
+            extensions.join("overlay.ts"),
+            "export const overlay = true; ",
+        )
+        .expect("internal module");
 
         assert_eq!(
             package_resource_paths(&package, PiResourceType::Extensions, false),
@@ -1498,9 +1509,11 @@ mod tests {
             .filter(|resource| resource.origin == PiResourceOrigin::Package)
             .collect::<Vec<_>>();
         assert_eq!(resources.len(), 2);
-        assert!(resources
-            .iter()
-            .any(|resource| resource.resource_type == PiResourceType::Skills));
+        assert!(
+            resources
+                .iter()
+                .any(|resource| resource.resource_type == PiResourceType::Skills)
+        );
     }
 
     #[test]
@@ -1692,7 +1705,9 @@ mod tests {
     #[test]
     fn resource_discovery_allows_hidden_pi_ancestors() {
         let temp = tempfile::tempdir().expect("temp directory");
-        let skills = temp.path().join(".pi/agent/git/github.com/owner/repo/skills");
+        let skills = temp
+            .path()
+            .join(".pi/agent/git/github.com/owner/repo/skills");
         let skill = skills.join("example/SKILL.md");
         fs::create_dir_all(skill.parent().expect("skill parent")).expect("skills directory");
         fs::write(&skill, "# skill").expect("skill");

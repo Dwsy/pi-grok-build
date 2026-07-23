@@ -25,6 +25,7 @@
 | Todo / plan list | 原生+适配 | Pi `@juicesharp/rpiv-todo` 的 `todo` tool `details.tasks` → ACP `Plan` → 原生 TodoPane/badge；scrollback 抑制 `todo` 卡 |
 | Plan mode | 原生+适配 | Pager 原生 Plan 开关 → adapter 负责的 `Inactive/Pending/Active/ExitPending` 状态机；full/sparse system-reminder 前缀；session 私有 `.plan.md` sidecar；注入 Pi `tool_call` gate 阻止 `edit`/`write`/`bash`（仅放行计划文件）；Pi `exit_plan_mode` 打开原生 `x.ai/exit_plan_mode` 审批，并持久化 `.plan-mode.json` 状态 |
 | Goal 模式（`/goal`） | 适配（MVP legacy） | F2 `[ui].pi_goal` **默认关闭**（需重启）。注入扩展：`/goal` + `update_goal` + control 文件；adapter GoalHost 发原生 `GoalUpdated`（状态条 / detail）。Active 时 `agent_settled` follow-up 续跑。**不含** shell 完整 multi-agent classifier/planner/strategist（后续切片）。 |
+| Loop 定时（`/loop`） | 适配（MVP） | F2 `[ui].pi_loop` **默认关闭**（需重启）。注入扩展：`/loop` + `scheduler_create/delete/list` + 进程内 timer；adapter bridge → 原生 `ScheduledTask*`（tasks pane）。仅 session（无 durable / loop subagent）。 |
 | Diff rendering | 原生+适配 | edit-like tool metadata进入 Grok tool/diff pipeline |
 | Images | 原生+适配 | Pi image blocks → ACP ImageContent；具体终端显示取决于 Grok/terminal 能力 |
 | Scroll / find / copy / transcript / export | 原生 | Grok Pager |
@@ -78,7 +79,7 @@
 
 | 方法 | 状态 | Grok 组件 |
 |---|---|---|
-| `notify` | 原生+适配 | warning/error → 原生 toast；显式 `info` 单表面（短文 toast，多行 SystemMessage scrollback，不同时双写）；`/notify` 用原生可搜索 modal 查看当前进程内、按 Pi session 隔离的全部 info/warning/error 事件（不持久化） |
+| `notify` | 原生+适配 | warning/error → 原生 toast；显式 `info` → 仅 SystemMessage scrollback（对齐 Pi `showStatus` / chat 追加，不做 toast-only）；`/notify` 用原生可搜索 modal 查看当前进程内、按 Pi session 隔离的全部 info/warning/error 事件（不持久化） |
 | `setStatus` | 原生+适配 | sticky banner/status |
 | `setWidget` | 原生+适配 | persistent native banner surface |
 | `setTitle` | 原生+适配 | terminal title |
@@ -88,11 +89,12 @@
 | `input` | 原生+适配 | QuestionView freeform PromptWidget |
 | `editor` | 原生+适配 | QuestionView multiline PromptWidget |
 | timeout/cancel | 适配 | Pi timeout 撤销对应 QuestionView，返回 `cancelled:true` |
+| 原生 Q&A（`ask_user_question` 工具） | 适配 | F2 `[ui].pi_ask_user_question` **默认关**（需重启）。注入扩展注册工具；adapter 打开多题 `x.ai/ask_user_question` → 原生 QuestionView；control 目录回写答案。文案：*Grok Build asks the right questions to nail the details.* 冲突包表：`assets/native_feature_conflicts.toml` — 开启时 host block 列表包（如 `@juicesharp/rpiv-ask-user-question`）；F2 描述会列出。 |
 | raw terminal hook | 边界 | Pi RPC 明确不支持 |
 | custom header/footer/component | 边界 | Pi RPC 明确不支持 component factory |
 | Remote TUI（实验） | 实验 | `PI_GROK_REMOTE_TUI` 默认开：**不改 Pi 源码**；npm/Node Pi 通过官方 `rpc-entry.js` 启动，因此仅检查 argv 的第三方 RPC guard 看不到外层 `--mode rpc`；最先注入的兼容扩展仅在 Remote TUI host 活跃时将 `ExtensionRunner` 暴露给扩展的 `ctx.mode` 从 `rpc` 投影为 `tui`。Pi core 与 JSONL transport 仍是真实 RPC。注入 `ctx.ui.custom` host + `setWidget` 帧投影；键经 tmp keyfile；Pager ANSI 解析。裸 `/login`/`/logout` 由 `pi-grok-auth` 默认开启（resume-x 风格）；更广的 `/pi-*` 选择器仍需 `PI_GROK_NATIVE_COMMANDS` |
-| `rpiv-ask-user-question` (`custom` 问卷) | 边界 | 依赖不可序列化的 `ctx.ui.custom(factory)`；RPC stub 恒 decline；实验 Remote TUI 可尝试，不改插件仍非稳定适配 |
-| `rpiv-btw` | 边界 | 进程内 side model + TUI overlay；应走原生 `/btw` + adapter `x.ai/btw`（尚未实现），不映射 juicesharp 包 |
+| 原生 feature 包冲突 | 宿主策略 | 默认：`assets/native_feature_conflicts.toml`。运行时外挂（免 rebuild）：`$GROK_HOME/native-feature-conflicts.toml` → `$GROK_PROJECT_DIR/native-feature-conflicts.toml`（包列表 union）。门控：`pi_ask_user_question` / `pi_goal` / `pi_workflows` / always-on `pi_subagents`。用户 `allow` 可豁免。 |
+| `rpiv-btw` | 边界 | F2 `pi_btw` 开启时屏蔽；走原生 `/btw` + adapter `x.ai/btw` + `pi-grok-btw` 扩展（默认关） |
 
 ## 斜杠命令
 

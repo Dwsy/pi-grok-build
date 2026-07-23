@@ -2634,13 +2634,13 @@ fn interject_before_paste_probe_keeps_image() {
     let sent_image = effects.iter().any(|e| {
         matches!(
             e,
-            Effect::SendPromptNow { blocks, .. }
+            Effect::SendInterject { blocks: Some(blocks), .. }
                 if blocks.iter().any(|b| matches!(b, acp::ContentBlock::Image(_)))
         )
     });
     assert!(
         sent_image,
-        "the re-issued send-now must carry the pasted image; effects = {effects:?}"
+        "the re-issued interject must carry the pasted image; effects = {effects:?}"
     );
     assert_eq!(
         app.agents[&id].prompt.text(),
@@ -3002,7 +3002,11 @@ fn non_send_now_wire_trigger_wins_over_client_expectation() {
     );
 }
 
-/// Older-shell fallback: `SendPromptNow` arms the expectation; a meta-less cancel is suppressed.
+/// Queue-architecture redesign (Phase 1): `SendPromptNow` now takes steering
+/// semantics via the interject path — it injects the message into the running
+/// turn (`Effect::SendInterject`) instead of cancelling-and-restarting it. So
+/// it must NOT arm the send-now cancel expectation (nothing is cancelled), and
+/// a later meta-less cancel keeps its marker.
 #[test]
 fn send_prompt_now_dispatch_arms_expectation_and_suppresses_marker() {
     let mut app = test_app_with_agent();
@@ -3016,22 +3020,21 @@ fn send_prompt_now_dispatch_arms_expectation_and_suppresses_marker() {
         },
         &mut app,
     );
-    assert!(matches!(effects.as_slice(), [Effect::SendPromptNow { .. }]));
     assert!(
-        app.agents[&id].expect_send_now_cancel.is_some(),
-        "send-now dispatch must arm the cancel expectation"
+        matches!(effects.as_slice(), [Effect::SendInterject { .. }]),
+        "send-now is now a steering interjection, got {effects:?}"
+    );
+    assert!(
+        app.agents[&id].expect_send_now_cancel.is_none(),
+        "steering never cancels the turn; the cancel expectation must stay unarmed"
     );
 
     let _ = dispatch(cancelled_prompt_response(id, None), &mut app);
 
     assert_eq!(
         count_cancelled_markers(&app, id),
-        0,
-        "the expected send-now cancel must not render the cancelled marker"
-    );
-    assert!(
-        app.agents[&id].expect_send_now_cancel.is_none(),
-        "the expectation is consumed by the turn end"
+        1,
+        "with no armed expectation, a meta-less cancel keeps its marker"
     );
 }
 
@@ -3153,10 +3156,13 @@ fn send_now_during_active_goal_does_not_arm_expectation() {
         },
         &mut app,
     );
-    assert!(matches!(effects.as_slice(), [Effect::SendPromptNow { .. }]));
+    assert!(
+        matches!(effects.as_slice(), [Effect::SendInterject { .. }]),
+        "send-now during a goal is a steering interjection, got {effects:?}"
+    );
     assert!(
         app.agents[&id].expect_send_now_cancel.is_none(),
-        "goal turns promote without cancelling; the expectation must stay unarmed"
+        "steering never cancels; the expectation must stay unarmed"
     );
 
     let effects = dispatch(
@@ -3214,12 +3220,14 @@ fn send_prompt_now_during_reconnect_requeues_locally() {
     assert!(agent.toast.is_some(), "the outage must explain itself");
 }
 
-/// A failed send-now RPC requeues its payload (front) instead of silently
-/// dropping the message, and retires the optimistic queue echo.
+/// Regression (queue-architecture-redesign): Send Now now takes the steering
+/// (interject) path, which never pushes an optimistic shared-queue echo. That
+/// echo — paired with the text-based reconcile that failed to retire it — was
+/// the root cause of the duplicate-message bug: every rapid Send Now press
+/// minted a new echo that was never reconciled away, so phantom rows piled up.
+/// Asserting the echo is absent locks the fix in place.
 #[test]
-fn failed_send_now_requeues_payload_and_retires_echo() {
-    use agent_client_protocol as acp;
-
+fn send_now_steers_without_optimistic_echo() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     dispatch(Action::SendPrompt("first".into()), &mut app);
@@ -3231,46 +3239,14 @@ fn failed_send_now_requeues_payload_and_retires_echo() {
         },
         &mut app,
     );
-    let prompt_id = match effects.as_slice() {
-        [Effect::SendPromptNow { prompt_id, .. }] => prompt_id.clone(),
-        other => panic!("expected SendPromptNow effect, got {other:?}"),
-    };
     assert!(
-        app.agents[&id]
-            .shared_queue
-            .iter()
-            .any(|e| e.id == prompt_id),
-        "the optimistic echo must be visible before the failure"
-    );
-
-    let _ = dispatch(
-        Action::TaskComplete(TaskResult::SendPromptNowFailed {
-            agent_id: id,
-            session_id: acp::SessionId::new("test-session"),
-            prompt_id: prompt_id.clone(),
-            error: "transport closed".into(),
-            blocks: vec![acp::ContentBlock::Text(acp::TextContent::new(
-                "gets lost on the wire".to_string(),
-            ))],
-        }),
-        &mut app,
-    );
-
-    let agent = &app.agents[&id];
-    assert_eq!(
-        agent
-            .session
-            .pending_prompts
-            .front()
-            .map(|p| p.text.as_str()),
-        Some("gets lost on the wire"),
-        "the failed payload must be requeued at the front"
+        matches!(effects.as_slice(), [Effect::SendInterject { .. }]),
+        "send-now must steer via interject, got {effects:?}"
     );
     assert!(
-        !agent.shared_queue.iter().any(|e| e.id == prompt_id),
-        "the optimistic echo must be retired"
+        app.agents[&id].shared_queue.is_empty(),
+        "steering pushes no optimistic queue echo, so nothing can accumulate"
     );
-    assert!(agent.toast.is_some(), "the failure must explain itself");
 }
 
 /// An image-bearing prompt submitted during a parked sendable wait routes
@@ -3298,16 +3274,21 @@ fn image_prompt_during_sendable_wait_routes_to_send_now() {
 
     let effects = dispatch(Action::SendPrompt("look at [Image #1]".into()), &mut app);
     match effects.as_slice() {
-        [Effect::SendPromptNow { blocks, .. }] => {
+        [
+            Effect::SendInterject {
+                blocks: Some(blocks),
+                ..
+            },
+        ] => {
             assert!(
                 blocks
                     .iter()
                     .any(|b| matches!(b, acp::ContentBlock::Image(_))),
-                "the pasted image must ride the send-now blocks"
+                "the pasted image must ride the interject blocks"
             );
         }
         other => {
-            panic!("expected SendPromptNow for an image prompt in a sendable wait, got {other:?}")
+            panic!("expected SendInterject for an image prompt in a sendable wait, got {other:?}")
         }
     }
     let agent = &app.agents[&id];

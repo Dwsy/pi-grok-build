@@ -19,19 +19,29 @@ pub(super) fn dispatch_review_show_session(app: &mut AppView) -> Vec<Effect> {
         return vec![];
     }
 
-    let files = extract_review_files(&agent.scrollback, None, ReviewKindFilter::Changes);
+    let filter = if app.current_ui.review_include_reads {
+        ReviewKindFilter::All
+    } else {
+        ReviewKindFilter::Changes
+    };
+    let files = extract_review_files(&agent.scrollback, None, filter);
     if files.is_empty() {
-        app.show_toast("No file changes to review in this session");
+        app.show_toast(if filter.includes_reads() {
+            "No file ops to review in this session"
+        } else {
+            "No file changes to review in this session"
+        });
         return vec![];
     }
     let tree = app.current_ui.review_file_tree;
     let cwd = agent.session.cwd.display().to_string();
-    let mut state = ReviewState::with_options(
+    let mut state = ReviewState::with_options_range(
         format!("Session review · {} file(s)", files.len()),
         files,
-        ReviewKindFilter::Changes,
+        filter,
         tree,
         cwd,
+        None,
     );
     state.ensure_viewer(&agent.scrollback);
     agent.review_state = Some(state);
@@ -79,10 +89,7 @@ pub(super) fn dispatch_review_show_message_picker(app: &mut AppView) -> Vec<Effe
     vec![]
 }
 
-pub(super) fn dispatch_review_open_for_turn(
-    app: &mut AppView,
-    prompt_id: EntryId,
-) -> Vec<Effect> {
+pub(super) fn dispatch_review_open_for_turn(app: &mut AppView, prompt_id: EntryId) -> Vec<Effect> {
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
@@ -97,19 +104,29 @@ pub(super) fn dispatch_review_open_for_turn(
     }
 
     let range = turn_range_for_prompt(&agent.scrollback, prompt_id);
-    let files = extract_review_files(&agent.scrollback, range, ReviewKindFilter::Changes);
+    let filter = if app.current_ui.review_include_reads {
+        ReviewKindFilter::All
+    } else {
+        ReviewKindFilter::Changes
+    };
+    let files = extract_review_files(&agent.scrollback, range.clone(), filter);
     if files.is_empty() {
-        app.show_toast("No file changes in this turn");
+        app.show_toast(if filter.includes_reads() {
+            "No file ops in this turn"
+        } else {
+            "No file changes in this turn"
+        });
         return vec![];
     }
     let tree = app.current_ui.review_file_tree;
     let cwd = agent.session.cwd.display().to_string();
-    let mut state = ReviewState::with_options(
+    let mut state = ReviewState::with_options_range(
         format!("Turn review · {} file(s)", files.len()),
         files,
-        ReviewKindFilter::Changes,
+        filter,
         tree,
         cwd,
+        range,
     );
     state.ensure_viewer(&agent.scrollback);
     agent.review_state = Some(state);

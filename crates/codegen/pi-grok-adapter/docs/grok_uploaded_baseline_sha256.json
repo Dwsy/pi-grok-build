@@ -2724,6 +2724,7 @@
     "crates/codegen/xai-grok-pager-bin/Cargo.toml",
     "crates/codegen/xai-grok-pager/Cargo.toml",
     "crates/codegen/xai-grok-pager/src/acp/mod.rs",
+    "crates/codegen/xai-grok-pager/src/acp/tracker.rs",
     "crates/codegen/xai-grok-pager/src/app/acp_handler/interactions.rs",
     "crates/codegen/xai-grok-pager/src/app/acp_handler/mod.rs",
     "crates/codegen/xai-grok-pager/src/app/actions.rs",

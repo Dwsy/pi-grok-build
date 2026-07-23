@@ -164,3 +164,28 @@ See [VERIFICATION.md](VERIFICATION.md) for the distinction between static checks
 ## License
 
 See [LICENSE](LICENSE) and [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) for project and upstream notices.
+
+## Native feature switches → blocked Pi extensions
+
+When a native grok-pi capability is **on**, the host resource policy may block known conflicting Pi packages so tool names / roles do not collide. Built-in defaults live in [`crates/codegen/xai-grok-pager/assets/native_feature_conflicts.toml`](crates/codegen/xai-grok-pager/assets/native_feature_conflicts.toml). Runtime overlays (no rebuild): `$GROK_HOME/native-feature-conflicts.toml`, then `$GROK_PROJECT_DIR/native-feature-conflicts.toml` (package **union**; non-empty `reason` overwrites). User resource `allow` still wins.
+
+```mermaid
+flowchart LR
+  A[Built-in defaults] --> M[Merge]
+  B[User overlay] --> M
+  C[Project overlay] --> M
+  M --> T[Conflict table]
+  T --> P[Block when feature on]
+```
+
+| Feature switch | How it turns on | Default | Blocks (npm packages) |
+|---|---|---:|---|
+| **Q&A** (`pi_ask_user_question`) | F2 → Agent → Q&A (restart) | off | `@juicesharp/rpiv-ask-user-question` |
+| **Pi goal mode** (`pi_goal`) | F2 → Agent → Pi goal mode (restart) | off | `pi-codex-goal`, `@narumitw/pi-goal`, `@misunders2d/pi-goal`, `pi-goal`, `pi-goal-x` |
+| **Pi workflows** (`pi_workflows`) | F2 → Agent → Pi workflows (restart) | off | `@quintinshaw/pi-dynamic-workflows` |
+| **Pi subagents** (`pi_subagents`) | Bridge extension (on unless `--no-extensions`) | on* | `pi-subagents`, `@tintinweb/pi-subagents` |
+| **`/btw`** (`pi_btw`) | F2 → Agent → Pi /btw (restart) | off | `pi-btw`, `@narumitw/pi-btw`, `@juicesharp/rpiv-btw` |
+
+\*No separate F2 off switch today; use `--no-extensions` to skip the bridge (and thus this block list for that process).
+
+F2 descriptions for the opt-in rows append **When on, blocks: …** from the same table.

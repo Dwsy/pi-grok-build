@@ -42,9 +42,7 @@ impl WorkflowHost {
             }
         });
         let (gateway_tx, mut gateway_rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            while gateway_rx.recv().await.is_some() {}
-        });
+        tokio::spawn(async move { while gateway_rx.recv().await.is_some() {} });
 
         let store = WorkflowRunStore::new(session_dir.clone(), persist_tx.clone());
         let notify = WorkflowNotifySender::new(
@@ -140,7 +138,6 @@ impl WorkflowHost {
         }
     }
 }
-
 
 pub fn outcome_to_json(outcome: &WorkflowOutcome) -> Value {
     match outcome {
@@ -248,7 +245,9 @@ mod tests {
     #[test]
     fn parses_launch_and_manage() {
         match parse_workflow_request("deep-research", "compare postgres").unwrap() {
-            WorkflowRequest::Launch { name, objective, .. } => {
+            WorkflowRequest::Launch {
+                name, objective, ..
+            } => {
                 assert_eq!(name, "deep-research");
                 assert!(objective.contains("postgres"));
             }

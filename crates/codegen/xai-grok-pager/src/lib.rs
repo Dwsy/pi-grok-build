@@ -41,6 +41,7 @@ pub mod models;
 pub mod notifications;
 #[allow(unused_imports, unused_macros)]
 pub mod obf;
+pub mod native_feature_conflicts;
 pub mod pi_resource_config;
 pub mod pi_resource_policy;
 pub mod plugin_cmd;

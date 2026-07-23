@@ -7,8 +7,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use xai_workflow::{AgentOpts, AgentResult, BudgetState, HostError, WorkflowHostRequest};
 
-use super::backend::{WorkflowAgentBackend, WorkflowAgentSpawnRequest};
 pub(crate) use super::backend::HostDrainOutcome;
+use super::backend::{WorkflowAgentBackend, WorkflowAgentSpawnRequest};
 use super::notify::WorkflowNotifySender;
 use super::schema_contract::{
     SCHEMA_CONTRACT_RETRIES, compile_contract_schema, contract_prompt, validate_contract_output,
@@ -46,7 +46,6 @@ pub(crate) struct WorkflowHostParams {
     pub telemetry: TelemetryHook,
     pub cancel: CancellationToken,
 }
-
 
 pub(crate) fn spawn_workflow_host_service(
     params: WorkflowHostParams,
@@ -819,9 +818,11 @@ mod tests {
             tracker: tracker.clone(),
             store,
             notify,
-            backend: Arc::new(crate::session::workflow::backend::MockWorkflowAgentBackend {
-                output: Arc::from(""),
-            }),
+            backend: Arc::new(
+                crate::session::workflow::backend::MockWorkflowAgentBackend {
+                    output: Arc::from(""),
+                },
+            ),
             parent_session_id: "parent".into(),
             allow_fork_context: false,
             templates: Default::default(),
@@ -892,9 +893,11 @@ mod tests {
             tracker: tracker.clone(),
             store,
             notify,
-            backend: Arc::new(crate::session::workflow::backend::MockWorkflowAgentBackend {
-                output: Arc::from(""),
-            }),
+            backend: Arc::new(
+                crate::session::workflow::backend::MockWorkflowAgentBackend {
+                    output: Arc::from(""),
+                },
+            ),
             parent_session_id: "parent".into(),
             allow_fork_context: false,
             templates: Default::default(),
