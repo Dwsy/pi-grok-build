@@ -263,6 +263,11 @@ function installCustomPatch(ui: RemoteTuiDemoUi & {
 
       const handleInput = (data: string) => {
         if (closed) return;
+        // Extension shortcut intercept: check before dispatching to component
+        const shortcutIntercept = (globalThis as typeof globalThis & {
+          __piGrokShortcutIntercept?: (data: string) => boolean;
+        }).__piGrokShortcutIntercept;
+        if (shortcutIntercept?.(data)) return;
         const target = focused ?? component;
         if (target?.handleInput) {
           try {
