@@ -204,6 +204,14 @@ struct AdapterState {
     /// Bumped on each assistant `message_start` / `turn_start` so stream
     /// boundaries match Grok shell semantics.
     stream_start_ms: Option<i64>,
+    /// Client `promptId` of the in-flight primary turn (Pager-minted). Stamped
+    /// on every live ACP `SessionNotification._meta.promptId` so the pager's
+    /// prompt-id gate and turn chrome match stock Grok shell.
+    live_prompt_id: Option<String>,
+    /// Last full bash stdout (bytes) per toolCallId — used to emit
+    /// `BashOutput.output_delta` on `tool_execution_update` so Execute cards
+    /// stream instead of only jumping at tool end.
+    bash_stream_output: HashMap<String, Vec<u8>>,
     /// Local timing only; Pi owns compaction itself and reports its token result.
     compaction_started_at: Option<Instant>,
     /// Pi steering / follow-up queue mirrored as Grok `x.ai/queue/changed`.
@@ -289,6 +297,8 @@ impl PiAgent {
                 last_context_tokens: None,
                 turn_start_ms: None,
                 stream_start_ms: None,
+                live_prompt_id: None,
+                bash_stream_output: HashMap::new(),
                 compaction_started_at: None,
                 queue_mirror: QueueMirror::default(),
                 subagent_bridge_sequences: HashMap::new(),
@@ -1141,6 +1151,8 @@ impl PiAgent {
             state.last_context_tokens = None;
             state.turn_start_ms = None;
             state.stream_start_ms = None;
+            state.live_prompt_id = None;
+            state.bash_stream_output.clear();
         }
         state.bootstrap = bootstrap;
     }
@@ -1242,6 +1254,12 @@ impl PiAgent {
             }
             if let Some(ms) = state.stream_start_ms {
                 meta.insert("streamStartMs".into(), json!(ms));
+            }
+            // Same pin stock Grok shell puts on every live notification.
+            // Without promptId the pager can still render when current_prompt_id
+            // is set locally, but turn-status / gate adoption stay incomplete.
+            if let Some(pid) = state.live_prompt_id.as_ref() {
+                meta.insert("promptId".into(), json!(pid));
             }
         }
         meta.insert("agentTimestampMs".into(), json!(utc_now_ms()));
@@ -1807,6 +1825,14 @@ impl PiAgent {
                 // streamStartMs (Pager pre-create Thinking on first boundary).
                 state.turn_start_ms = Some(now);
                 state.stream_start_ms = Some(now);
+                // Prefer the client promptId already known from session/prompt.
+                if state.live_prompt_id.is_none() {
+                    state.live_prompt_id = state
+                        .active_prompts
+                        .iter()
+                        .rev()
+                        .find_map(|p| p.client_prompt_id.clone());
+                }
             }
             "agent_settled" => {
                 self.refresh_context_usage().await;
@@ -1814,6 +1840,8 @@ impl PiAgent {
                     let mut state = self.state.borrow_mut();
                     state.turn_start_ms = None;
                     state.stream_start_ms = None;
+                    state.live_prompt_id = None;
+                    state.bash_stream_output.clear();
                     state.queue_mirror.clear_running();
                     // Complete deferred plan-mode exit after the in-flight turn.
                     if matches!(
@@ -2039,6 +2067,8 @@ impl PiAgent {
             // Pager Thinking pre-create with a stale streamStartMs.
             state.turn_start_ms = None;
             state.stream_start_ms = None;
+            state.live_prompt_id = None;
+            state.bash_stream_output.clear();
             std::mem::take(&mut state.active_prompts)
         };
         for active in active_prompts {
@@ -2514,7 +2544,56 @@ impl PiAgent {
                 .tool_args
                 .insert(id.to_string(), args);
         }
-        let raw_output = normalize_tool_raw_output(name, args.as_ref(), &output, false);
+        // Execute streaming: stock Grok shell sends BashOutput with
+        // `output_delta` so the pager appends and keeps is_running. Pi only
+        // gives growing full text in partialResult; convert the growth into
+        // output_delta so Run/bash cards actually breathe mid-command.
+        let raw_output = if tool_kind(name) == acp::ToolKind::Execute {
+            let command = args
+                .as_ref()
+                .and_then(|value| string(value, &["command", "cmd"]))
+                .unwrap_or_default()
+                .to_string();
+            let description = args.as_ref().and_then(|value| {
+                string(value, &["description", "task_name"])
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned)
+            });
+            let full_text = pi_result_text(&output);
+            let full_bytes = full_text.as_bytes().to_vec();
+            let prev = self
+                .state
+                .borrow_mut()
+                .bash_stream_output
+                .insert(id.to_string(), full_bytes.clone())
+                .unwrap_or_default();
+            let delta = if full_bytes.starts_with(&prev) {
+                full_bytes[prev.len()..].to_vec()
+            } else {
+                // Truncation / reset: send full buffer as delta after empty
+                // (tracker append path only; set_execute_output on full replace).
+                full_bytes.clone()
+            };
+            json!({
+                "type": "Bash",
+                "output": full_bytes,
+                "output_for_prompt": full_text,
+                "exit_code": 0,
+                "command": command,
+                "truncated": false,
+                "signal": null,
+                "timed_out": false,
+                "description": description,
+                "current_dir": "",
+                "output_file": "",
+                "total_bytes": full_bytes.len(),
+                "was_bare_echo": false,
+                "output_delta": delta,
+            })
+        } else {
+            normalize_tool_raw_output(name, args.as_ref(), &output, false)
+        };
         let mut fields = acp::ToolCallUpdateFields::new()
             .status(Some(acp::ToolCallStatus::InProgress))
             .raw_output(Some(raw_output));
@@ -2545,6 +2624,7 @@ impl PiAgent {
                 .cloned()
                 .or_else(|| self.state.borrow_mut().tool_args.remove(id)),
         );
+        self.state.borrow_mut().bash_stream_output.remove(id);
         let raw_output = normalize_tool_raw_output(name, args.as_ref(), &output, is_error);
         let mut fields = acp::ToolCallUpdateFields::new()
             .status(Some(status))
@@ -3033,7 +3113,7 @@ impl acp::Agent for PiAgent {
         if let Some(plan_file) = plan_file_to_seed {
             ensure_plan_file(&plan_file).map_err(acp_internal)?;
         }
-        let (prompt_id, streaming_behavior) = {
+        let (prompt_id, streaming_behavior, pin_primary_running) = {
             let mut state = self.state.borrow_mut();
             // Inject plan-mode reminder as a prompt prefix before the user text.
             // Pi RPC has no systemPrompt mutation command; prefix is the only lever.
@@ -3058,6 +3138,18 @@ impl acp::Agent for PiAgent {
                     .queue_mirror
                     .reserve(client_id.to_string(), message.clone(), lane);
             }
+            // Primary (idle) prompt: pin live promptId + runningPromptId so the
+            // pager's turn chrome / status spinner match stock Grok shell.
+            // Mid-turn steer/followUp must NOT replace the primary pin.
+            let pin_primary_running = streaming_behavior.is_none()
+                && client_prompt_id
+                    .as_deref()
+                    .is_some_and(|id| !id.is_empty());
+            if pin_primary_running {
+                let client_id = client_prompt_id.clone().expect("checked non-empty");
+                state.live_prompt_id = Some(client_id.clone());
+                state.queue_mirror.set_running(client_id);
+            }
             state.active_prompts.push(ActivePrompt {
                 id: prompt_id,
                 client_prompt_id: client_prompt_id.clone(),
@@ -3065,7 +3157,7 @@ impl acp::Agent for PiAgent {
                 agent_started: false,
                 cancelled: false,
             });
-            (prompt_id, streaming_behavior)
+            (prompt_id, streaming_behavior, pin_primary_running)
         };
         self.persist_plan_mode_state().map_err(acp_internal)?;
         self.sync_plan_mode_control().map_err(acp_internal)?;
@@ -3079,6 +3171,12 @@ impl acp::Agent for PiAgent {
         if let Err(error) = self.rpc.request(request).await {
             self.remove_prompt(prompt_id);
             return Err(acp_internal(error));
+        }
+        // Tell the pager which prompt is running before the first Pi event.
+        // Without this, TurnRunning chrome exists locally but queue adoption
+        // never sees a server-side runningPromptId for the primary turn.
+        if pin_primary_running {
+            self.rebroadcast_queue_mirror().await;
         }
         let probe = self.clone();
         tokio::task::spawn_local(async move {

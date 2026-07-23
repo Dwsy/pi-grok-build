@@ -171,6 +171,21 @@ impl QueueMirror {
         self.running_prompt_id = None;
     }
 
+    /// Mark the primary in-flight client prompt as running.
+    ///
+    /// Stock Grok shell pins `runningPromptId` for the active turn so the pager
+    /// can adopt turn chrome (status spinner / elapsed). Mid-turn queue drain
+    /// already sets this via [`Self::apply_queue_update`]; the first/idle prompt
+    /// never enters Pi's steering/follow-up arrays, so the adapter must pin it
+    /// explicitly when `session/prompt` starts.
+    pub(crate) fn set_running(&mut self, id: impl Into<String>) {
+        let id = id.into();
+        if id.trim().is_empty() {
+            return;
+        }
+        self.running_prompt_id = Some(id);
+    }
+
     /// Clear all mirrored entries and reservations (cancel path).
     /// Returns a snapshot with empty entries so the pager can update.
     pub(crate) fn clear(&mut self) -> QueueSnapshot {
@@ -208,6 +223,16 @@ pub(crate) fn queue_changed_params(session_id: &str, snapshot: &QueueSnapshot) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_running_pins_primary_prompt_id() {
+        let mut mirror = QueueMirror::default();
+        mirror.set_running("primary-1");
+        let snap = mirror.snapshot();
+        assert_eq!(snap.running_prompt_id.as_deref(), Some("primary-1"));
+        mirror.clear_running();
+        assert!(mirror.snapshot().running_prompt_id.is_none());
+    }
 
     #[test]
     fn prefers_reserved_client_prompt_id() {
