@@ -810,10 +810,21 @@ impl PiModel {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct PiArgumentCompletion {
+    pub value: String,
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct PiCommand {
     pub name: String,
     pub description: String,
     pub source: String,
+    /// Prompt-template / builtin argument hint (placeholder only).
+    pub argument_hint: Option<String>,
+    /// Snapshot of extension `getArgumentCompletions("")` when present.
+    pub argument_completions: Vec<PiArgumentCompletion>,
 }
 
 /// Structured Pi history projected onto ACP. Keeping tool calls and images as
@@ -1060,6 +1071,37 @@ pub fn parse_commands(value: &Value) -> Vec<PiCommand> {
             let Some(name) = string(item, &["name", "command", "id"]) else {
                 continue;
             };
+            let argument_hint = string(item, &["argumentHint", "argument_hint"])
+                .map(|s| s.to_string())
+                .filter(|s| !s.trim().is_empty());
+            let argument_completions = item
+                .get("argumentCompletions")
+                .or_else(|| item.get("argument_completions"))
+                .and_then(|v| v.as_array())
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| {
+                            let value = string(row, &["value", "insert", "insertText"])?
+                                .to_string();
+                            if value.is_empty() {
+                                return None;
+                            }
+                            let label = string(row, &["label", "display", "name"])
+                                .map(|s| s.to_string())
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or_else(|| value.clone());
+                            let description = string(row, &["description", "desc", "help"])
+                                .unwrap_or_default()
+                                .to_string();
+                            Some(PiArgumentCompletion {
+                                value,
+                                label,
+                                description,
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             commands.push(PiCommand {
                 name: name.trim_start_matches('/').to_string(),
                 description: string(item, &["description", "help", "title"])
@@ -1068,6 +1110,8 @@ pub fn parse_commands(value: &Value) -> Vec<PiCommand> {
                 source: string(item, &["source", "origin"])
                     .unwrap_or_default()
                     .to_string(),
+                argument_hint,
+                argument_completions,
             });
         }
     }
@@ -1087,10 +1131,7 @@ pub fn parse_messages(value: &Value) -> Vec<PiReplayEntry> {
         let mut items = Vec::new();
         parse_message(message, message_index, &mut items);
         for item in items {
-            history.push(PiReplayEntry {
-                item,
-                timestamp_ms,
-            });
+            history.push(PiReplayEntry { item, timestamp_ms });
         }
     }
     history
@@ -1756,5 +1797,30 @@ mod tests {
         let idle = parse_state(&json!({ "sessionId": "s2" }));
         assert!(!idle.is_streaming);
         assert!(!idle.is_compacting);
+    }
+
+    #[test]
+    fn parse_commands_reads_argument_completions_snapshot() {
+        let commands = parse_commands(&json!({
+            "commands": [{
+                "name": "gapp",
+                "description": "Manage Glimpse-APPs",
+                "source": "extension",
+                "argumentHint": "<list|open>",
+                "argumentCompletions": [
+                    { "value": "list", "label": "List apps" },
+                    { "value": "open ", "label": "Open app by id", "description": "id" }
+                ]
+            }]
+        }));
+        assert_eq!(commands.len(), 1);
+        let cmd = &commands[0];
+        assert_eq!(cmd.name, "gapp");
+        assert_eq!(cmd.argument_hint.as_deref(), Some("<list|open>"));
+        assert_eq!(cmd.argument_completions.len(), 2);
+        assert_eq!(cmd.argument_completions[0].value, "list");
+        assert_eq!(cmd.argument_completions[0].label, "List apps");
+        assert_eq!(cmd.argument_completions[1].value, "open ");
+        assert_eq!(cmd.argument_completions[1].description, "id");
     }
 }

@@ -8,7 +8,15 @@
 use agent_client_protocol as acp;
 use xai_grok_tools::implementations::skills::types::SkillScope;
 
-use super::command::{CommandExecCtx, CommandResult, SlashCommand};
+use super::command::{AppCtx, ArgItem, CommandExecCtx, CommandResult, SlashCommand};
+
+/// Snapshot of a Pi extension `getArgumentCompletions` row (empty-prefix).
+#[derive(Debug, Clone)]
+struct PiArgCompletion {
+    value: String,
+    label: String,
+    description: String,
+}
 
 /// A slash command backed by an ACP `AvailableCommand`.
 ///
@@ -29,6 +37,8 @@ pub struct AcpSlashCommand {
     meta_malformed: bool,
     /// Pi extension commands execute before Pi's streaming queue semantics.
     direct_pi_command: bool,
+    /// Host-side arg suggestions from Pi `get_commands.argumentCompletions`.
+    argument_completions: Vec<PiArgCompletion>,
 }
 
 impl SlashCommand for AcpSlashCommand {
@@ -60,6 +70,49 @@ impl SlashCommand for AcpSlashCommand {
 
     fn is_skill(&self) -> bool {
         self.skill_path.is_some() && self.skill_scope.is_some()
+    }
+
+    fn suggest_args(&self, _ctx: &AppCtx, args_query: &str) -> Option<Vec<ArgItem>> {
+        if self.argument_completions.is_empty() {
+            return None;
+        }
+        // Pi interactive filters against the full argument text after `/cmd `.
+        // Match value prefix (as gapp does) or label/description substring.
+        let prefix = args_query;
+        let prefix_lower = prefix.to_ascii_lowercase();
+        let items: Vec<ArgItem> = self
+            .argument_completions
+            .iter()
+            .filter(|item| {
+                if prefix.is_empty() {
+                    return true;
+                }
+                item.value.starts_with(prefix)
+                    || item.label.to_ascii_lowercase().contains(&prefix_lower)
+                    || item
+                        .description
+                        .to_ascii_lowercase()
+                        .contains(&prefix_lower)
+            })
+            .map(|item| ArgItem {
+                display: if item.label.is_empty() {
+                    item.value.clone()
+                } else {
+                    item.label.clone()
+                },
+                match_text: format!(
+                    "{} {} {}",
+                    item.value, item.label, item.description
+                ),
+                insert_text: item.value.clone(),
+                description: item.description.clone(),
+            })
+            .collect();
+        if items.is_empty() {
+            None
+        } else {
+            Some(items)
+        }
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
@@ -147,6 +200,40 @@ impl From<&acp::AvailableCommand> for AcpSlashCommand {
             .and_then(serde_json::Value::as_str)
             .is_some_and(|source| source == "extension");
 
+        let argument_completions = cmd
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("piArgumentCompletions"))
+            .and_then(|v| v.as_array())
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|row| {
+                        let value = row
+                            .get("value")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                            .filter(|s| !s.is_empty())?;
+                        let label = row
+                            .get("label")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| value.clone());
+                        let description = row
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        Some(PiArgCompletion {
+                            value,
+                            label,
+                            description,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         Self {
             name: cmd.name.clone(),
             description: cmd.description.clone(),
@@ -159,6 +246,7 @@ impl From<&acp::AvailableCommand> for AcpSlashCommand {
             skill_scope,
             meta_malformed,
             direct_pi_command,
+            argument_completions,
         }
     }
 }
@@ -318,6 +406,7 @@ mod tests {
             skill_scope: serde_json::from_value(serde_json::json!(scope)).ok(),
             meta_malformed: false,
             direct_pi_command: false,
+            argument_completions: Vec::new(),
         }
     }
 
@@ -350,6 +439,7 @@ mod tests {
             skill_scope: None,
             meta_malformed: false,
             direct_pi_command: false,
+            argument_completions: Vec::new(),
         };
         let mut ctx = make_exec_ctx();
         let result = cmd.run(&mut ctx, "");
@@ -383,6 +473,7 @@ mod tests {
             skill_scope: None,
             meta_malformed: true,
             direct_pi_command: false,
+            argument_completions: Vec::new(),
         };
         let mut ctx = make_exec_ctx();
         let result = cmd.run(&mut ctx, "");
@@ -567,5 +658,43 @@ mod tests {
             }
             other => panic!("expected InjectSkill, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn suggest_args_filters_pi_argument_completions_like_gapp() {
+        let cmd = make_cmd(
+            "gapp",
+            Some(serde_json::json!({
+                "piCommandSource": "extension",
+                "piArgumentCompletions": [
+                    { "value": "list", "label": "List apps" },
+                    { "value": "open ", "label": "Open app by id" },
+                    { "value": "generate ", "label": "Ask agent to generate a GAPP" }
+                ]
+            })),
+        );
+        let acp_cmd = AcpSlashCommand::from(&cmd);
+        let models = crate::acp::model_state::ModelState::default();
+        let ctx = AppCtx {
+            models: &models,
+            cwd: std::path::Path::new("."),
+            has_session_announcements: false,
+            billing_surface_visible: true,
+            workflows_available: false,
+            screen_mode: crate::app::ScreenMode::Fullscreen,
+        };
+
+        let all = acp_cmd.suggest_args(&ctx, "").expect("items");
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].insert_text, "list");
+        assert_eq!(all[0].display, "List apps");
+
+        let open = acp_cmd.suggest_args(&ctx, "op").expect("open prefix");
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].insert_text, "open ");
+
+        let by_label = acp_cmd.suggest_args(&ctx, "generate").expect("label");
+        assert_eq!(by_label.len(), 1);
+        assert_eq!(by_label[0].insert_text, "generate ");
     }
 }

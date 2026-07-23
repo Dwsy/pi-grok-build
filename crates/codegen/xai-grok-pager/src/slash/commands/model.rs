@@ -37,7 +37,7 @@ impl SlashCommand for ModelCommand {
     }
 
     fn usage(&self) -> &str {
-        "/model <name> [effort]"
+        "/model <provider/model> [effort]"
     }
 
     fn takes_args(&self) -> bool {
@@ -49,7 +49,8 @@ impl SlashCommand for ModelCommand {
     }
 
     fn arg_placeholder(&self) -> Option<&str> {
-        Some("<model> [effort]")
+        // Pi interactive: argumentHint "<provider/model>"; keep optional effort chain.
+        Some("<provider/model> [effort]")
     }
 
     fn suggest_args(&self, ctx: &AppCtx, args_query: &str) -> Option<Vec<ArgItem>> {
@@ -138,7 +139,7 @@ fn detect_effort_phase(models: &ModelState, args_query: &str) -> Option<acp::Mod
         .available
         .iter()
         .filter(|(_, info)| supports_reasoning_effort(info))
-        .map(|(id, info)| (id.clone(), model_insert_token(models, id, info)))
+        .map(|(id, info)| (id.clone(), model_completion_token(id, info)))
         .collect();
     candidates.sort_by_key(|(_, token)| std::cmp::Reverse(token.len()));
 
@@ -154,8 +155,14 @@ fn detect_effort_phase(models: &ModelState, args_query: &str) -> Option<acp::Mod
     None
 }
 
-/// One row per logical model. Reasoning models get a trailing space in
-/// `insert_text` so the prompt widget chains into the effort sub-menu.
+/// One row per logical model, aligned with Pi interactive `/model` autocomplete:
+/// - label (`display`) = bare model id
+/// - description = provider
+/// - value (`insert_text`) = `provider/id`
+/// - search (`match_text`) = Pi `getModelSearchText`
+///
+/// Reasoning models still get a trailing space on `insert_text` so the prompt
+/// widget chains into the effort sub-menu (Grok-only extension over Pi).
 fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
     let current_id = models.current.as_ref();
     let mut items: Vec<ArgItem> = Vec::with_capacity(models.available.len());
@@ -163,18 +170,18 @@ fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
         let is_current = current_id == Some(id);
         let supports = supports_reasoning_effort(info);
         let (provider, model_id) = split_provider_model_id(id, info);
-        let token = model_insert_token(models, id, info);
+        let token = model_completion_token(id, info);
 
-        // Pi TUI: `model-id [provider]`; keep friendly name when id is opaque.
-        let mut display = match provider {
-            Some(provider) if !provider.is_empty() => {
-                format!("{model_id} [{provider}]")
-            }
-            _ => info.name.clone(),
-        };
+        // Pi interactive autocomplete label is bare `item.id`.
+        let mut display = model_id.to_string();
         if is_current {
             display.push_str(" (current)");
         }
+
+        let description = provider
+            .filter(|p| !p.is_empty())
+            .unwrap_or("")
+            .to_string();
 
         // Trailing space on reasoning models: signals "more input
         // expected" to the prompt widget so Enter advances to effort
@@ -183,11 +190,9 @@ fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
 
         items.push(ArgItem {
             display,
-            match_text: model_selector_search_text(id, info),
+            match_text: model_completion_search_text(id, info),
             insert_text,
-            // Metadata belongs in the modal bottom detail pane (pi-model-selector-x),
-            // not as a right-column list label.
-            description: String::new(),
+            description,
         });
     }
     if let Some(current_id) = current_id {
@@ -201,21 +206,29 @@ fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
     items
 }
 
-/// Stable commit token for `/model`. Prefer display name when unique; otherwise
-/// use `provider/id` so same-label models from different providers stay distinct.
-fn model_insert_token(models: &ModelState, id: &acp::ModelId, info: &acp::ModelInfo) -> String {
-    let name_collisions = models
-        .available
-        .values()
-        .filter(|other| other.name.eq_ignore_ascii_case(&info.name))
-        .count();
-    if name_collisions <= 1 {
-        return info.name.clone();
-    }
+/// Pi interactive completion value: always `provider/id` when provider is known.
+fn model_completion_token(id: &acp::ModelId, info: &acp::ModelInfo) -> String {
     let (provider, model_id) = split_provider_model_id(id, info);
     match provider {
         Some(provider) if !provider.is_empty() => format!("{provider}/{model_id}"),
-        _ => id.0.to_string(),
+        _ => model_id.to_string(),
+    }
+}
+
+/// Pi `getModelSearchText` — id-leading so bare model-id queries rank natural
+/// id matches; still includes `provider/id` for exact-prefixed searches.
+fn model_completion_search_text(id: &acp::ModelId, info: &acp::ModelInfo) -> String {
+    let (provider, model_id) = split_provider_model_id(id, info);
+    let name = if info.name.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", info.name)
+    };
+    match provider {
+        Some(provider) if !provider.is_empty() => {
+            format!("{model_id} {provider} {provider}/{model_id} {provider} {model_id}{name}")
+        }
+        _ => format!("{model_id}{name}"),
     }
 }
 
@@ -443,25 +456,6 @@ fn split_provider_model_id<'a>(
     (provider, model_id)
 }
 
-/// Search text mirrors Pi TUI's model selector: provider-prefixed text comes
-/// first so `provider/model` queries rank direct provider models ahead of proxy
-/// IDs that only contain the same provider later in their identifier.
-fn model_selector_search_text(id: &acp::ModelId, info: &acp::ModelInfo) -> String {
-    let (provider, model_id) = split_provider_model_id(id, info);
-    match provider {
-        Some(provider) if !provider.is_empty() => format!(
-            "{provider} {provider}/{model_id} {provider} {model_id} {} {}",
-            info.name,
-            info.description.as_deref().unwrap_or("")
-        ),
-        _ => format!(
-            "{model_id} {} {}",
-            info.name,
-            info.description.as_deref().unwrap_or("")
-        ),
-    }
-}
-
 /// One row per effort level for the `/model` chained effort phase.
 /// `insert_text` is `"ModelToken high"` so selecting a row completes both tokens.
 fn build_effort_items(models: &ModelState, model_id: &acp::ModelId) -> Vec<ArgItem> {
@@ -469,7 +463,7 @@ fn build_effort_items(models: &ModelState, model_id: &acp::ModelId) -> Vec<ArgIt
         Some(info) => info,
         None => return Vec::new(),
     };
-    let model_token = model_insert_token(models, model_id, info);
+    let model_token = model_completion_token(model_id, info);
     let is_current_model = models.current.as_ref() == Some(model_id);
     let options = models.reasoning_effort_options_for(model_id);
     build_effort_arg_items(
@@ -487,21 +481,53 @@ mod tests {
     use xai_grok_shell::sampling::types::ReasoningEffort;
 
     fn model_with_reasoning(id: &str, name: &str) -> (acp::ModelId, acp::ModelInfo) {
-        let id = acp::ModelId::new(Arc::from(id));
+        let catalog_id = if id.contains("::") {
+            id.to_string()
+        } else {
+            format!("test::{id}")
+        };
+        let bare = catalog_id
+            .split_once("::")
+            .map(|(_, m)| m)
+            .unwrap_or(id);
+        let provider = catalog_id
+            .split_once("::")
+            .map(|(p, _)| p)
+            .unwrap_or("test");
+        let model_id = acp::ModelId::new(Arc::from(catalog_id.as_str()));
         let mut meta = serde_json::Map::new();
         meta.insert(
             "supportsReasoningEffort".into(),
             serde_json::Value::Bool(true),
         );
-        let info = acp::ModelInfo::new(id.clone(), name.to_string())
+        meta.insert("provider".into(), serde_json::Value::String(provider.into()));
+        meta.insert("modelId".into(), serde_json::Value::String(bare.into()));
+        let info = acp::ModelInfo::new(model_id.clone(), name.to_string())
             .meta(serde_json::Value::Object(meta).as_object().cloned());
-        (id, info)
+        (model_id, info)
     }
 
     fn plain_model(id: &str, name: &str) -> (acp::ModelId, acp::ModelInfo) {
-        let id = acp::ModelId::new(Arc::from(id));
-        let info = acp::ModelInfo::new(id.clone(), name.to_string());
-        (id, info)
+        let catalog_id = if id.contains("::") {
+            id.to_string()
+        } else {
+            format!("test::{id}")
+        };
+        let bare = catalog_id
+            .split_once("::")
+            .map(|(_, m)| m)
+            .unwrap_or(id);
+        let provider = catalog_id
+            .split_once("::")
+            .map(|(p, _)| p)
+            .unwrap_or("test");
+        let model_id = acp::ModelId::new(Arc::from(catalog_id.as_str()));
+        let mut meta = serde_json::Map::new();
+        meta.insert("provider".into(), serde_json::Value::String(provider.into()));
+        meta.insert("modelId".into(), serde_json::Value::String(bare.into()));
+        let info = acp::ModelInfo::new(model_id.clone(), name.to_string())
+            .meta(serde_json::Value::Object(meta).as_object().cloned());
+        (model_id, info)
     }
 
     static EMPTY_BUNDLE: crate::app::bundle::BundleState = crate::app::bundle::BundleState {
@@ -521,7 +547,6 @@ mod tests {
             session_id: None,
             bundle_state: &EMPTY_BUNDLE,
             screen_mode: crate::app::ScreenMode::Inline,
-           billing_surface_visible: false,
             billing_surface_visible: true,
             pager_state: crate::settings::PagerLocalSnapshot {
                 multiline_mode: false,
@@ -572,24 +597,30 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
-        billing_surface_visible: false,
         };
         let items = cmd.suggest_args(&ctx, "").unwrap();
         assert_eq!(items.len(), 2, "model phase: one row per logical model");
         assert!(items[0].display.contains("(current)"));
 
-        // Reasoning model has trailing space in insert_text -- this is the
-        // signal the prompt widget reads to keep the dropdown open after
-        // Enter so the effort sub-menu can render.
+        // Pi interactive: insert_text is provider/id; trailing space on reasoning
+        // keeps the dropdown open so the effort sub-menu can render.
         let reasoning = items
             .iter()
-            .find(|i| i.insert_text.starts_with("Reasoning X"))
+            .find(|i| i.insert_text.starts_with("test/reasoning-x"))
             .unwrap();
-        assert_eq!(reasoning.insert_text, "Reasoning X ");
+        assert_eq!(reasoning.insert_text, "test/reasoning-x ");
+        assert_eq!(reasoning.display, "reasoning-x");
+        assert_eq!(reasoning.description, "test");
 
         // Plain model has no trailing space -- Enter commits immediately.
-        let plain = items.iter().find(|i| i.insert_text == "Grok 4.5").unwrap();
-        assert_eq!(plain.insert_text, "Grok 4.5");
+        let plain = items
+            .iter()
+            .find(|i| i.insert_text == "test/grok-4.5")
+            .unwrap();
+        assert_eq!(plain.insert_text, "test/grok-4.5");
+        assert!(plain.display.contains("grok-4.5"));
+        assert!(plain.display.contains("(current)"));
+        assert_eq!(plain.description, "test");
     }
 
     #[test]
@@ -634,27 +665,26 @@ mod tests {
             cwd: std::path::Path::new("."),
             has_session_announcements: false,
             screen_mode: crate::app::ScreenMode::Fullscreen,
-        billing_surface_visible: false,
+            billing_surface_visible: false,
+            workflows_available: true,
         };
         let items = cmd.suggest_args(&ctx, "").unwrap();
         assert_eq!(items.len(), 2);
 
+        // Pi interactive autocomplete: label=id, description=provider, value=provider/id.
         let anthropic = items
             .iter()
-            .find(|i| i.display.contains("[anthropic]"))
+            .find(|i| i.description == "anthropic")
             .unwrap();
-        assert_eq!(anthropic.display, "claude-haiku-4-5 [anthropic]");
-        assert!(
-            anthropic.description.is_empty(),
-            "list rows stay clean; detail goes to bottom pane"
-        );
+        assert_eq!(anthropic.display, "claude-haiku-4-5");
+        assert_eq!(anthropic.description, "anthropic");
         assert_eq!(anthropic.insert_text, "anthropic/claude-haiku-4-5");
 
         let openrouter = items
             .iter()
-            .find(|i| i.display.contains("[openrouter]"))
+            .find(|i| i.description == "openrouter")
             .unwrap();
-        assert_eq!(openrouter.display, "claude-haiku-4-5 [openrouter]");
+        assert_eq!(openrouter.display, "claude-haiku-4-5");
         assert_eq!(openrouter.insert_text, "openrouter/claude-haiku-4-5");
 
         let detail = model_picker_detail_lines(&a_info);
@@ -689,16 +719,15 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
-        billing_surface_visible: false,
         };
-        // Args query has a trailing space -> effort phase. Items come out
-        // ordered xhigh -> low (strongest first) per EFFORT_LEVELS.
-        let items = cmd.suggest_args(&ctx, "Reasoning X ").unwrap();
+        // Args query has a trailing space after provider/id -> effort phase.
+        // Items come out ordered xhigh -> low (strongest first) per EFFORT_LEVELS.
+        let items = cmd.suggest_args(&ctx, "test/reasoning-x ").unwrap();
         assert_eq!(items.len(), 4);
-        assert_eq!(items[0].insert_text, "Reasoning X xhigh");
-        assert_eq!(items[1].insert_text, "Reasoning X high");
-        assert_eq!(items[2].insert_text, "Reasoning X medium");
-        assert_eq!(items[3].insert_text, "Reasoning X low");
+        assert_eq!(items[0].insert_text, "test/reasoning-x xhigh");
+        assert_eq!(items[1].insert_text, "test/reasoning-x high");
+        assert_eq!(items[2].insert_text, "test/reasoning-x medium");
+        assert_eq!(items[3].insert_text, "test/reasoning-x low");
         // Display is just the level so the user sees a clean column.
         assert_eq!(items[0].display, "xhigh");
         // match_text carries the sort-key prefix that forces the matcher's
@@ -721,10 +750,9 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
-        billing_surface_visible: false,
         };
         // Still in effort phase; matcher upstream narrows to high / xhigh.
-        let items = cmd.suggest_args(&ctx, "Reasoning X h").unwrap();
+        let items = cmd.suggest_args(&ctx, "test/reasoning-x h").unwrap();
         assert_eq!(items.len(), 4);
     }
 
@@ -742,23 +770,27 @@ mod tests {
             billing_surface_visible: true,
             workflows_available: true,
             screen_mode: crate::app::ScreenMode::Fullscreen,
-        billing_surface_visible: false,
         };
-        // No trailing space, user is still typing the model name.
-        let items = cmd.suggest_args(&ctx, "Reason").unwrap();
+        // No trailing space, user is still typing the model id / provider prefix.
+        let items = cmd.suggest_args(&ctx, "reason").unwrap();
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].insert_text, "Reasoning X ");
-        assert!(uses_pi_model_picker_search(&state, "Reason"));
-        assert!(!uses_pi_model_picker_search(&state, "Reasoning X h"));
+        assert_eq!(items[0].insert_text, "test/reasoning-x ");
+        assert!(uses_pi_model_picker_search(&state, "reason"));
+        assert!(!uses_pi_model_picker_search(&state, "test/reasoning-x h"));
     }
 
     #[test]
-    fn model_picker_search_text_matches_pi_provider_order() {
+    fn model_completion_search_text_matches_pi_get_model_search_text() {
         let id = acp::ModelId::new(Arc::from("openai-codex::gpt-5.5"));
         let info = acp::ModelInfo::new(id.clone(), "GPT 5.5".to_string());
+        // Pi getModelSearchText: `${id} ${provider} ${provider}/${id} ${provider} ${id}${name}`
         assert_eq!(
-            model_selector_search_text(&id, &info),
-            "openai-codex openai-codex/gpt-5.5 openai-codex gpt-5.5 GPT 5.5 "
+            model_completion_search_text(&id, &info),
+            "gpt-5.5 openai-codex openai-codex/gpt-5.5 openai-codex gpt-5.5 GPT 5.5"
+        );
+        assert_eq!(
+            model_completion_token(&id, &info),
+            "openai-codex/gpt-5.5"
         );
     }
 
@@ -768,10 +800,10 @@ mod tests {
         let (id, info) = model_with_reasoning("reasoning-x", "Reasoning X");
         state.available.insert(id, info);
         let mut ctx = dummy_exec_ctx(&state);
-        let result = ModelCommand.run(&mut ctx, "Reasoning X xhigh");
+        let result = ModelCommand.run(&mut ctx, "test/reasoning-x xhigh");
         match result {
             CommandResult::Action(Action::SwitchModel { model_id, effort }) => {
-                assert_eq!(model_id.0.as_ref(), "reasoning-x");
+                assert_eq!(model_id.0.as_ref(), "test::reasoning-x");
                 assert_eq!(effort, Some(ReasoningEffort::Xhigh));
             }
             other => panic!("expected SwitchModel with effort, got {other:?}"),
@@ -786,7 +818,7 @@ mod tests {
         let (id, info) = model_with_reasoning("reasoning-x", "Reasoning X");
         state.available.insert(id, info);
         let mut ctx = dummy_exec_ctx(&state);
-        let result = ModelCommand.run(&mut ctx, "Reasoning X none");
+        let result = ModelCommand.run(&mut ctx, "test/reasoning-x none");
         match result {
             CommandResult::Error(msg) => {
                 assert!(
