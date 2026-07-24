@@ -175,21 +175,41 @@ pub fn blend_channel(base: u8, original: u8, opacity: f32) -> u8 {
     result.round() as u8
 }
 
+/// Synthetic dark canvas used when blending against [`Color::Reset`].
+///
+/// Transparent / terminal-native themes leave `bg_base` as `Reset` so the
+/// host terminal paints the page. Wave and dim accents still need an RGB
+/// lerp target; a near-black stand-in keeps the pulse visible without
+/// forcing an opaque surface paint. Light transparent themes accept the
+/// same stand-in — chroma modulation still reads as motion.
+const RESET_BLEND_CANVAS: (u8, u8, u8) = (0x12, 0x12, 0x18);
+
+/// RGB for animation lerps. `Reset` maps to [`RESET_BLEND_CANVAS`] so
+/// transparent themes still get a visible wave instead of a frozen accent.
+/// Named ANSI colors stay non-blendable (terminal-dependent RGB) via
+/// [`color_to_rgb`].
+fn blendable_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Reset => Some(RESET_BLEND_CANVAS),
+        other => color_to_rgb(other),
+    }
+}
+
 /// Blend a color toward a base color based on opacity.
 ///
 /// - `opacity = 0.0`: returns `base` (fully faded)
 /// - `opacity = 1.0`: returns `original` (no change)
 ///
-/// Supports both `Color::Rgb` and `Color::Indexed` colors (indexed colors are
-/// converted to their RGB equivalents for blending). When either input is
-/// `Color::Indexed`, the blended result is quantized back to the nearest
-/// 256-color index so the output stays terminal-compatible.
+/// Supports `Color::Rgb`, `Color::Indexed`, and `Color::Reset` (synthetic
+/// dark canvas so transparent themes keep wave/dim accents alive). When
+/// either input is `Color::Indexed`, the blended result is quantized back
+/// to the nearest 256-color index so the output stays terminal-compatible.
 ///
 /// Returns `None` for named ANSI colors (Color::Red, etc.) since their RGB
 /// values are terminal-dependent.
 pub fn blend_color(base: Color, original: Color, opacity: f32) -> Option<Color> {
-    let (base_r, base_g, base_b) = color_to_rgb(base)?;
-    let (orig_r, orig_g, orig_b) = color_to_rgb(original)?;
+    let (base_r, base_g, base_b) = blendable_rgb(base)?;
+    let (orig_r, orig_g, orig_b) = blendable_rgb(original)?;
 
     let r = blend_channel(base_r, orig_r, opacity);
     let g = blend_channel(base_g, orig_g, opacity);
@@ -458,6 +478,22 @@ mod tests {
         // Named ANSI colors are not blendable
         assert_eq!(blend_color(named, rgb, 0.5), None);
         assert_eq!(blend_color(rgb, named, 0.5), None);
+    }
+
+    #[test]
+    fn test_blend_color_reset_base_keeps_wave() {
+        let base = Color::Reset;
+        let original = Color::Rgb(100, 150, 200);
+
+        let faded = blend_color(base, original, 0.0).expect("reset base blends");
+        let half = blend_color(base, original, 0.5).expect("reset base blends");
+        let full = blend_color(base, original, 1.0).expect("reset base blends");
+
+        // Fully faded → synthetic canvas, not Reset (wave needs concrete RGB).
+        assert_eq!(faded, Color::Rgb(0x12, 0x12, 0x18));
+        assert_eq!(full, Color::Rgb(100, 150, 200));
+        assert_ne!(half, full);
+        assert_ne!(half, faded);
     }
 
     #[test]

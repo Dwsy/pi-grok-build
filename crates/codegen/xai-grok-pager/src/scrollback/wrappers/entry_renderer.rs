@@ -790,6 +790,17 @@ impl Renderable for EntryRenderer<'_> {
         } else {
             self.accent(content_area.width)
         };
+        // Running blocks always get an animated accent even when the block's
+        // own accent() returns None (most tool blocks return None in Collapsed
+        // mode, which is their default display_mode while running). Without
+        // this fallback the wave animation never renders for Read/Search/Edit/
+        // Thinking/etc. — the accent column is simply blank.
+        let accent = match accent {
+            None if self.entry.is_running && !self.hide_accent => {
+                Some(AccentStyle::animated(self.theme.accent_running))
+            }
+            other => other,
+        };
         let has_hook_lines = self
             .entry
             .hook_data

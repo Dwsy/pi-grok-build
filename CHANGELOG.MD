@@ -4,6 +4,93 @@ All notable changes to **grok-pi** (Pi agent core in Grok Build's production TUI
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.0.9] - 2026-07-24
+
+Range: `v0.0.8` → `v0.0.9` (2026-07-22 → 2026-07-24).
+
+> **中文版本：** [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)
+
+### Highlights
+
+- **Transparent-theme wave accent works again** — running tool / thinking `┃` breathing animation no longer freezes on `pi:transparent` / terminal-native canvas
+- **Session surfaces** — cache graph in Context, `/review-session` / `/review-message`, session tree map
+- **Native bridges (F2, mostly off by default)** — ask-user QuestionView, `/btw`, `/loop` scheduler
+- **Adapter fidelity** — live `promptId` on every ACP notification; bash/Execute mid-command `output_delta` streaming
+- **Upstream** — Grok Build `a5727c5` integrated with Pi-Grok seams preserved + post-merge loss restore
+- **Windows / multi-arch install** — reliable Pi host shim resolution; installers and release matrix cover x86_64 + aarch64 on macOS / Linux / Windows
+
+### Added
+
+#### Context, review, and tree
+
+- Context modal **cache graph** (`F2` `[ui].pi_cache_graph`, default **on**): adapter projects `cacheMetrics` from Pi `get_entries`; views `0/1/2/3`, `s` sort, `e` export, `r` refresh — no `ctx.ui.custom`
+- **`/review-session`** and **`/review-message`**: native Pager review modal (file list + BlockViewer diff preview); F2 `review_file_tree` default **off**; `t` toggles tree in-modal
+- Session **tree map** surface for branch orientation (alongside existing Session Tree navigation)
+
+#### Extension bridges (opt-in F2 / inject)
+
+- **Native Q&A** — F2 `[ui].pi_ask_user_question` (default **off**, restart): `ask_user_question` tool → multi-question `x.ai/ask_user_question` → native QuestionView; control-dir completes the tool. Host conflict list in `assets/native_feature_conflicts.toml` (+ `$GROK_HOME` / project overlays)
+- **`/btw`** — F2 `pi_btw` (default **off**): side-question path via adapter `x.ai/btw` + `pi-grok-btw` (not juicesharp overlay remapping)
+- **`/loop` scheduler** — F2 `[ui].pi_loop` (default **off**, restart): `scheduler_create` / `delete` / `list` → native `ScheduledTask*` / tasks pane; session-only (no durable loop subagent)
+- Slash **`getArgumentCompletions`** bridge so extension commands (e.g. `/gapp`) populate the Grok argument dropdown; `/model` completion tokens aligned with Pi `provider/id`
+- Experimental **rust-tui bridge** path (comment hygiene only in this tag); shortcut-manager / remote-tui snapshots archived under `extensions/_archived/`
+
+#### Adapter / queue / tool streaming
+
+- Stamp client **`promptId` on every live ACP `SessionNotification._meta`** so Pager prompt-id gate and turn chrome match stock Grok shell
+- **Pin `runningPromptId`** via `QueueMirror::set_running` on primary `session/prompt` (idle primary never only in Pi steering/follow-up arrays); rebroadcast before first Pi event so queue adoption sees a server-side running id
+- Convert Pi growing full-text **`partialResult` → `BashOutput.output_delta`** so Run/bash cards stream mid-command instead of jumping only at tool end
+
+#### Resources, telemetry, website
+
+- Project **resource policy** + self-heal crash report path
+- **`tools/ext-crash-telemetry`**: CLI + Cloudflare Worker + dashboard for extension crash reports (optional ops tooling)
+- Website: **static export** deploy path for GitHub Pages; basePath-aware `/docs` links; EN/ZH docs dictionaries expanded (features, migration, extensions, configuration)
+
+#### Platform
+
+- Windows: resolve bare `pi` / `pi.cmd` to absolute host shims (PATH + pi-node/npm); spawn `.cmd` via `cmd.exe`; rewrite `args.pi_bin` after version probe
+- Release / install matrix: macOS, Linux, Windows × x86_64 + aarch64 assets documented and built
+
+#### Upstream
+
+- Integrate Grok Build **`a5727c5`** (`Synced from monorepo`); record in `docs/upstream/UPSTREAM_CHANGELOG.md`; AGENTS `base` updated after verified merge
+- Post-merge **auto-merge loss restore** on narrow Pi-Grok seams (render/effects/shortcuts/shell ops)
+
+### Fixed
+
+#### Wave accent on transparent themes (user-visible regression)
+
+- **Root cause:** transparent / terminal-native themes set `Theme.bg_base = Color::Reset`. Running accent waves call `blend_color(bg, accent, wave_brightness)`. `blend_color` previously returned `None` for `Reset`, and callers used `unwrap_or(accent)` → **static bar every frame** (looked like “no breathing”)
+- **Fix:** `xai-grok-pager-render` `blend_color` maps `Color::Reset` to a synthetic dark canvas `(0x12, 0x12, 0x18)` for lerp only (page stays transparent; no forced opaque fill). Named ANSI colors remain non-blendable
+- **Regression test:** `test_blend_color_reset_base_keeps_wave`
+- **Also:** `EntryRenderer` always applies animated `accent_running` when `entry.is_running` even if block `accent()` returns `None` (Collapsed defaults for Read/Search/Edit/Thinking)
+
+#### Other
+
+- Resume picker: full-text search, fork tree, preview mode, key hints polish
+- Sync seam restore after `a5727c5` integration (dashboard render, shortcuts help, shell mvp ops)
+- Website docs links under GH Pages `basePath`
+- rust-tui-bridge comment: drop accidental keyfile-substring noise
+
+### Changed
+
+- FEATURE_MATRIX / README (EN + ZH) aligned with session tree, review, queue, Q&A, btw, loop, cache graph, notify→scrollback-only for multi-line info
+- Info notifications: prefer **scrollback `SystemMessage`** for multi-line / Pi `showStatus` style (avoid toast-only loss)
+- Docs start path simplified to **`grok-pi` / `pi-grok`** only
+- `.gitignore`: local fabric mesh runtime state
+- Upstream workflow docs: changelog-first, then isolated merge + seam reapply
+
+### Notes
+
+- F2 features that inject extensions (**ask-user**, **btw**, **loop**, **workflows**, **goal**) need **full quit + restart** after toggle
+- Transparent themes: wave uses synthetic blend canvas for motion only; UI chrome stays host-transparent
+- Investigation notes (optional): `docs/investigation/breathing-animation-debug.md`
+- Upgrading from **0.0.8**: no migration step; transparent-theme users should see breathing again without switching theme
+- GitHub Release notes for 0.0.9 still default to cumulative sections since **0.0.6** via `scripts/extract-changelog-section.py`
+
+---
+
 ## [0.0.8] - 2026-07-22
 
 Range: `v0.0.7` → `v0.0.8` (2026-07-21 → 2026-07-22).
